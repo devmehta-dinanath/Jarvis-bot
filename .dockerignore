@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+*.md
+screenpipe.db
+media/
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+.env
+.env.*
+*.db-journal

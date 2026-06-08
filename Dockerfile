@@ -1,0 +1,73 @@
+# Ubuntu 24.04 = glibc 2.39 (Screenpipe prebuilt binary needs >= 2.38; Debian bookworm is too old)
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/opt/venv/bin:/usr/local/bin:${PATH}"
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+# Single install layer: system deps + screenpipe + venv + pip (avoids broken layer cache)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg \
+        python3.12 python3.12-venv python3.12-dev \
+        ffmpeg \
+        libgomp1 \
+        libopenblas0 \
+        libgfortran5 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libgl1 \
+        libxcb1 \
+        libxkbcommon0 \
+        libdbus-1-3 \
+        libssl3 \
+        libpulse0 \
+        libasound2t64 \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g screenpipe@latest \
+    && python3.12 -m venv /opt/venv \
+    && ln -sf python3.12 /opt/venv/bin/python \
+    && ln -sf python3.12 /opt/venv/bin/python3 \
+    && /opt/venv/bin/python -m ensurepip --upgrade \
+    && /opt/venv/bin/python -m pip install --upgrade pip setuptools wheel \
+    && /opt/venv/bin/python -m pip install paddlepaddle==2.6.2 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
+    && /opt/venv/bin/python -m pip install -r requirements.txt \
+    && /opt/venv/bin/python -c "from paddleocr import PaddleOCR; PaddleOCR(use_angle_cls=True, lang='en', show_log=False); print('paddleocr ok')" \
+    && command -v screenpipe \
+    && SCREENPIPE_BIN="$(find /usr/lib/node_modules/screenpipe -path '*/bin/screenpipe' -type f | head -1)" \
+    && test -n "$SCREENPIPE_BIN" \
+    && ldd "$SCREENPIPE_BIN" | grep 'not found' && exit 1 || true \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY app ./app
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN mkdir -p /app/data /app/media \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENV RUNNING_IN_DOCKER=true \
+    SCREENPIPE_START_CLI=true \
+    SCREENPIPE_API_URL=http://127.0.0.1:3030
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+    CMD curl -f http://127.0.0.1:8000/health || exit 1
+
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
