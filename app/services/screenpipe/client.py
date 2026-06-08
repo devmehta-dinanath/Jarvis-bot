@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from app.services.activity.metadata import merge_metadata
 from app.services.screenpipe.auth import authorization_header, get_api_token
 
 logger = logging.getLogger(__name__)
@@ -240,11 +241,19 @@ def extract_frame_metadata(item: dict[str, Any]) -> dict[str, Any]:
     window_name = _first_str(sources, "window_name", "windowName", "window_title", "title")
     browser_url = _first_str(sources, "browser_url", "browserUrl", "url")
     captured_at = _first_timestamp(sources, "timestamp", "created_at", "createdAt", "captured_at")
+    accessibility_text = _first_str(sources, "text", "transcription", "ocr_text")
+
+    merged = merge_metadata(
+        app_name=app_name,
+        window_name=window_name,
+        browser_url=browser_url,
+        text=accessibility_text,
+    )
 
     return {
-        "app_name": app_name,
-        "window_name": window_name,
-        "browser_url": browser_url,
+        "app_name": merged["app_name"],
+        "window_name": merged["window_name"],
+        "browser_url": merged["browser_url"],
         "captured_at": captured_at,
     }
 

@@ -81,4 +81,7 @@ def _same_app(left: models.Frame, right: models.Frame) -> bool:
         return False
     left_window = (left.window_name or "").casefold()
     right_window = (right.window_name or "").casefold()
-    return bool(left_window and right_window and left_window == right_window)
+    if left_window and right_window:
+        return left_window == right_window
+    # No metadata on either frame — chunk by time gap only.
+    return True

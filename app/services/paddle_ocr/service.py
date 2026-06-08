@@ -27,6 +27,7 @@ class PaddleOcrService:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
+        self._recover_stuck_frames()
         self._thread = threading.Thread(target=self._run_loop, name="paddle-ocr-worker", daemon=True)
         self._thread.start()
         logger.info("[OCR] Paddle OCR worker started (processing queued frames)")
@@ -36,6 +37,31 @@ class PaddleOcrService:
         if self._thread:
             self._thread.join(timeout=5)
         logger.info("Paddle OCR service stopped")
+
+    def _recover_stuck_frames(self) -> None:
+        """Re-queue frames left in processing after a crash or container restart."""
+        db = SessionLocal()
+        try:
+            stuck = (
+                db.query(models.Frame)
+                .filter(
+                    models.Frame.ocr_status == "processing",
+                    models.Frame.processed_at.is_(None),
+                )
+                .all()
+            )
+            if not stuck:
+                return
+            for frame in stuck:
+                frame.ocr_status = "queued"
+                frame.error_message = None
+            db.commit()
+            logger.warning("[OCR] Re-queued %s frame(s) stuck in processing", len(stuck))
+        except Exception:
+            logger.exception("[OCR] Failed to recover stuck frames")
+            db.rollback()
+        finally:
+            db.close()
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():

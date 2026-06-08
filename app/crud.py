@@ -32,7 +32,7 @@ def list_frames(db: Session, recording_id: int) -> list[models.Frame]:
         .order_by(models.Frame.frame_index.asc())
         .all()
     )
-
+                                                          
 
 def list_activity_chunks(
     db: Session,

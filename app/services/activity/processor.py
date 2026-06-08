@@ -8,6 +8,7 @@ from app import models
 from app.services.activity.chunker import FrameChunk, chunk_frames
 from app.services.activity.classifier import classify_activity
 from app.services.activity.cleaner import merge_cleaned_texts
+from app.services.activity.metadata import merge_metadata
 from app.config import SAVE_ACTIVITY_JSON_FILES
 from app.services.media.storage import get_recording_paths
 from app.services.activity.categories import ActivityCategory
@@ -32,6 +33,10 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
     if not frames:
         return []
 
+    for frame in frames:
+        _enrich_frame_metadata(frame)
+
+    db.commit()
     frame_chunks = chunk_frames(frames)
     created: list[models.ActivityChunk] = []
 
@@ -98,6 +103,21 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
     return chunks
 
 
+def _enrich_frame_metadata(frame: models.Frame) -> None:
+    merged = merge_metadata(
+        app_name=frame.app_name,
+        window_name=frame.window_name,
+        browser_url=frame.browser_url,
+        text=frame.ocr_text,
+    )
+    if merged["app_name"] and merged["app_name"] != frame.app_name:
+        frame.app_name = merged["app_name"]
+    if merged["window_name"] and merged["window_name"] != frame.window_name:
+        frame.window_name = merged["window_name"]
+    if merged["browser_url"] and merged["browser_url"] != frame.browser_url:
+        frame.browser_url = merged["browser_url"]
+
+
 def _build_activity_chunk(
     recording_id: int,
     frame_chunk: FrameChunk,
@@ -106,19 +126,25 @@ def _build_activity_chunk(
     raw_chars = sum(len(text) for text in texts)
     cleaned_text = merge_cleaned_texts(texts)
     cleaned_chars = len(cleaned_text)
-    category = classify_activity(
+    metadata = merge_metadata(
         app_name=frame_chunk.app_name,
         window_name=frame_chunk.window_name,
         browser_url=frame_chunk.browser_url,
+        text=cleaned_text,
+    )
+    category = classify_activity(
+        app_name=metadata["app_name"],
+        window_name=metadata["window_name"],
+        browser_url=metadata["browser_url"],
         text=cleaned_text,
     )
     frame_ids = [frame.id for frame in frame_chunk.frames]
 
     chunk = models.ActivityChunk(
         recording_id=recording_id,
-        app_name=frame_chunk.app_name,
-        window_name=frame_chunk.window_name,
-        browser_url=frame_chunk.browser_url,
+        app_name=metadata["app_name"],
+        window_name=metadata["window_name"],
+        browser_url=metadata["browser_url"],
         category=category.value,
         timestamp=frame_chunk.timestamp,
         end_timestamp=frame_chunk.end_timestamp,

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.services.activity.categories import ActivityCategory
 from app.services.activity.classifier import classify_activity
+from app.services.activity.metadata import merge_metadata
 from app.config import SAVE_ACTIVITY_JSON_FILES
 from app.services.media.storage import get_recording_paths
 from app.services.meetings.transcript import sync_meeting_transcript
@@ -16,10 +17,19 @@ logger = logging.getLogger(__name__)
 def reclassify_activity_chunk(chunk: models.ActivityChunk, db: Session) -> models.ActivityChunk:
     """Re-run category detection and refresh meeting transcript if needed."""
     previous = chunk.category
-    category = classify_activity(
+    metadata = merge_metadata(
         app_name=chunk.app_name,
         window_name=chunk.window_name,
         browser_url=chunk.browser_url,
+        text=chunk.cleaned_text,
+    )
+    chunk.app_name = metadata["app_name"]
+    chunk.window_name = metadata["window_name"]
+    chunk.browser_url = metadata["browser_url"]
+    category = classify_activity(
+        app_name=metadata["app_name"],
+        window_name=metadata["window_name"],
+        browser_url=metadata["browser_url"],
         text=chunk.cleaned_text,
     )
     chunk.category = category.value
