@@ -25,7 +25,7 @@ def resolve_video_source(
         )
         recording.source_video_path = str(output_video_path)
         return output_video_path
-
+    
     if not recording.source_video_path:
         raise ValueError("Provide either source_video_path or capture_command to start a recording job.")
 

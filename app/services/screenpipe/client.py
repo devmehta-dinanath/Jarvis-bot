@@ -18,6 +18,23 @@ class ScreenpipeApiError(RuntimeError):
     pass
 
 
+def is_api_unreachable_error(exc: Exception | str) -> bool:
+    """True when Screenpipe HTTP API is down or not listening yet (startup race)."""
+    message = str(exc).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "connection refused",
+            "errno 111",
+            "name or service not known",
+            "failed to establish a new connection",
+            "connection reset",
+            "timed out",
+            "unreachable",
+        )
+    )
+
+
 def wait_until_healthy(
     api_url: str,
     timeout_seconds: float = 120,

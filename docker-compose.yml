@@ -14,7 +14,7 @@ services:
       SCREENPIPE_ENABLED: "true"
       SCREENPIPE_START_CLI: "true"
       SCREENPIPE_API_URL: http://127.0.0.1:3030
-      SCREENPIPE_CLI_COMMAND: ${SCREENPIPE_CLI_COMMAND:-screenpipe record --use-system-default-audio}
+      SCREENPIPE_CLI_COMMAND: ${SCREENPIPE_CLI_COMMAND:-screenpipe record --audio-all}
       # Get token: screenpipe auth token — or set in project .env
       SCREENPIPE_API_TOKEN: ${SCREENPIPE_API_TOKEN:-}
       SCREENPIPE_LOCAL_API_KEY: ${SCREENPIPE_LOCAL_API_KEY:-}

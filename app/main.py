@@ -21,23 +21,23 @@ class _PipelineFocusFilter(logging.Filter):
 
 
 def _configure_app_logging() -> None:
-    """Route app.* INFO logs to stdout.
+    """Route app.* INFO logs to stdout. 
 
     Uvicorn replaces the root logger on startup, so app loggers otherwise only
     emit WARNING+ via Python's lastResort handler — hiding [CAPTURE]/[OCR]/etc.
     """
     from app.config import PIPELINE_VERBOSE_LOGS
 
-    app_logger = logging.getLogger("app")
-    app_logger.setLevel(logging.INFO)
+    app_logger = logging.getLogger("app")   
+    app_logger.setLevel(logging.INFO) 
     if not app_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-        if not PIPELINE_VERBOSE_LOGS:
+        handler = logging.StreamHandler()  
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT)) 
+        if not PIPELINE_VERBOSE_LOGS: 
             handler.addFilter(_PipelineFocusFilter())
-        app_logger.addHandler(handler)
+        app_logger.addHandler(handler) 
     app_logger.propagate = False
-
+ 
 
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -46,7 +46,7 @@ from app import crud, models, schemas
 from app.bootstrap import bootstrap_database
 from app.config import (
     AUTO_START_SERVICES,
-    MEDIA_ROOT,
+    MEDIA_ROOT, 
     SCREENPIPE_API_URL,
     SCREENPIPE_CLI_COMMAND,
     SCREENPIPE_ENABLED,
@@ -118,25 +118,25 @@ def services_status() -> dict:
         hint = (
             f"Event-driven frames from screenpipe record → "
             f"media/recording_{service_manager.screenpipe.recording_id}/frames/"
-        )
+        ) 
     elif capture_running:
         hint = "Syncing frames from Screenpipe API; interact with your screen to trigger captures."
-    return {
+    return { 
         "auto_start_services": AUTO_START_SERVICES,
         "screenpipe_enabled": SCREENPIPE_ENABLED,
         "screenpipe_cli_command": SCREENPIPE_CLI_COMMAND,
         "screenpipe_api_url": SCREENPIPE_API_URL,
         "screenpipe_api_token_configured": get_api_token() is not None,
-        "screenpipe_start_cli": SCREENPIPE_START_CLI,
-        "media_root": str(MEDIA_ROOT),
+        "screenpipe_start_cli": SCREENPIPE_START_CLI, 
+        "media_root": str(MEDIA_ROOT), 
         "manager_started": service_manager.is_started,
-        "screenpipe": {
+        "screenpipe": { 
             "running": capture_running,
             "cli_running": service_manager.screenpipe.cli_running,
             "live_recording_id": service_manager.screenpipe.recording_id,
             "health": get_health(SCREENPIPE_API_URL),
         },
-        "paddle_ocr": {
+        "paddle_ocr": { 
             "running": ocr_running,
         },
         "activity": {
@@ -186,19 +186,19 @@ def pipeline_stats(
         chroma_path=str(CHROMA_PATH),
         chroma_embeddings=chroma_count,
         recordings=recordings_stats,
-    )
+    ) 
 
-
+ 
 @app.get(
     "/api/v1/recordings/{recording_id}/pipeline/stats",
     response_model=schemas.RecordingPipelineStatsResponse,
 )
 def recording_pipeline_stats(
-    recording_id: int,
+    recording_id: int, 
     recent_frames: int = 5,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db), 
 ) -> schemas.RecordingPipelineStatsResponse:
-    from app.services.vector.store import get_vector_stats
+    from app.services.vector.store import get_vector_stats 
 
     chroma_count = get_vector_stats().get("count", 0)
     stats = crud.get_recording_pipeline_stats(
