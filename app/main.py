@@ -3,10 +3,42 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
-)
+_LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s"
+
+_PIPELINE_TAGS = ("[CAPTURE]", "[OCR]", "[GROUP]", "[CLEANUP]")
+
+
+class _PipelineFocusFilter(logging.Filter):
+    """Hide noisy INFO logs; keep capture/OCR pipeline work and all warnings+."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        if record.name == "app.main":
+            return True
+        msg = record.getMessage()
+        return any(tag in msg for tag in _PIPELINE_TAGS)
+
+
+def _configure_app_logging() -> None:
+    """Route app.* INFO logs to stdout.
+
+    Uvicorn replaces the root logger on startup, so app loggers otherwise only
+    emit WARNING+ via Python's lastResort handler — hiding [CAPTURE]/[OCR]/etc.
+    """
+    from app.config import PIPELINE_VERBOSE_LOGS
+
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(logging.INFO)
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        if not PIPELINE_VERBOSE_LOGS:
+            handler.addFilter(_PipelineFocusFilter())
+        app_logger.addHandler(handler)
+    app_logger.propagate = False
+
+
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -34,6 +66,7 @@ from app.services.pipeline import process_recording_job
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _configure_app_logging()
     log = logging.getLogger("app.main")
     if AUTO_START_SERVICES:
         log.info(
@@ -113,6 +146,73 @@ def services_status() -> dict:
         "vector": get_vector_stats(),
         "hint": hint,
     }
+
+
+@app.get("/api/v1/pipeline/stats", response_model=schemas.PipelineStatsResponse)
+def pipeline_stats(
+    recent_frames: int = 5,
+    db: Session = Depends(get_db),
+) -> schemas.PipelineStatsResponse:
+    from app.config import CHROMA_PATH, JARVIS_DATABASE_FILENAME
+    from app.database import DATABASE_URL, sqlite_database_path
+    from app.services.vector.store import get_vector_stats
+
+    vector = get_vector_stats()
+    chroma_count = vector.get("count", 0)
+    if DATABASE_URL.startswith("sqlite"):
+        db_label = JARVIS_DATABASE_FILENAME
+    elif DATABASE_URL.startswith("postgresql"):
+        db_label = "postgresql"
+    elif DATABASE_URL.startswith("mysql"):
+        db_label = "mysql"
+    else:
+        db_label = "external"
+    db_path = sqlite_database_path()
+
+    recordings_stats: list[schemas.RecordingPipelineStatsResponse] = []
+    for recording in crud.list_recordings(db):
+        stats = crud.get_recording_pipeline_stats(
+            db,
+            recording.id,
+            recent_frames=recent_frames,
+            chroma_embeddings=chroma_count,
+        )
+        if stats is not None:
+            recordings_stats.append(stats)
+
+    return schemas.PipelineStatsResponse(
+        database=db_label,
+        database_path=str(db_path) if db_path is not None else None,
+        chroma_path=str(CHROMA_PATH),
+        chroma_embeddings=chroma_count,
+        recordings=recordings_stats,
+    )
+
+
+@app.get(
+    "/api/v1/recordings/{recording_id}/pipeline/stats",
+    response_model=schemas.RecordingPipelineStatsResponse,
+)
+def recording_pipeline_stats(
+    recording_id: int,
+    recent_frames: int = 5,
+    db: Session = Depends(get_db),
+) -> schemas.RecordingPipelineStatsResponse:
+    from app.services.vector.store import get_vector_stats
+
+    chroma_count = get_vector_stats().get("count", 0)
+    stats = crud.get_recording_pipeline_stats(
+        db,
+        recording_id,
+        recent_frames=recent_frames,
+        chroma_embeddings=chroma_count,
+    )
+    if stats is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recording not found",
+        )
+    return stats
 
 
 @app.get("/api/v1/recordings", response_model=list[schemas.RecordingResponse])

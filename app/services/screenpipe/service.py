@@ -2,6 +2,7 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from subprocess import Popen
 
@@ -16,10 +17,17 @@ from app.config import (
     SCREENPIPE_ENABLED,
     SCREENPIPE_POLL_INTERVAL_SECONDS,
     SCREENPIPE_START_CLI,
+    SCREEN_CHANGE_CHECK_INTERVAL_SECONDS,
+    SCREEN_CHANGE_MIN_CAPTURE_SECONDS,
+    SCREENPIPE_SYNC_BATCH_LIMIT,
+    SCREENPIPE_SYNC_OVERLAP_SECONDS,
+    use_screenpipe_frame_sync,
+    use_x11_change_capture,
 )
 from app.database import SessionLocal
 from app.services.media.storage import ensure_recording_dirs
 from app.services.screenpipe.capture import capture_single_frame
+from app.services.screenpipe.x11_change import X11ScreenChangeCapture
 from app.services.screenpipe.cli import (
     ScreenpipeCliError,
     log_screenpipe_output,
@@ -75,6 +83,11 @@ class ScreenpipeService:
         self._using_external_api = False
         self._audio_bootstrap_attempted = False
         self._unhealthy_polls = 0
+        self._low_capture_fps_warned = False
+        self._x11_capture: X11ScreenChangeCapture | None = None
+        self._x11_thread: threading.Thread | None = None
+        self._sync_screenpipe_frames = use_screenpipe_frame_sync()
+        self._capture_ready_logged = False
 
     @property
     def recording_id(self) -> int | None:
@@ -96,7 +109,21 @@ class ScreenpipeService:
         name = "screenpipe-sync" if self.use_screenpipe_cli else "screenpipe-capture"
         self._thread = threading.Thread(target=target, name=name, daemon=True)
         self._thread.start()
+        if self.use_screenpipe_cli and use_x11_change_capture():
+            self._x11_capture = X11ScreenChangeCapture(
+                probe_interval_seconds=SCREEN_CHANGE_CHECK_INTERVAL_SECONDS,
+                min_capture_seconds=SCREEN_CHANGE_MIN_CAPTURE_SECONDS,
+                capture_command=self.fallback_capture_command,
+            )
+            self._x11_thread = threading.Thread(
+                target=self._run_x11_change_loop,
+                name="x11-screen-change",
+                daemon=True,
+            )
+            self._x11_thread.start()
         mode = "screenpipe record + API" if self.use_screenpipe_cli else "ffmpeg interval"
+        if use_x11_change_capture():
+            mode += " + X11 screen-change capture"
         logger.info("Screenpipe service started (%s)", mode)
 
     def stop(self) -> None:
@@ -186,25 +213,96 @@ class ScreenpipeService:
             else:
                 logger.warning("[CAPTURE] %s", audio_result.get("message"))
 
-        if self._poll_count == 0:
-            logger.info(
-                "[CAPTURE] Screenpipe API ready at %s — watching for new frames…",
-                self.api_url,
-            )
-
-        db = SessionLocal()
-        try:
-            self._sync_new_frames(db)
-        except ScreenpipeApiError as exc:
-            logger.warning("%s", exc)
-            db.rollback()
-        except Exception:
-            logger.exception("Screenpipe frame sync failed")
-            db.rollback()
-        finally:
-            db.close()
+        if not self._capture_ready_logged:
+            self._capture_ready_logged = True
+            if self._sync_screenpipe_frames:
+                logger.info(
+                    "[CAPTURE] Screenpipe API ready at %s — syncing frames on screen change…",
+                    self.api_url,
+                )
+            elif use_x11_change_capture():
+                logger.info(
+                    "[CAPTURE] Screenpipe API ready at %s — audio/API only; "
+                    "frames captured via X11 screen-change watcher",
+                    self.api_url,
+                )
+        if self._sync_screenpipe_frames:
+            self._warn_if_capture_rate_low()
+            db = SessionLocal()
+            try:
+                self._sync_new_frames(db)
+            except ScreenpipeApiError as exc:
+                logger.warning("%s", exc)
+                db.rollback()
+            except Exception:
+                logger.exception("Screenpipe frame sync failed")
+                db.rollback()
+            finally:
+                db.close()
 
         self._stop_event.wait(self.poll_interval_seconds)
+
+    def _run_x11_change_loop(self) -> None:
+        assert self._x11_capture is not None
+        while not self._stop_event.is_set():
+            db = SessionLocal()
+            try:
+                recording = self._ensure_live_recording(db)
+                paths = ensure_recording_dirs(recording.id)
+                if self._x11_capture.check_and_capture(db, recording, paths):
+                    self._recording_id = recording.id
+            except Exception:
+                logger.exception("[CAPTURE] X11 screen-change loop error")
+                db.rollback()
+            finally:
+                db.close()
+            self._stop_event.wait(SCREEN_CHANGE_CHECK_INTERVAL_SECONDS)
+
+    def _warn_if_capture_rate_low(self) -> None:
+        if self._low_capture_fps_warned or self._poll_count % 15 != 0:
+            return
+        from app.services.screenpipe.client import get_health
+
+        health = get_health(self.api_url)
+        pipeline = health.get("pipeline") if isinstance(health.get("pipeline"), dict) else {}
+        fps = pipeline.get("capture_fps_actual")
+        ui = health.get("ui_recorder") if isinstance(health.get("ui_recorder"), dict) else {}
+        if not isinstance(fps, (int, float)) or fps >= 0.08:
+            return
+        self._low_capture_fps_warned = True
+        logger.warning(
+            "[CAPTURE] Screenpipe capture rate is low (%.3f fps). "
+            "UI recorder mode=%s — using frame-diff on screen change. "
+            "Tune SCREENPIPE_VISUAL_CHECK_INTERVAL_MS / SCREENPIPE_VISUAL_CHANGE_THRESHOLD if needed.",
+            fps,
+            ui.get("mode", "unknown"),
+        )
+
+    def _max_screenpipe_frame_id(self, db: Session, recording_id: int) -> int:
+        value = (
+            db.query(func.max(models.Frame.screenpipe_frame_id))
+            .filter(models.Frame.recording_id == recording_id)
+            .scalar()
+        )
+        return int(value or 0)
+
+    def _sync_since_for_recording(self, db: Session, recording_id: int) -> datetime:
+        row = (
+            db.query(models.Frame.captured_at)
+            .filter(
+                models.Frame.recording_id == recording_id,
+                models.Frame.captured_at.isnot(None),
+            )
+            .order_by(models.Frame.screenpipe_frame_id.desc())
+            .first()
+        )
+        overlap = timedelta(seconds=SCREENPIPE_SYNC_OVERLAP_SECONDS)
+        if row and row[0]:
+            captured = row[0]
+            if captured.tzinfo is None:
+                captured = captured.replace(tzinfo=timezone.utc)
+            return captured - overlap
+        return datetime.now(timezone.utc) - timedelta(minutes=5)
 
     def _sync_new_frames(self, db: Session) -> None:
         if not is_healthy(self.api_url):
@@ -212,29 +310,81 @@ class ScreenpipeService:
 
         recording = self._ensure_live_recording(db)
         paths = ensure_recording_dirs(recording.id)
-        remote_frames = list_frames_since(self.api_url, self._last_poll_at, limit=50)
+        max_sp_id = self._max_screenpipe_frame_id(db, recording.id)
+        since = self._sync_since_for_recording(db, recording.id)
         self._last_poll_at = datetime.now(timezone.utc)
         self._poll_count += 1
 
-        if not remote_frames:
-            if self._poll_count == 1 or self._poll_count % 15 == 0:
-                logger.info(
-                    "[CAPTURE] Sync #%s: no new frames (switch apps / click to trigger Screenpipe)",
-                    self._poll_count,
-                )
+        imported = 0
+        skipped_existing = 0
+        batches = 0
+        while True:
+            remote_frames = list_frames_since(
+                self.api_url,
+                since,
+                limit=SCREENPIPE_SYNC_BATCH_LIMIT,
+            )
+            remote_frames = [
+                remote
+                for remote in remote_frames
+                if (extract_frame_id(remote) or 0) > max_sp_id
+            ]
+            remote_frames.sort(key=lambda item: extract_frame_id(item) or 0)
+            if not remote_frames:
+                break
+
+            batches += 1
+            sp_ids = [extract_frame_id(remote) for remote in remote_frames]
+            sp_ids_preview = ", ".join(str(fid) for fid in sp_ids[:8] if fid is not None)
+            if len(remote_frames) > 8:
+                sp_ids_preview = f"{sp_ids_preview}, …" if sp_ids_preview else "…"
+            logger.info(
+                "[CAPTURE] Sync #%s batch %s: %s new frame(s) (screenpipe_ids=%s)",
+                self._poll_count,
+                batches,
+                len(remote_frames),
+                sp_ids_preview or "unknown",
+            )
+
+            batch_imported, batch_skipped = self._import_remote_frames(
+                db,
+                recording,
+                paths,
+                remote_frames,
+            )
+            imported += batch_imported
+            skipped_existing += batch_skipped
+            if batch_imported:
+                max_sp_id = self._max_screenpipe_frame_id(db, recording.id)
+            if len(remote_frames) < SCREENPIPE_SYNC_BATCH_LIMIT:
+                break
+
+        if not imported and not skipped_existing:
+            logger.debug(
+                "[CAPTURE] Sync #%s: no new frames (change app/window or type to trigger capture)",
+                self._poll_count,
+            )
             return
 
-        sp_ids = [extract_frame_id(remote) for remote in remote_frames]
-        sp_ids_preview = ", ".join(str(fid) for fid in sp_ids[:8] if fid is not None)
-        if len(remote_frames) > 8:
-            sp_ids_preview = f"{sp_ids_preview}, …" if sp_ids_preview else "…"
-        logger.info(
-            "[CAPTURE] Sync #%s: %s frame(s) from Screenpipe API (screenpipe_ids=%s)",
-            self._poll_count,
-            len(remote_frames),
-            sp_ids_preview or "unknown",
-        )
+        if imported or skipped_existing:
+            logger.info(
+                "[CAPTURE] Sync #%s complete: imported=%s skipped_existing=%s | "
+                "recording=%s total_frames=%s last_screenpipe_id=%s",
+                self._poll_count,
+                imported,
+                skipped_existing,
+                recording.id,
+                recording.total_frames,
+                max_sp_id,
+            )
 
+    def _import_remote_frames(
+        self,
+        db: Session,
+        recording: models.Recording,
+        paths,
+        remote_frames: list[dict],
+    ) -> tuple[int, int]:
         imported = 0
         skipped_existing = 0
         for remote in remote_frames:
@@ -284,6 +434,7 @@ class ScreenpipeService:
                 browser_url=metadata["browser_url"],
                 captured_at=metadata["captured_at"],
                 file_path=str(frame_path),
+                screenpipe_ocr_text=metadata.get("ocr_text"),
                 ocr_status="queued",
                 activity_status="pending",
             )
@@ -308,16 +459,7 @@ class ScreenpipeService:
                 frame_path.name,
             )
 
-        if imported or skipped_existing:
-            logger.info(
-                "[CAPTURE] Sync #%s complete: imported=%s skipped_existing=%s | "
-                "recording=%s total_frames=%s",
-                self._poll_count,
-                imported,
-                skipped_existing,
-                recording.id,
-                recording.total_frames,
-            )
+        return imported, skipped_existing
 
     def _run_fallback_loop(self) -> None:
         """Legacy fixed-interval capture when SCREENPIPE_ENABLED=false."""

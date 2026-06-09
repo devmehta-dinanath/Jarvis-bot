@@ -32,6 +32,7 @@ RUN apt-get update \
         libssl3 \
         libpulse0 \
         libasound2t64 \
+        tesseract-ocr \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
@@ -60,7 +61,8 @@ COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /app/data /app/media \
     && chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENV RUNNING_IN_DOCKER=true \
+ENV PYTHONUNBUFFERED=1 \
+    RUNNING_IN_DOCKER=true \
     SCREENPIPE_START_CLI=true \
     SCREENPIPE_API_URL=http://127.0.0.1:3030
 

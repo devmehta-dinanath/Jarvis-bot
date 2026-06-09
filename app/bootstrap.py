@@ -13,6 +13,7 @@ FRAME_COLUMNS: dict[str, str] = {
     "browser_url": "VARCHAR(1000)",
     "captured_at": "DATETIME",
     "activity_status": "VARCHAR(50) NOT NULL DEFAULT 'pending'",
+    "screenpipe_ocr_text": "TEXT",
 }
 
 

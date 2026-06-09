@@ -1,7 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-screenpipe.db
 data/*.db
 data/*.db-journal
 data/*.db-wal

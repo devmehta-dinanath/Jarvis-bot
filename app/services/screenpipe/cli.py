@@ -4,16 +4,66 @@ import subprocess
 import threading
 from subprocess import Popen
 
-from app.config import SCREENPIPE_CLI_COMMAND, SCREENPIPE_HEALTH_TIMEOUT_SECONDS
+from app.config import (
+    SCREENPIPE_CLI_COMMAND,
+    SCREENPIPE_HEALTH_TIMEOUT_SECONDS,
+    SCREENPIPE_IDLE_CAPTURE_INTERVAL_MS,
+    SCREENPIPE_LOG_CLI_VERBOSE,
+    SCREENPIPE_MIN_CAPTURE_INTERVAL_MS,
+    SCREENPIPE_VISUAL_CHANGE_THRESHOLD,
+    SCREENPIPE_VISUAL_CHECK_INTERVAL_MS,
+)
 from app.services.screenpipe.client import wait_until_healthy
 
 logger = logging.getLogger(__name__)
 
 _DRAIN_THREADS: dict[int, threading.Thread] = {}
 
+# Routine Screenpipe stderr noise (audio gaps, missing D-Bus in Docker, etc.).
+_SCREENPIPE_NOISE_SUBSTRINGS = (
+    "large gap on wired device",
+    "screenpipe_audio::",
+    "screenpipe_a11y::",
+    "at-spi2",
+    "tree walk failed",
+    "d-bus session bus",
+    "inserting ",
+    "ms silence",
+    "whisper_init",
+    "whisper_model_load",
+    "whisper_backend_init",
+)
+
+_SCREENPIPE_ALERT_SUBSTRINGS = (
+    "panic",
+    " panicked at ",
+    "tesseract not found",
+    "fatal",
+    "failed to start",
+    "exited with",
+)
+
 
 class ScreenpipeCliError(RuntimeError):
     pass
+
+
+def build_screenpipe_cli_args(command: str) -> list[str]:
+    """Append visual change-detection flags when missing (needed on Linux Docker)."""
+    args = shlex.split(command)
+    if not args:
+        return args
+
+    defaults: list[tuple[str, str]] = [
+        ("--visual-check-interval-ms", str(SCREENPIPE_VISUAL_CHECK_INTERVAL_MS)),
+        ("--min-capture-interval-ms", str(SCREENPIPE_MIN_CAPTURE_INTERVAL_MS)),
+        ("--visual-change-threshold", str(SCREENPIPE_VISUAL_CHANGE_THRESHOLD)),
+        ("--idle-capture-interval-ms", str(SCREENPIPE_IDLE_CAPTURE_INTERVAL_MS)),
+    ]
+    for flag, value in defaults:
+        if flag not in args:
+            args.extend([flag, value])
+    return args
 
 
 def start_screenpipe_record(
@@ -22,11 +72,12 @@ def start_screenpipe_record(
     wait_for_api: bool = False,
 ) -> Popen:
     """Run `screenpipe record` as a background process."""
-    args = shlex.split(command)
+    args = build_screenpipe_cli_args(command)
     if not args:
         raise ScreenpipeCliError("SCREENPIPE_CLI_COMMAND is empty")
 
-    logger.info("Starting Screenpipe CLI: %s", command)
+    effective_command = shlex.join(args)
+    logger.info("Starting Screenpipe CLI: %s", effective_command)
     process = Popen(
         args,
         stdout=subprocess.PIPE,
@@ -53,6 +104,19 @@ def start_screenpipe_record(
     return process
 
 
+def _log_screenpipe_line(text: str) -> None:
+    lower = text.lower()
+    if any(substr in lower for substr in _SCREENPIPE_NOISE_SUBSTRINGS):
+        return
+    if "error" in lower or any(substr in lower for substr in _SCREENPIPE_ALERT_SUBSTRINGS):
+        logger.warning("screenpipe: %s", text)
+        return
+    if SCREENPIPE_LOG_CLI_VERBOSE:
+        logger.info("screenpipe: %s", text)
+    else:
+        logger.debug("screenpipe: %s", text)
+
+
 def _start_output_drainer(process: Popen) -> None:
     """Read CLI stdout so a full pipe cannot block screenpipe during model downloads."""
     if process.stdout is None or process.pid in _DRAIN_THREADS:
@@ -64,7 +128,7 @@ def _start_output_drainer(process: Popen) -> None:
             for line in process.stdout:
                 text = line.rstrip()
                 if text:
-                    logger.info("screenpipe: %s", text)
+                    _log_screenpipe_line(text)
         except Exception:
             logger.debug("Screenpipe CLI output drainer stopped", exc_info=True)
         finally:

@@ -5,6 +5,7 @@ from app import models
 from app.config import ACTIVITY_POLL_INTERVAL_SECONDS
 from app.database import SessionLocal
 from app.services.activity.processor import process_recording_activity
+from app.services.media.cleanup import enforce_frame_image_retention
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class ActivityClassificationService:
                     .scalar()
                 )
                 if recording_id is None:
+                    enforce_frame_image_retention(db)
                     db.close()
                     self._stop_event.wait(self.poll_interval_seconds)
                     continue
@@ -81,7 +83,7 @@ class ActivityClassificationService:
                 if pending_frames:
                     frame_ids = ", ".join(str(row.id) for row in pending_frames)
                     indexes = ", ".join(str(row.frame_index) for row in pending_frames)
-                    logger.info(
+                    logger.debug(
                         "[ACTIVITY] Classifying recording=%s pending_frames=%s "
                         "frame_ids=[%s] indexes=[%s]",
                         recording_id,

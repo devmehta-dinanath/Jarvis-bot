@@ -63,6 +63,7 @@ class Frame(Base):
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
     ocr_status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False)
     ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screenpipe_ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     activity_status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

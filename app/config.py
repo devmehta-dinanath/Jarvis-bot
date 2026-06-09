@@ -4,7 +4,9 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
-DATABASE_PATH = DATA_DIR / "screenpipe.db"
+JARVIS_DATABASE_FILENAME = "jarvis.db"
+DATABASE_PATH = DATA_DIR / JARVIS_DATABASE_FILENAME
+LEGACY_DATABASE_PATH = DATA_DIR / "screenpipe.db"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_DATABASE_URL = f"sqlite:///{DATABASE_PATH.resolve().as_posix()}"
@@ -29,7 +31,51 @@ SCREENPIPE_API_URL = os.getenv("SCREENPIPE_API_URL", "http://127.0.0.1:3030").rs
 SCREENPIPE_API_TOKEN = os.getenv("SCREENPIPE_API_TOKEN", "").strip() or None
 SCREENPIPE_START_CLI = os.getenv("SCREENPIPE_START_CLI", "true").lower() in {"1", "true", "yes"}
 SCREENPIPE_POLL_INTERVAL_SECONDS = float(os.getenv("SCREENPIPE_POLL_INTERVAL_SECONDS", "2.0"))
+SCREENPIPE_SYNC_LOOKBACK_SECONDS = float(os.getenv("SCREENPIPE_SYNC_LOOKBACK_SECONDS", "300"))
+SCREENPIPE_SYNC_OVERLAP_SECONDS = float(os.getenv("SCREENPIPE_SYNC_OVERLAP_SECONDS", "60"))
+SCREENPIPE_SYNC_BATCH_LIMIT = int(os.getenv("SCREENPIPE_SYNC_BATCH_LIMIT", "100"))
 SCREENPIPE_HEALTH_TIMEOUT_SECONDS = float(os.getenv("SCREENPIPE_HEALTH_TIMEOUT_SECONDS", "120"))
+# Screenpipe frame-diff tuning (native Linux/macOS when UI recorder works).
+SCREENPIPE_VISUAL_CHECK_INTERVAL_MS = int(os.getenv("SCREENPIPE_VISUAL_CHECK_INTERVAL_MS", "500"))
+SCREENPIPE_MIN_CAPTURE_INTERVAL_MS = int(os.getenv("SCREENPIPE_MIN_CAPTURE_INTERVAL_MS", "300"))
+SCREENPIPE_VISUAL_CHANGE_THRESHOLD = float(os.getenv("SCREENPIPE_VISUAL_CHANGE_THRESHOLD", "0.005"))
+# Disable Screenpipe's 30s idle timer — capture on change only (ms; 1h = backup safety net).
+SCREENPIPE_IDLE_CAPTURE_INTERVAL_MS = int(os.getenv("SCREENPIPE_IDLE_CAPTURE_INTERVAL_MS", "3600000"))
+
+# Linux Docker: X11 hash watcher captures on pixel change (Screenpipe UI recorder is off in Docker).
+SCREEN_CHANGE_CHECK_INTERVAL_SECONDS = float(os.getenv("SCREEN_CHANGE_CHECK_INTERVAL_SECONDS", "0.4"))
+SCREEN_CHANGE_MIN_CAPTURE_SECONDS = float(os.getenv("SCREEN_CHANGE_MIN_CAPTURE_SECONDS", "0.5"))
+SCREEN_CHANGE_PROBE_COMMAND = os.getenv(
+    "SCREEN_CHANGE_PROBE_COMMAND",
+    "ffmpeg -loglevel error -y -f x11grab -video_size 320x180 -i {display} -frames:v 1 {output}",
+)
+
+
+def _env_auto_flag(name: str, *, default_when_auto: bool) -> bool:
+    raw = os.getenv(name, "auto").strip().lower()
+    if raw in {"1", "true", "yes"}:
+        return True
+    if raw in {"0", "false", "no"}:
+        return False
+    return default_when_auto
+
+
+def use_x11_change_capture() -> bool:
+    """Probe X11 pixels and capture when the desktop image changes."""
+    return _env_auto_flag("X11_CHANGE_CAPTURE_ENABLED", default_when_auto=RUNNING_IN_DOCKER)
+
+
+def use_screenpipe_frame_sync() -> bool:
+    """Pull frame images from the Screenpipe API (off when X11 capture is primary)."""
+    return _env_auto_flag("SCREENPIPE_SYNC_FRAMES", default_when_auto=not use_x11_change_capture())
+# When false (default), Screenpipe subprocess logs only errors/panics — not audio/D-Bus noise.
+SCREENPIPE_LOG_CLI_VERBOSE = os.getenv("SCREENPIPE_LOG_CLI_VERBOSE", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+# When false (default), INFO logs are limited to [CAPTURE] and [OCR] pipeline work.
+PIPELINE_VERBOSE_LOGS = os.getenv("PIPELINE_VERBOSE_LOGS", "false").lower() in {"1", "true", "yes"}
 
 # Fallback when SCREENPIPE_ENABLED=false (fixed-interval ffmpeg grab)
 FRAME_INTERVAL_SECONDS = float(
@@ -59,6 +105,14 @@ CHROMA_LOG_EMBEDDINGS = os.getenv("CHROMA_LOG_EMBEDDINGS", "true").lower() in {"
 # --- Storage: cleaned text lives in SQLite + ChromaDB (not per-frame txt files) ---
 SAVE_FRAME_OCR_FILES = os.getenv("SAVE_FRAME_OCR_FILES", "false").lower() in {"1", "true", "yes"}
 SAVE_ACTIVITY_JSON_FILES = os.getenv("SAVE_ACTIVITY_JSON_FILES", "false").lower() in {"1", "true", "yes"}
+# Rolling frame JPG retention: keep the newest N on disk (e.g. 300 → delete 100 oldest → 200 latest).
+# Never deletes .txt, .json, or Chroma embeddings. Only removes JPGs already indexed in Chroma.
+DELETE_FRAME_IMAGES_AFTER_CHROMA_INDEX = os.getenv(
+    "DELETE_FRAME_IMAGES_AFTER_CHROMA_INDEX",
+    "true",
+).lower() in {"1", "true", "yes"}
+FRAME_IMAGE_RETENTION_MAX = int(os.getenv("FRAME_IMAGE_RETENTION_MAX", "200"))
+FRAME_IMAGE_RETENTION_PURGE = int(os.getenv("FRAME_IMAGE_RETENTION_PURGE", "100"))
 
 # --- Meeting audio + calendar highlights ---
 MEETING_AUDIO_SYNC_ENABLED = os.getenv("MEETING_AUDIO_SYNC_ENABLED", "true").lower() in {

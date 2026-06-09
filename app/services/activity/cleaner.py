@@ -29,6 +29,12 @@ def clean_ocr_text(text: str | None) -> str:
     return "\n".join(lines).strip()
 
 
+def merge_frame_ocr_sources(paddle_text: str | None, screenpipe_text: str | None) -> str:
+    """Merge PaddleOCR + Screenpipe/Tesseract text, deduplicating lines."""
+    sources = [text for text in (paddle_text, screenpipe_text) if text and text.strip()]
+    return merge_cleaned_texts(sources)
+
+
 def merge_cleaned_texts(texts: list[str]) -> str:
     """Merge multiple cleaned OCR texts, deduplicating lines across frames."""
     merged: list[str] = []

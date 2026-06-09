@@ -37,7 +37,7 @@ app/
       service.py        # background worker for queued frames
 requirements.txt
 data/
-  screenpipe.db       # SQLite DB (created on first server start; open in VS Code)
+  jarvis.db           # SQLite DB (created on first server start; open in VS Code)
 media/
   recording_<id>/
     screenpipe/         # capture.mp4 and raw capture output
@@ -51,14 +51,14 @@ Docker writes to your project folders on the host:
 
 | Path | Contents |
 |------|----------|
-| `data/screenpipe.db` | SQLite — open in VS Code |
+| `data/jarvis.db` | SQLite — open in VS Code |
 | `media/recording_<id>/` | frames, OCR text, capture video |
 
 ```text
   Local uvicorn                    Docker container
         |                                |
         v                                v
-   data/screenpipe.db  <=========>  /app/data/screenpipe.db
+   data/jarvis.db      <=========>  /app/data/jarvis.db
    media/               <=========>  /app/media/
 ```
 
@@ -167,7 +167,7 @@ If Screenpipe API is down, run manually: `screenpipe record` or `npx -y screenpi
 ### Open SQLite in VS Code / Cursor
 
 1. Start the server once so the DB is created: `uvicorn app.main:app --reload`
-2. In the explorer, open **`data/screenpipe.db`**
+2. In the explorer, open **`data/jarvis.db`**
 3. If prompted, install the recommended **SQLite Viewer** extension (`.vscode/extensions.json`)
 
 Tables: `recordings`, `frames`.
@@ -187,7 +187,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/recordings/start \
 | Variable | Default in compose | Description |
 |----------|-------------------|-------------|
 | `PORT` | `8000` | Host port mapped to the container |
-| `DATABASE_URL` | `sqlite:////app/data/screenpipe.db` | SQLite path (default: `data/screenpipe.db` locally) |
+| `DATABASE_URL` | `sqlite:////app/data/jarvis.db` | SQLite path (default: `data/jarvis.db` locally) |
 | `AUTO_START_SERVICES` | `true` | Start screenpipe sync + OCR on boot |
 | `SCREENPIPE_CLI_COMMAND` | `npx -y screenpipe@latest record` | Screenpipe record command |
 | `SCREENPIPE_API_URL` | `http://host.docker.internal:3030` | Screenpipe REST API |
@@ -230,7 +230,7 @@ ffmpeg -version
 | `SCREENPIPE_POLL_INTERVAL_SECONDS` | `2.0` | Poll API for new frames |
 | `AUTO_START_SERVICES` | `true` | Start sync + OCR workers with the server |
 | `OCR_POLL_INTERVAL_SECONDS` | `0.5` | OCR worker poll interval |
-| `DATABASE_URL` | `data/screenpipe.db` (via config) | SQLite connection string |
+| `DATABASE_URL` | `data/jarvis.db` (via config) | SQLite connection string |
 | `SCREENPIPE_ENABLED=false` | — | Falls back to ffmpeg interval capture |
 
 ## API endpoints

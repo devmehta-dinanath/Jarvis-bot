@@ -7,15 +7,47 @@ from sqlalchemy.orm import Session
 from app import models
 from app.services.activity.chunker import FrameChunk, chunk_frames
 from app.services.activity.classifier import classify_activity
-from app.services.activity.cleaner import merge_cleaned_texts
+from app.config import SAVE_ACTIVITY_JSON_FILES, SCREENPIPE_API_URL, SCREENPIPE_ENABLED
+from app.services.activity.cleaner import merge_cleaned_texts, merge_frame_ocr_sources
 from app.services.activity.metadata import merge_metadata
-from app.config import SAVE_ACTIVITY_JSON_FILES
+from app.services.screenpipe.client import ScreenpipeApiError, fetch_frame_ocr_text
+from app.services.media.cleanup import enforce_frame_image_retention
 from app.services.media.storage import get_recording_paths
 from app.services.activity.categories import ActivityCategory
 from app.services.meetings.transcript import sync_meeting_transcript
 from app.services.vector.store import upsert_activity_chunk
 
 logger = logging.getLogger(__name__)
+
+_GROUP_PREVIEW_CHARS = 120
+
+
+def _log_activity_group(
+    chunk: models.ActivityChunk,
+    *,
+    recording_id: int,
+    frame_ids: list[int],
+    indexed: bool,
+) -> None:
+    cleaned = (chunk.cleaned_text or "").strip()
+    preview = cleaned.replace("\n", " ")
+    if len(preview) > _GROUP_PREVIEW_CHARS:
+        preview = preview[:_GROUP_PREVIEW_CHARS] + "…"
+    logger.info(
+        "[GROUP] chunk=%s recording=%s category=%s frames=[%s] app=%r window=%r "
+        "paddle_chars=%s screenpipe_chars=%s merged_chars=%s indexed=%s | %s",
+        chunk.id,
+        recording_id,
+        chunk.category,
+        ", ".join(str(fid) for fid in frame_ids),
+        chunk.app_name,
+        chunk.window_name,
+        getattr(chunk, "_paddle_chars", 0),
+        getattr(chunk, "_screenpipe_chars", 0),
+        len(cleaned),
+        indexed,
+        preview or "(empty)",
+    )
 
 
 def process_recording_activity(recording: models.Recording, db: Session) -> list[models.ActivityChunk]:
@@ -34,6 +66,7 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
         return []
 
     for frame in frames:
+        _ensure_screenpipe_ocr(frame)
         _enrich_frame_metadata(frame)
 
     db.commit()
@@ -52,32 +85,15 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
     db.commit()
     indexed = 0
     transcripts_synced = 0
-    for chunk, frame_ids, raw_chars, cleaned_chars in created:
+    for chunk, frame_ids, _raw_chars, _cleaned_chars in created:
         db.refresh(chunk)
-        frame_range = (
-            f"{frame_ids[0]}..{frame_ids[-1]}" if len(frame_ids) > 1 else str(frame_ids[0])
-        )
-        logger.info(
-            "[ACTIVITY] Chunk id=%s recording=%s category=%s frame_count=%s "
-            "frame_ids=[%s] frame_db_ids=%s raw=%s chars cleaned=%s chars app=%r window=%r",
-            chunk.id,
-            recording.id,
-            chunk.category,
-            chunk.frame_count,
-            ", ".join(str(fid) for fid in frame_ids),
-            frame_range,
-            raw_chars,
-            cleaned_chars,
-            chunk.app_name,
-            chunk.window_name,
-        )
         if SAVE_ACTIVITY_JSON_FILES:
             _write_activity_file(recording.id, chunk)
         if chunk.category == ActivityCategory.MEETINGS.value:
             sync_meeting_transcript(chunk, db)
             if chunk.transcript_status in {"synced", "empty"}:
                 transcripts_synced += 1
-        if upsert_activity_chunk(
+        chunk_indexed = upsert_activity_chunk(
             chunk_id=chunk.id,
             recording_id=recording.id,
             cleaned_text=chunk.cleaned_text or "",
@@ -87,11 +103,21 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
             category=chunk.category,
             timestamp=chunk.timestamp.isoformat(),
             frame_ids=frame_ids,
-        ):
+            paddle_chars=getattr(chunk, "_paddle_chars", 0),
+            screenpipe_chars=getattr(chunk, "_screenpipe_chars", 0),
+        )
+        if chunk_indexed:
             indexed += 1
+            enforce_frame_image_retention(db, recording_id=recording.id)
+        _log_activity_group(
+            chunk,
+            recording_id=recording.id,
+            frame_ids=frame_ids,
+            indexed=chunk_indexed,
+        )
 
     chunks = [chunk for chunk, _, _, _ in created]
-    logger.info(
+    logger.debug(
         "[ACTIVITY] Recording %s: classified %s frame(s) into %s chunk(s), "
         "indexed %s in Chroma, synced %s meeting transcript(s)",
         recording.id,
@@ -103,12 +129,32 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
     return chunks
 
 
+def _ensure_screenpipe_ocr(frame: models.Frame) -> None:
+    if not SCREENPIPE_ENABLED or frame.screenpipe_frame_id is None:
+        return
+    if frame.screenpipe_ocr_text and frame.screenpipe_ocr_text.strip():
+        return
+    try:
+        text = fetch_frame_ocr_text(SCREENPIPE_API_URL, frame.screenpipe_frame_id)
+        if text:
+            frame.screenpipe_ocr_text = text
+    except ScreenpipeApiError:
+        logger.debug(
+            "Screenpipe OCR unavailable for frame id=%s screenpipe_id=%s",
+            frame.id,
+            frame.screenpipe_frame_id,
+            exc_info=True,
+        )
+    except Exception:
+        logger.debug("Screenpipe OCR fetch failed for frame id=%s", frame.id, exc_info=True)
+
+
 def _enrich_frame_metadata(frame: models.Frame) -> None:
     merged = merge_metadata(
         app_name=frame.app_name,
         window_name=frame.window_name,
         browser_url=frame.browser_url,
-        text=frame.ocr_text,
+        text=merge_frame_ocr_sources(frame.ocr_text, frame.screenpipe_ocr_text),
     )
     if merged["app_name"] and merged["app_name"] != frame.app_name:
         frame.app_name = merged["app_name"]
@@ -122,9 +168,18 @@ def _build_activity_chunk(
     recording_id: int,
     frame_chunk: FrameChunk,
 ) -> tuple[models.ActivityChunk, int, int, list[int]]:
-    texts = [frame.ocr_text or "" for frame in frame_chunk.frames]
-    raw_chars = sum(len(text) for text in texts)
-    cleaned_text = merge_cleaned_texts(texts)
+    paddle_chars = 0
+    screenpipe_chars = 0
+    merged_frame_texts: list[str] = []
+    for frame in frame_chunk.frames:
+        paddle_chars += len(frame.ocr_text or "")
+        screenpipe_chars += len(frame.screenpipe_ocr_text or "")
+        merged = merge_frame_ocr_sources(frame.ocr_text, frame.screenpipe_ocr_text)
+        if merged:
+            merged_frame_texts.append(merged)
+
+    raw_chars = paddle_chars + screenpipe_chars
+    cleaned_text = merge_cleaned_texts(merged_frame_texts)
     cleaned_chars = len(cleaned_text)
     metadata = merge_metadata(
         app_name=frame_chunk.app_name,
@@ -152,6 +207,8 @@ def _build_activity_chunk(
         frame_ids=json.dumps(frame_ids),
         frame_count=len(frame_ids),
     )
+    chunk._paddle_chars = paddle_chars  # type: ignore[attr-defined]
+    chunk._screenpipe_chars = screenpipe_chars  # type: ignore[attr-defined]
     return chunk, raw_chars, cleaned_chars, frame_ids
 
 

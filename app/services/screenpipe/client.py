@@ -255,7 +255,65 @@ def extract_frame_metadata(item: dict[str, Any]) -> dict[str, Any]:
         "window_name": merged["window_name"],
         "browser_url": merged["browser_url"],
         "captured_at": captured_at,
+        "ocr_text": accessibility_text,
     }
+
+
+def fetch_frame_ocr_text(api_url: str, frame_id: int) -> str | None:
+    """Fetch Screenpipe OCR/Tesseract text for a frame (context, text, or legacy OCR API)."""
+    _ensure_api_token()
+    errors: list[str] = []
+    for path in (
+        f"/frames/{frame_id}/context",
+        f"/frames/{frame_id}/text",
+        f"/frames/{frame_id}/ocr",
+    ):
+        try:
+            payload = _request_json(f"{api_url}{path}", timeout=15)
+        except HTTPError as exc:
+            errors.append(f"{path}: HTTP {exc.code}")
+            continue
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        text = _extract_frame_ocr_from_payload(payload)
+        if text:
+            return text
+    if errors:
+        logger.debug(
+            "No Screenpipe OCR for frame_id=%s (%s)",
+            frame_id,
+            "; ".join(errors[:3]),
+        )
+    return None
+
+
+def _extract_frame_ocr_from_payload(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    text = payload.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    positions = payload.get("text_positions")
+    if not isinstance(positions, list):
+        return None
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for position in positions:
+        if not isinstance(position, dict):
+            continue
+        fragment = position.get("text")
+        if not isinstance(fragment, str) or not fragment.strip():
+            continue
+        key = fragment.strip().casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(fragment.strip())
+    return "\n".join(lines) if lines else None
 
 
 def _parse_int(value: Any) -> int | None:

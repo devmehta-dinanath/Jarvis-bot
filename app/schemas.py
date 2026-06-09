@@ -47,6 +47,7 @@ class FrameResponse(BaseModel):
     file_path: str
     ocr_status: str
     ocr_text: str | None
+    screenpipe_ocr_text: str | None = None
     activity_status: str
     error_message: str | None
     created_at: datetime
@@ -138,6 +139,31 @@ class VectorStatsResponse(BaseModel):
     sample: list[VectorStatsSample] = Field(default_factory=list)
 
 
+class VectorEmbeddingItem(BaseModel):
+    id: str
+    chunk_id: int | None = None
+    recording_id: int | None = None
+    category: str | None = None
+    app_name: str | None = None
+    window_name: str | None = None
+    browser_url: str | None = None
+    timestamp: str | None = None
+    ocr_sources: str | None = None
+    paddle_chars: int | None = None
+    screenpipe_chars: int | None = None
+    merged_chars: int | None = None
+    document: str = ""
+    preview: str = ""
+
+
+class VectorEmbeddingListResponse(BaseModel):
+    enabled: bool
+    ready: bool = False
+    collection: str
+    total: int
+    items: list[VectorEmbeddingItem] = Field(default_factory=list)
+
+
 class MeetingTranscriptSegmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -197,3 +223,53 @@ class MeetingDetailResponse(BaseModel):
     transcript_segments: list[MeetingTranscriptSegmentResponse] = Field(default_factory=list)
     highlights: list[MeetingHighlightResponse] = Field(default_factory=list)
     can_add_to_calendar: bool = True
+
+
+class FrameOcrSummary(BaseModel):
+    id: int
+    frame_index: int
+    screenpipe_frame_id: int | None = None
+    app_name: str | None = None
+    window_name: str | None = None
+    ocr_status: str
+    activity_status: str
+    paddle_chars: int = 0
+    screenpipe_chars: int = 0
+    image_on_disk: bool = False
+    paddle_preview: str = ""
+    screenpipe_preview: str = ""
+    captured_at: datetime | None = None
+    processed_at: datetime | None = None
+
+
+class CategoryCount(BaseModel):
+    category: str
+    count: int
+
+
+class RecordingPipelineStatsResponse(BaseModel):
+    recording_id: int
+    title: str
+    status: str
+    database: str = "jarvis.db"
+    database_path: str | None = None
+    total_frames: int
+    ocr_done: int
+    ocr_queued: int
+    ocr_processing: int
+    ocr_failed: int
+    activity_processed: int
+    activity_pending: int
+    images_on_disk: int
+    activity_chunks_total: int
+    activity_chunks_by_category: list[CategoryCount] = Field(default_factory=list)
+    chroma_embeddings: int = 0
+    recent_frames: list[FrameOcrSummary] = Field(default_factory=list)
+
+
+class PipelineStatsResponse(BaseModel):
+    database: str
+    database_path: str | None = None
+    chroma_path: str
+    chroma_embeddings: int
+    recordings: list[RecordingPipelineStatsResponse] = Field(default_factory=list)
