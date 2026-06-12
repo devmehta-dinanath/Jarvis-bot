@@ -19,7 +19,7 @@ export function createCard(className, eyebrow, title, description) {
 
 export function createPlaceholderRows(count, shortLastRow = false) {
   const list = document.createElement("div");
-  list.className = "placeholder-list";
+  list.className = "placeholder-list"; 
 
   for (let index = 0; index < count; index += 1) {
     const row = document.createElement("div");

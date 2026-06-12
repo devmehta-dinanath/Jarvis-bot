@@ -1,52 +1,108 @@
+import { startGreetingClock } from "../lib/time.js";
 import { createMeetingPage } from "../pages/meeting-page.js";
 import { createSmartMessagingPage } from "../pages/smart-messaging-page.js";
 import { createSummaryPage } from "../pages/summary-page.js";
+import { createMenuIcon } from "./icons.js";
 
-const TAB_DEFINITIONS = [
-  {
-    id: "smart-messaging",
-    label: "Smart Messaging",
-    renderPanel: createSmartMessagingPage
-  },
+const MENU_ITEMS = [
   {
     id: "summary",
     label: "Summary",
+    description: "Daily & hourly overview",
     renderPanel: createSummaryPage
   },
   {
-    id: "meeting",
-    label: "Meeting",
+    id: "messaging",
+    label: "WhatsApp",
+    description: "Smart messaging",
+    renderPanel: createSmartMessagingPage
+  },
+  {
+    id: "meetings",
+    label: "Meetings",
+    description: "Schedule & prep",
     renderPanel: createMeetingPage
   }
 ];
 
-export function createTabSystem(source) {
-  const wrapper = document.createElement("section");
-  wrapper.className = "sidebar-tabs";
+export function createTabSystem() {
+  const wrapper = document.createElement("div");
+  wrapper.className = "os-layout";
 
-  const tabList = document.createElement("div");
-  tabList.className = "tabs";
-  tabList.setAttribute("role", "tablist");
-  tabList.setAttribute("aria-label", "Workspace insight tabs");
+  const sidebar = document.createElement("aside");
+  sidebar.className = "os-sidebar";
+
+  const brand = document.createElement("div");
+  brand.className = "os-sidebar__brand";
+
+  const logo = document.createElement("span");
+  logo.className = "os-sidebar__logo";
+  logo.setAttribute("aria-hidden", "true");
+  logo.textContent = "P";
+
+  const brandText = document.createElement("div");
+  brandText.className = "os-sidebar__brand-text";
+
+  const title = document.createElement("h1");
+  title.className = "os-sidebar__title";
+  title.textContent = "Personal OS";
+
+  const greeting = document.createElement("p");
+  greeting.className = "os-sidebar__greeting";
+  startGreetingClock(greeting, "Sujay");
+
+  const status = document.createElement("p");
+  status.className = "os-sidebar__status";
+  status.innerHTML = '<span class="status-dot"></span> Watching';
+
+  brandText.append(title, greeting, status);
+  brand.append(logo, brandText);
+
+  const menuLabel = document.createElement("p");
+  menuLabel.className = "os-sidebar__menu-label";
+  menuLabel.textContent = "Menu";
+
+  const menu = document.createElement("nav");
+  menu.className = "os-sidebar__menu";
+  menu.setAttribute("role", "tablist");
+  menu.setAttribute("aria-label", "Personal OS navigation");
+
+  const main = document.createElement("main");
+  main.className = "os-main";
 
   const panelHost = document.createElement("div");
-  panelHost.className = "panel-host";
+  panelHost.className = "os-content";
 
   const buttons = [];
   const panels = [];
 
-  TAB_DEFINITIONS.forEach((tab, index) => {
+  MENU_ITEMS.forEach((item, index) => {
     const button = document.createElement("button");
-    button.className = "tab-button";
-    button.id = `tab-${tab.id}`;
+    button.className = "os-sidebar__item";
+    button.id = `tab-${item.id}`;
     button.type = "button";
     button.setAttribute("role", "tab");
-    button.setAttribute("aria-controls", `panel-${tab.id}`);
-    button.dataset.tabTarget = `panel-${tab.id}`;
-    button.textContent = tab.label;
+    button.setAttribute("aria-controls", `panel-${item.id}`);
+    button.dataset.tabTarget = `panel-${item.id}`;
 
-    const panel = tab.renderPanel(source);
-    panel.id = `panel-${tab.id}`;
+    const icon = createMenuIcon(item.id);
+
+    const textWrap = document.createElement("span");
+    textWrap.className = "os-sidebar__item-text";
+
+    const label = document.createElement("span");
+    label.className = "os-sidebar__item-label";
+    label.textContent = item.label;
+
+    const desc = document.createElement("span");
+    desc.className = "os-sidebar__item-desc";
+    desc.textContent = item.description;
+
+    textWrap.append(label, desc);
+    button.append(icon, textWrap);
+
+    const panel = item.renderPanel();
+    panel.id = `panel-${item.id}`;
     panel.setAttribute("role", "tabpanel");
     panel.setAttribute("aria-labelledby", button.id);
 
@@ -62,24 +118,26 @@ export function createTabSystem(source) {
 
     button.addEventListener("click", () => activateTab(buttons, panels, panel.id));
     button.addEventListener("keydown", (event) => {
-      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
         return;
       }
 
       event.preventDefault();
-      const direction = event.key === "ArrowRight" ? 1 : -1;
-      const nextIndex = (index + direction + TAB_DEFINITIONS.length) % TAB_DEFINITIONS.length;
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex = (index + direction + MENU_ITEMS.length) % MENU_ITEMS.length;
       buttons[nextIndex].focus();
       activateTab(buttons, panels, panels[nextIndex].id);
     });
 
     buttons.push(button);
     panels.push(panel);
-    tabList.appendChild(button);
+    menu.appendChild(button);
     panelHost.appendChild(panel);
   });
 
-  wrapper.append(tabList, panelHost);
+  sidebar.append(brand, menuLabel, menu);
+  main.appendChild(panelHost);
+  wrapper.append(sidebar, main);
 
   return wrapper;
 }

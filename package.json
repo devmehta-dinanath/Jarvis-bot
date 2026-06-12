@@ -5,8 +5,8 @@
   "description": "Basic Electron desktop app scaffold.",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron ."
+    "start": "electron . --no-sandbox",
+    "dev": "electron . --no-sandbox"
   },
   "devDependencies": {
     "electron": "^37.0.0"
