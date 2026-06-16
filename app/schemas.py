@@ -273,3 +273,44 @@ class PipelineStatsResponse(BaseModel):
     chroma_path: str
     chroma_embeddings: int
     recordings: list[RecordingPipelineStatsResponse] = Field(default_factory=list)
+
+
+class ActivitySummaryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    period_type: str
+    period_start: datetime
+    period_end: datetime
+    status: str
+    summary_text: str
+    chunk_count: int
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    created_at: datetime
+
+
+class ActivitySummaryListResponse(BaseModel):
+    items: list[ActivitySummaryResponse] = Field(default_factory=list)
+    total: int
+
+
+class SummaryPendingPeriod(BaseModel):
+    period_start: datetime
+    period_end: datetime
+    unsummarized_chunk_count: int
+
+
+class SummaryPendingResponse(BaseModel):
+    items: list[SummaryPendingPeriod] = Field(default_factory=list)
+
+
+class SummaryStatsResponse(BaseModel):
+    enabled: bool
+    model: str
+    daily_prompt_tokens: int
+    daily_completion_tokens: int
+    tokens_date: str | None = None
+    last_seen_date: str | None = None
+    worker_running: bool = False

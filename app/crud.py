@@ -38,7 +38,6 @@ def list_frames(db: Session, recording_id: int) -> list[models.Frame]:
         .all()
     )
                                                           
-5
 def list_activity_chunks(
     db: Session,
     recording_id: int | None = None,

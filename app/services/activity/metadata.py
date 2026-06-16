@@ -44,7 +44,9 @@ _APP_PATTERNS: tuple[tuple[str, str], ...] = (
     ("microsoft edge", "Microsoft Edge"),
     ("cursor", "Cursor"),
     ("visual studio code", "VS Code"),
+    ("code -", "VS Code"),
     ("antigravity", "Antigravity"),
+    ("windsurf", "Windsurf"),
     ("whatsapp", "WhatsApp"),
     ("slack", "Slack"),
     ("discord", "Discord"),
@@ -90,7 +92,7 @@ def merge_metadata(
     return {
         "app_name": app_name or inferred["app_name"],
         "window_name": window_name or inferred["window_name"],
-        "browser_url": browser_url or inferred["browser_url"],
+        "browser_url": browser_url or inferred["browser_url"],  
     }
 
 
@@ -125,18 +127,18 @@ def _is_plausible_host(host: str) -> bool:
 
 
 def _infer_app_name(haystack: str, browser_url: str | None) -> str | None:
-    if browser_url:
-        host = urlparse(browser_url).netloc.casefold()
-        if host and not host.endswith(".local"):
-            for pattern, name in _APP_PATTERNS:
-                if pattern in ("google chrome", "chromium", "firefox", "microsoft edge"):
-                    if pattern in haystack:
-                        return name
-            return "Google Chrome"
-
     for pattern, name in _APP_PATTERNS:
         if pattern in haystack:
             return name
+
+    if not browser_url:
+        return None
+
+    for pattern, name in _APP_PATTERNS:
+        if pattern in ("google chrome", "chromium", "firefox", "microsoft edge", "safari", "brave"):
+            if pattern in haystack:
+                return name
+
     return None
 
 

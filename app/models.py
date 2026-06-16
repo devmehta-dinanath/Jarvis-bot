@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -176,3 +176,64 @@ class MeetingHighlight(Base):
         "ActivityChunk",
         back_populates="highlights",
     )
+
+
+class ActivitySummary(Base):
+    __tablename__ = "activity_summaries"
+    __table_args__ = (
+        UniqueConstraint("period_type", "period_start", name="uq_summary_period"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    period_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    period_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="complete")
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    chunk_links: Mapped[list["SummaryChunk"]] = relationship(
+        "SummaryChunk",
+        back_populates="summary",
+        cascade="all, delete-orphan",
+    )
+
+
+class SummaryChunk(Base):
+    __tablename__ = "summary_chunks"
+    __table_args__ = (UniqueConstraint("chunk_id", name="uq_summary_chunk"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    summary_id: Mapped[int] = mapped_column(
+        ForeignKey("activity_summaries.id"),
+        nullable=False,
+        index=True,
+    )
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("activity_chunks.id"),
+        nullable=False,
+        index=True,
+    )
+
+    summary: Mapped[ActivitySummary] = relationship(
+        "ActivitySummary",
+        back_populates="chunk_links",
+    )
+
+
+class SummaryState(Base):
+    __tablename__ = "summary_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_seen_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    daily_prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    daily_completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    budget_date: Mapped[date | None] = mapped_column(Date, nullable=True)

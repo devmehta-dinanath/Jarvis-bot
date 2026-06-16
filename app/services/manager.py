@@ -5,6 +5,7 @@ from app.services.activity.service import ActivityClassificationService
 from app.services.meetings.sync_worker import MeetingTranscriptSyncService
 from app.services.paddle_ocr.service import PaddleOcrService
 from app.services.screenpipe.service import ScreenpipeService
+from app.services.summary.service import SummaryService
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class ServiceManager:
         self.paddle_ocr = PaddleOcrService()
         self.activity = ActivityClassificationService()
         self.meeting_transcripts = MeetingTranscriptSyncService()
+        self.summary = SummaryService()
         self._started = False
 
     @property
@@ -31,8 +33,9 @@ class ServiceManager:
             self.paddle_ocr.start()
             self.activity.start()
             self.meeting_transcripts.start()
+            self.summary.start()
             logger.info(
-                "Background services started (screenpipe + paddle_ocr + activity + meeting_transcripts)"
+                "Background services started (screenpipe + paddle_ocr + activity + meeting_transcripts + summary)"
             )
         else:
             logger.info("AUTO_START_SERVICES is disabled; background services not started")
@@ -45,6 +48,7 @@ class ServiceManager:
         self.paddle_ocr.stop()
         self.activity.stop()
         self.meeting_transcripts.stop()
+        self.summary.stop()
         self._started = False
         logger.info("Background services stopped")
 

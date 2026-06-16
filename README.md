@@ -20,6 +20,9 @@ app/
   main.py
   models.py
   schemas.py
+  recording_paths.py  # media/recording_<id>/{screenpipe,frames,ocr} path helpers
+  video_frames.py     # extract frames from video (batch API jobs)
+  frame_cleanup.py    # rolling JPG retention after Chroma index
   services/
     manager.py          # starts all background services on server boot
     pipeline.py         # one-shot jobs from POST /recordings/start
@@ -28,9 +31,6 @@ app/
       client.py         # polls Screenpipe API (localhost:3030)
       capture.py        # ffmpeg fallback / API video jobs
       service.py        # syncs new frames into media/ + DB
-    media/
-      storage.py        # media/recording_<id>/{screenpipe,frames,ocr}
-      frames.py         # extract frames from video (API jobs)
     paddle_ocr/
       engine.py         # PaddleOCR wrapper
       processor.py      # OCR one frame, write .txt under ocr/

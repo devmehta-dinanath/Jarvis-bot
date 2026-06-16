@@ -8,8 +8,9 @@ from app.services.activity.categories import ActivityCategory
 from app.services.activity.classifier import classify_activity
 from app.services.activity.metadata import merge_metadata
 from app.config import SAVE_ACTIVITY_JSON_FILES
-from app.services.media.storage import get_recording_paths
+from app.recording_paths import get_recording_paths
 from app.services.meetings.transcript import sync_meeting_transcript
+from app.services.vector.store import upsert_activity_chunk
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,17 @@ def reclassify_activity_chunk(chunk: models.ActivityChunk, db: Session) -> model
     db.refresh(chunk)
     if SAVE_ACTIVITY_JSON_FILES:
         _write_activity_file(chunk)
+
+    upsert_activity_chunk(
+        chunk_id=chunk.id,
+        recording_id=chunk.recording_id,
+        cleaned_text=chunk.cleaned_text or "",
+        app_name=chunk.app_name,
+        window_name=chunk.window_name,
+        browser_url=chunk.browser_url,
+        category=chunk.category,
+        timestamp=chunk.timestamp.isoformat(),
+    )
 
     logger.info(
         "[ACTIVITY] Reclassified chunk %s: %s -> %s (transcript=%s)",

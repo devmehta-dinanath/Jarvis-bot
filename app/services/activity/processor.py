@@ -11,8 +11,8 @@ from app.config import SAVE_ACTIVITY_JSON_FILES, SCREENPIPE_API_URL, SCREENPIPE_
 from app.services.activity.cleaner import merge_cleaned_texts, merge_frame_ocr_sources
 from app.services.activity.metadata import merge_metadata
 from app.services.screenpipe.client import ScreenpipeApiError, fetch_frame_ocr_text
-from app.services.media.cleanup import enforce_frame_image_retention
-from app.services.media.storage import get_recording_paths
+from app.frame_cleanup import enforce_frame_image_retention
+from app.recording_paths import get_recording_paths
 from app.services.activity.categories import ActivityCategory
 from app.services.meetings.transcript import sync_meeting_transcript
 from app.services.vector.store import upsert_activity_chunk

@@ -106,7 +106,7 @@ class GoogleCalendarClient:
                 body=body,
                 sendUpdates=payload.send_updates,
             )
-            .execute()
+            .execute() 
         )
 
     def delete_event(
@@ -149,16 +149,17 @@ def _normalize_attendees(
     if not attendees:
         return None
     result: list[dict[str, str]] = []
-    for item in attendees:
-        if isinstance(item, str):
+    for item in attendees: 
+        if isinstance(item, str): 
             result.append({"email": item})
         else:
             entry: dict[str, str] = {"email": item.email}
-            if item.optional is not None:
+            if item.optional is not None: 
+                
                 entry["optional"] = str(item.optional).lower()
             if item.response_status:
                 entry["responseStatus"] = item.response_status
-            result.append(entry)
+            result.append(entry)    
     return result
 
 

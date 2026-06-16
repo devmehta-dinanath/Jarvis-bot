@@ -106,7 +106,7 @@ def auth_callback(code: str | None = None, error: str | None = None) -> dict:
     except Exception as exc:
         logger.exception("OAuth token exchange failed")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_400_BAD_REQUEST, 
             detail=str(exc),
         ) from exc
     return {

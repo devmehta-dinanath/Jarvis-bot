@@ -135,6 +135,18 @@ MEETING_HIGHLIGHT_DEFAULT_DURATION_MINUTES = int(
 )
 CALENDAR_DEFAULT_TIMEZONE = os.getenv("CALENDAR_DEFAULT_TIMEZONE", "UTC")
 
+# --- OpenAI activity summaries (OCR text → hourly/daily) ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip() or None
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+SUMMARY_ENABLED = os.getenv("SUMMARY_ENABLED", "true").lower() in {"1", "true", "yes"}
+SUMMARY_POLL_INTERVAL_SECONDS = float(os.getenv("SUMMARY_POLL_INTERVAL_SECONDS", "60"))
+# Summary window length in minutes (60 = hourly; use 30 for faster testing)
+SUMMARY_PERIOD_MINUTES = int(os.getenv("SUMMARY_PERIOD_MINUTES", "30"))
+SUMMARY_MAX_CHUNK_PREVIEW_CHARS = int(os.getenv("SUMMARY_MAX_CHUNK_PREVIEW_CHARS", "0"))
+SUMMARY_MAX_INPUT_CHARS = int(os.getenv("SUMMARY_MAX_INPUT_CHARS", "8000"))
+# 0 = no limit on batches per hour (all OCR data included via multi-pass)
+SUMMARY_MAX_BATCHES_PER_HOUR = int(os.getenv("SUMMARY_MAX_BATCHES_PER_HOUR", "0"))
+
 # --- Google Calendar ---
 GOOGLE_CALENDAR_CREDENTIALS_PATH = Path(
     os.getenv(

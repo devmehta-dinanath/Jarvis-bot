@@ -5,7 +5,7 @@ from app import models
 from app.config import ACTIVITY_POLL_INTERVAL_SECONDS
 from app.database import SessionLocal
 from app.services.activity.processor import process_recording_activity
-from app.services.media.cleanup import enforce_frame_image_retention
+from app.frame_cleanup import enforce_frame_image_retention
 
 logger = logging.getLogger(__name__)
 

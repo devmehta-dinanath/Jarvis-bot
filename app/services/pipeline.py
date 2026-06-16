@@ -2,8 +2,8 @@ from datetime import datetime
 
 from app import models
 from app.database import SessionLocal
-from app.services.media.frames import extract_frames_from_video
-from app.services.media.storage import ensure_recording_dirs
+from app.recording_paths import ensure_recording_dirs
+from app.video_frames import extract_frames_from_video
 from app.services.paddle_ocr.processor import run_ocr_for_recording
 from app.services.activity.processor import process_recording_activity
 from app.services.screenpipe.capture import resolve_video_source

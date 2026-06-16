@@ -1,7 +1,12 @@
 import re
 
 from app.services.activity.categories import ActivityCategory
-from app.services.activity.sites import classify_from_text, classify_from_url, classify_from_window
+from app.services.activity.sites import (
+    MEETING_TEXT_SIGNALS,
+    classify_from_text,
+    classify_from_url,
+    classify_from_window,
+)
 
 
 _EMAIL_APPS = (
@@ -21,7 +26,6 @@ _MESSAGES_APPS = (
     "signal",
     "messages",
     "imessage",
-    "teams",
     "mattermost",
     "rocket.chat",
 )
@@ -64,11 +68,8 @@ _CODE_APPS = (
     "sublime",
     "neovim",
     "vim",
-    "terminal",
-    "iterm",
-    "gnome-terminal",
-    "konsole",
-    "xterm",
+    "antigravity",
+    "windsurf",
 )
 _MEETING_APPS = (
     "zoom",
@@ -86,11 +87,11 @@ _CALENDAR_APPS = (
 )
 
 _EMAIL_KEYWORDS = re.compile(
-    r"\b(inbox|sent|drafts|unread|reply|forward|cc:|bcc:|subject:)\b",
+    r"\b(inbox|sent mail|drafts|unread messages|subject:|bcc:|cc:)\b",
     re.IGNORECASE,
 )
 _MESSAGES_KEYWORDS = re.compile(
-    r"\b(channel|dm|direct message|thread|#general|typing\.\.\.)\b",
+    r"\b(slack|discord|direct message|#general|typing\.\.\.|unread channel)\b",
     re.IGNORECASE,
 )
 _MEETING_KEYWORDS = re.compile(
@@ -98,19 +99,19 @@ _MEETING_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 _DOCUMENT_KEYWORDS = re.compile(
-    r"\b(document|spreadsheet|presentation|untitled|\.docx?|\.pdf|\.xlsx?|\.pptx?)\b",
+    r"\b(document|spreadsheet|presentation|untitled document|\.docx?|\.pdf|\.xlsx?|\.pptx?)\b",
     re.IGNORECASE,
 )
 _LINKEDIN_KEYWORDS = re.compile(
-    r"\b(linkedin|connect|endorse|people also viewed|job alert|my network|feed)\b",
+    r"\b(linkedin|connect|endorse|people also viewed|job alert|my network)\b",
     re.IGNORECASE,
 )
 _SOCIAL_KEYWORDS = re.compile(
-    r"\b(follow|followers|retweet|timeline|news feed|post|like|comment|share)\b",
+    r"\b(twitter|facebook|instagram|reddit|tiktok|retweet|news feed|timeline)\b",
     re.IGNORECASE,
 )
 _CODE_KEYWORDS = re.compile(
-    r"\b(def |class |import |function |const |git |terminal|debug|breakpoint)\b",
+    r"\b(def |class |import |function |const |git commit|git push|breakpoint|pull request)\b",
     re.IGNORECASE,
 )
 
@@ -122,10 +123,18 @@ def classify_activity(
     browser_url: str | None = None,
     text: str | None = None,
 ) -> ActivityCategory:
-    """Classify activity using URL, app, window title, and OCR text."""
+    """Classify activity using OCR text first, then capture metadata, then app heuristics."""
     app = (app_name or "").casefold()
     window = (window_name or "").casefold()
-    combined = f"{app} {window} {(text or '')[:500]}".casefold()
+    ocr = text or ""
+    combined = f"{app} {window} {ocr[:800]}".casefold()
+
+    if ocr and MEETING_TEXT_SIGNALS.search(ocr):
+        return ActivityCategory.MEETINGS
+
+    text_category = classify_from_text(ocr)
+    if text_category is not None:
+        return text_category
 
     url_category = classify_from_url(browser_url)
     if url_category is not None:
@@ -135,20 +144,14 @@ def classify_activity(
     if window_category is not None:
         return window_category
 
-    text_category = classify_from_text(text)
-    if text_category is not None:
-        return text_category
-
-    if _matches_any(app, _MEETING_APPS) or _matches_any(window, _MEETING_APPS):
-        if _MEETING_KEYWORDS.search(combined) or "meeting" in window:
-            return ActivityCategory.MEETINGS
+    if _matches_any(app, _MEETING_APPS) or _MEETING_KEYWORDS.search(combined):
+        return ActivityCategory.MEETINGS
 
     if _matches_any(app, _EMAIL_APPS) or _EMAIL_KEYWORDS.search(combined):
         return ActivityCategory.EMAIL
 
-    if _matches_any(app, _MESSAGES_APPS):
-        if "meeting" not in window or _MESSAGES_KEYWORDS.search(combined):
-            return ActivityCategory.MESSAGES
+    if _matches_any(app, _MESSAGES_APPS) and _MESSAGES_KEYWORDS.search(combined):
+        return ActivityCategory.MESSAGES
 
     if _matches_any(app, _CODE_APPS) or _CODE_KEYWORDS.search(combined):
         return ActivityCategory.CODE
@@ -162,22 +165,16 @@ def classify_activity(
     if _matches_any(app, _DOCUMENT_APPS) or _DOCUMENT_KEYWORDS.search(combined):
         return ActivityCategory.DOCUMENTS
 
-    if _matches_any(app, _MEETING_APPS) or _MEETING_KEYWORDS.search(combined):
-        return ActivityCategory.MEETINGS
+    if _matches_any(app, _MESSAGES_APPS):
+        return ActivityCategory.MESSAGES
 
     if _matches_any(app, _BROWSER_APPS) or (browser_url and browser_url.strip()):
         if _SOCIAL_KEYWORDS.search(combined):
             return ActivityCategory.SOCIAL
         return ActivityCategory.BROWSING
 
-    if _MESSAGES_KEYWORDS.search(combined):
-        return ActivityCategory.MESSAGES
-
-    if _EMAIL_KEYWORDS.search(combined):
-        return ActivityCategory.EMAIL
-
-    if _SOCIAL_KEYWORDS.search(combined):
-        return ActivityCategory.SOCIAL
+    if _matches_any(app, _CODE_APPS):
+        return ActivityCategory.CODE
 
     return ActivityCategory.OTHER
 

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import SAVE_FRAME_OCR_FILES, SCREENPIPE_API_URL, SCREENPIPE_ENABLED
 from app.services.activity.cleaner import merge_frame_ocr_sources
-from app.services.media.storage import get_recording_paths
+from app.recording_paths import get_recording_paths
 from app.services.paddle_ocr.engine import OCRDependencyError, extract_text
 from app.services.screenpipe.client import ScreenpipeApiError, fetch_frame_ocr_text
 

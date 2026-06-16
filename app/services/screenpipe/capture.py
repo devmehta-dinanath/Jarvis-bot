@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app import models
 from app.config import DEFAULT_CAPTURE_FILENAME
-from app.services.media.storage import RecordingPaths
+from app.recording_paths import RecordingPaths
 
 
 def resolve_video_source(
@@ -35,8 +35,8 @@ def resolve_video_source(
 
     if source_path.parent != paths.screenpipe:
         destination = paths.screenpipe / source_path.name
-        shutil.copy2(source_path, destination)
-        recording.source_video_path = str(destination)
+        shutil.copy2(source_path, destination) 
+        recording.source_video_path = str(destination) 
         return destination
 
     return source_path

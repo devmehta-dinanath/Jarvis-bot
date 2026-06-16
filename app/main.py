@@ -5,7 +5,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 
 _LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s"
 
-_PIPELINE_TAGS = ("[CAPTURE]", "[OCR]", "[GROUP]", "[CLEANUP]")
+_PIPELINE_TAGS = ("[CAPTURE]", "[OCR]", "[GROUP]", "[CLEANUP]", "[SUMMARY]")
 
 
 class _PipelineFocusFilter(logging.Filter):
@@ -58,10 +58,23 @@ from app.database import get_db
 from app.services import service_manager
 from app.services.google_calendar.routes import router as google_calendar_router
 from app.services.meetings.routes import router as meetings_router
+from app.services.summary.routes import router as summary_router
 from app.services.vector.routes import router as vector_router
 from app.services.vector.store import get_vector_stats
 from app.services.google_calendar.service import google_calendar_service
 from app.services.pipeline import process_recording_job
+
+
+def _summary_status() -> dict:
+    from app.database import SessionLocal
+    from app.services.summary.repository import get_summary_stats
+
+    db = SessionLocal()
+    try:
+        stats = get_summary_stats(db, worker_running=service_manager.summary.is_running)
+        return stats.model_dump()
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -91,6 +104,7 @@ app = FastAPI(
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 app.include_router(google_calendar_router)
 app.include_router(meetings_router)
+app.include_router(summary_router)
 app.include_router(vector_router)
 
 
@@ -142,6 +156,7 @@ def services_status() -> dict:
         "activity": {
             "running": service_manager.activity.is_running,
         },
+        "summary": _summary_status(),
         "google_calendar": google_calendar_service.auth_status().model_dump(),
         "vector": get_vector_stats(),
         "hint": hint,

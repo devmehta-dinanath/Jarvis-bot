@@ -25,7 +25,7 @@ from app.config import (
     use_x11_change_capture,
 )
 from app.database import SessionLocal
-from app.services.media.storage import ensure_recording_dirs
+from app.recording_paths import ensure_recording_dirs
 from app.services.screenpipe.capture import capture_single_frame
 from app.services.screenpipe.x11_change import X11ScreenChangeCapture
 from app.services.screenpipe.cli import (
@@ -197,7 +197,7 @@ class ScreenpipeService:
                 api_reason or "ok",
             )
             self._unhealthy_polls = 0
-
+                                                   
         if not get_api_token():
             logger.warning(
                 "Screenpipe API token missing. Set SCREENPIPE_API_TOKEN in .env. Retrying…"
