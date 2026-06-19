@@ -24,6 +24,11 @@ ACTIVITY_CHUNK_COLUMNS: dict[str, str] = {
 }
 
 
+ACTIVITY_SUMMARY_COLUMNS: dict[str, str] = {
+    "predictions_text": "TEXT",
+}
+
+
 RECORDING_COLUMNS: dict[str, str] = {
     "source_video_path": "VARCHAR(500)",
     "capture_command": "TEXT",
@@ -44,6 +49,7 @@ def bootstrap_database() -> None:
     _ensure_recording_columns()
     _ensure_frame_columns()
     _ensure_activity_chunk_columns()
+    _ensure_activity_summary_columns()
     MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -86,6 +92,27 @@ def _ensure_activity_chunk_columns() -> None:
         for column_name, column_type in missing.items():
             connection.execute(
                 text(f"ALTER TABLE activity_chunks ADD COLUMN {column_name} {column_type}")
+            )
+
+
+def _ensure_activity_summary_columns() -> None:
+    inspector = inspect(engine)
+    if "activity_summaries" not in inspector.get_table_names():
+        return
+
+    existing = {column["name"] for column in inspector.get_columns("activity_summaries")}
+    missing = {
+        name: ddl
+        for name, ddl in ACTIVITY_SUMMARY_COLUMNS.items()
+        if name not in existing
+    }
+    if not missing:
+        return
+
+    with engine.begin() as connection:
+        for column_name, column_type in missing.items():
+            connection.execute(
+                text(f"ALTER TABLE activity_summaries ADD COLUMN {column_name} {column_type}")
             )
 
 

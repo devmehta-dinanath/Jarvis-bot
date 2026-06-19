@@ -284,6 +284,7 @@ class ActivitySummaryResponse(BaseModel):
     period_end: datetime
     status: str
     summary_text: str
+    predictions_text: str | None = None
     chunk_count: int
     model: str
     prompt_tokens: int

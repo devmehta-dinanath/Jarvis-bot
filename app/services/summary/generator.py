@@ -5,23 +5,22 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import OPENAI_MODEL, SUMMARY_MAX_BATCHES_PER_HOUR, SUMMARY_PERIOD_MINUTES
+from app.config import OPENAI_MODEL, SUMMARY_MAX_BATCHES_PER_HOUR
+from app.services.google_calendar.auth import is_authorized
+from app.services.google_calendar.service import google_calendar_service
 from app.services.summary import client as openai_client
 from app.services.summary.client import SummaryOpenAIError
 from app.services.summary import repository as repo
 from app.services.summary.compressor import (
-    chunk_end,
     chunk_has_summarizable_text,
     chunk_batches_as_text,
 )
 from app.services.summary.timezone_utils import (
     day_start_utc_naive,
-    format_local_range,
-    hour_start_utc_naive,
+    get_tz,
     local_today,
     naive_utc_to_local,
     next_day_start_utc_naive,
-    next_hour_start_utc_naive,
     utc_now,
 )
 
@@ -38,138 +37,49 @@ def _unsummarized_chunks(db: Session) -> list[models.ActivityChunk]:
 
 
 def _chunks_in_range(
-    chunks: list[models.ActivityChunk],                                                            
+    chunks: list[models.ActivityChunk],
     start: datetime,
     end: datetime,
 ) -> list[models.ActivityChunk]:
     return [chunk for chunk in chunks if start <= chunk.timestamp < end]
 
 
-def _period_end_for_chunks(
-    chunks: list[models.ActivityChunk],
-    hour_end: datetime,
-) -> datetime:
-    if not chunks:
-        return hour_end
-    max_end = max(chunk_end(chunk) for chunk in chunks)
-    return min(max_end, hour_end)
-
-
-def generate_hourly_summary(
-    db: Session,
-    *,
-    hour_start: datetime,
-    hour_end: datetime,
-    allow_partial: bool = False,
-) -> models.ActivitySummary | None:
-    existing = repo.get_summary_by_period(
-        db, period_type="hourly", period_start=hour_start
-    )
-    if existing and existing.status == "complete":
-        return existing
-
-    unsummarized = _unsummarized_chunks(db)
-    hour_chunks = _chunks_in_range(unsummarized, hour_start, hour_end)
-    if not hour_chunks:
-        return existing
-
-    now = utc_now()
-    natural_end = _period_end_for_chunks(hour_chunks, hour_end)
-    is_partial = allow_partial or natural_end < hour_end or now < hour_end
-    if is_partial and existing and existing.status == "partial" and not hour_chunks:
-        return existing
-
-    compressed_batches = chunk_batches_as_text(
-        hour_chunks,
-        max_batches=SUMMARY_MAX_BATCHES_PER_HOUR,
-    )
-    if not compressed_batches:
+def _format_tomorrow_calendar(local_day: date) -> str | None:
+    if not is_authorized():
         return None
 
-    if (
-        SUMMARY_MAX_BATCHES_PER_HOUR > 0
-        and len(compressed_batches) > SUMMARY_MAX_BATCHES_PER_HOUR
-    ):
-        logger.warning(
-            "[SUMMARY] Hour %s still needs %s batches after expanding batch size (max=%s)",
-            format_local_range(hour_start, natural_end if is_partial else hour_end),
-            len(compressed_batches),
-            SUMMARY_MAX_BATCHES_PER_HOUR,
-        )
-
-    period_label = format_local_range(hour_start, natural_end if is_partial else hour_end)
-    previous_partial = existing.summary_text if existing and existing.status == "partial" else None
-    status = "partial" if is_partial else "complete"
-
-    logger.info(
-        "[SUMMARY] Generating %s summary for %s (%s chunks, %s OCR batch(es))",
-        status,
-        period_label,
-        len(hour_chunks),
-        len(compressed_batches),
-    )
+    tomorrow = local_day + timedelta(days=1)
+    tz = get_tz()
+    start = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=tz)
+    end = start + timedelta(days=1)
 
     try:
-        if len(compressed_batches) > 1:
-            logger.info(
-                "[SUMMARY] Period %s split into %s OCR batches (all chunks included)",
-                period_label,
-                len(compressed_batches),
-            )
-        summary_text, prompt_tokens, completion_tokens = openai_client.summarize_hourly_multi_pass(
-            period_label=period_label,
-            ocr_batches=compressed_batches,
-            previous_partial=previous_partial,
+        result = google_calendar_service.list_events(
+            time_min=start.isoformat(),
+            time_max=end.isoformat(),
+            max_results=20,
         )
-    except SummaryOpenAIError:
-        raise
+    except PermissionError:
+        return None
     except Exception:
-        logger.exception("[SUMMARY] Hourly summary failed for %s", period_label)
+        logger.warning(
+            "[SUMMARY] Failed to fetch calendar for %s",
+            tomorrow.isoformat(),
+            exc_info=True,
+        )
         return None
 
-    repo.record_token_usage(
-        db, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-    )
+    items = result.get("items", [])
+    if not items:
+        return "No events scheduled."
 
-    period_end = natural_end if is_partial else hour_end
-
-    if existing:
-        existing.period_end = period_end
-        existing.status = status
-        existing.summary_text = summary_text
-        existing.chunk_count += len(hour_chunks)
-        existing.prompt_tokens += prompt_tokens
-        existing.completion_tokens += completion_tokens
-        summary = existing
-    else:
-        summary = models.ActivitySummary(
-            period_type="hourly",
-            period_start=hour_start,
-            period_end=period_end,
-            status=status,
-            summary_text=summary_text,
-            chunk_count=len(hour_chunks),
-            model=OPENAI_MODEL,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-        db.add(summary)
-        db.flush()
-
-    for chunk in hour_chunks:
-        db.add(models.SummaryChunk(summary_id=summary.id, chunk_id=chunk.id))
-
-    db.commit()
-    db.refresh(summary)
-    logger.info(
-        "[SUMMARY] Saved %s summary for %s (%s chunks, tokens in=%s out=%s)",
-        status,
-        period_label,
-        len(hour_chunks),
-        prompt_tokens,
-        completion_tokens,
-    )
-    return summary
+    lines = []
+    for event in items:
+        title = event.get("summary", "(No title)")
+        start_data = event.get("start", {})
+        time_str = start_data.get("dateTime") or start_data.get("date", "")
+        lines.append(f"- {time_str}: {title}")
+    return "\n".join(lines)
 
 
 def generate_daily_summary(
@@ -186,41 +96,53 @@ def generate_daily_summary(
     if existing:
         return existing
 
-    hourly_summaries = (
-        db.query(models.ActivitySummary)
-        .filter(
-            models.ActivitySummary.period_type == "hourly",
-            models.ActivitySummary.period_start >= period_start,
-            models.ActivitySummary.period_start < period_end,
-        )
-        .order_by(models.ActivitySummary.period_start.asc())
-        .all()
-    )
-    if not hourly_summaries:
+    unsummarized = _unsummarized_chunks(db)
+    day_chunks = _chunks_in_range(unsummarized, period_start, period_end)
+    if not day_chunks:
         return None
 
-    lines = []
-    for hourly in hourly_summaries:
-        local_hour = naive_utc_to_local(hourly.period_start).strftime("%H:%M")
-        lines.append(f"Hour {local_hour}: {hourly.summary_text}")
+    compressed_batches = chunk_batches_as_text(
+        day_chunks,
+        max_batches=SUMMARY_MAX_BATCHES_PER_HOUR,
+    )
+    if not compressed_batches:
+        return None
 
     day_label = local_day.isoformat()
+    tomorrow_label = (local_day + timedelta(days=1)).isoformat()
+    period_label = day_label
+
     logger.info(
-        "[SUMMARY] Generating daily summary for %s (%s hourly summaries)",
+        "[SUMMARY] Generating daily insight for %s (%s chunks, %s OCR batch(es))",
         day_label,
-        len(hourly_summaries),
+        len(day_chunks),
+        len(compressed_batches),
     )
+
     try:
-        summary_text, prompt_tokens, completion_tokens = openai_client.summarize_daily(
-            day_label=day_label,
-            hourly_summaries="\n\n".join(lines),
+        activity_digest, digest_prompt, digest_completion = (
+            openai_client.summarize_activity_multi_pass(
+                period_label=period_label,
+                ocr_batches=compressed_batches,
+            )
+        )
+        calendar_context = _format_tomorrow_calendar(local_day)
+        summary_text, predictions_text, insight_prompt, insight_completion = (
+            openai_client.summarize_daily_insight(
+                day_label=day_label,
+                tomorrow_label=tomorrow_label,
+                activity_digest=activity_digest,
+                calendar_context=calendar_context,
+            )
         )
     except SummaryOpenAIError:
         raise
     except Exception:
-        logger.exception("[SUMMARY] Daily summary failed for %s", day_label)
+        logger.exception("[SUMMARY] Daily insight failed for %s", day_label)
         return None
 
+    prompt_tokens = digest_prompt + insight_prompt
+    completion_tokens = digest_completion + insight_completion
     repo.record_token_usage(
         db, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
     )
@@ -231,109 +153,92 @@ def generate_daily_summary(
         period_end=period_end,
         status="complete",
         summary_text=summary_text,
-        chunk_count=sum(h.chunk_count for h in hourly_summaries),
+        predictions_text=predictions_text or None,
+        chunk_count=len(day_chunks),
         model=OPENAI_MODEL,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
     db.add(summary)
+    db.flush()
+
+    for chunk in day_chunks:
+        db.add(models.SummaryChunk(summary_id=summary.id, chunk_id=chunk.id))
+
     db.commit()
     db.refresh(summary)
     logger.info(
-        "[SUMMARY] Saved daily summary for %s (tokens in=%s out=%s)",
+        "[SUMMARY] Saved daily insight for %s (%s chunks, tokens in=%s out=%s)",
         day_label,
+        len(day_chunks),
         prompt_tokens,
         completion_tokens,
     )
     return summary
 
 
-def find_pending_hour_periods(db: Session) -> list[tuple[datetime, datetime, int]]:
+def find_pending_days(db: Session) -> list[tuple[date, datetime, datetime, int]]:
     unsummarized = _unsummarized_chunks(db)
     if not unsummarized:
         return []
 
-    by_hour: dict[datetime, list[models.ActivityChunk]] = defaultdict(list)
+    today = local_today()
+    by_day: dict[date, list[models.ActivityChunk]] = defaultdict(list)
     for chunk in unsummarized:
-        by_hour[hour_start_utc_naive(chunk.timestamp)].append(chunk)
+        chunk_day = naive_utc_to_local(chunk.timestamp).date()
+        if chunk_day < today:
+            by_day[chunk_day].append(chunk)
 
-    now = utc_now()
-    pending: list[tuple[datetime, datetime, int]] = []
-    for hour_start, chunks in sorted(by_hour.items()):
-        hour_end = hour_start + timedelta(minutes=SUMMARY_PERIOD_MINUTES)
-        if hour_start <= now:
-            pending.append((hour_start, hour_end, len(chunks)))
+    pending: list[tuple[date, datetime, datetime, int]] = []
+    for local_day, chunks in sorted(by_day.items()):
+        period_start = day_start_utc_naive(local_day)
+        existing = repo.get_summary_by_period(
+            db, period_type="daily", period_start=period_start
+        )
+        if existing:
+            continue
+        period_end = next_day_start_utc_naive(local_day)
+        pending.append((local_day, period_start, period_end, len(chunks)))
     return pending
 
 
-def catch_up_past_hours(db: Session) -> list[models.ActivitySummary]:
-    now = utc_now()
-    pending = find_pending_hour_periods(db)
-    current_period = hour_start_utc_naive(now)
-
-    eligible: list[tuple[datetime, datetime, int]] = []
-    for hour_start, hour_end, chunk_count in pending:
-        if hour_start >= current_period:
-            continue
-        existing = repo.get_summary_by_period(
-            db, period_type="hourly", period_start=hour_start
-        )
-        if existing and existing.status == "complete":
-            continue
-        eligible.append((hour_start, hour_end, chunk_count))
-
-    if not eligible:
-        logger.info("[SUMMARY] Catch-up: no pending periods to summarize")
+def catch_up_pending_days(db: Session) -> list[models.ActivitySummary]:
+    pending = find_pending_days(db)
+    if not pending:
+        logger.info("[SUMMARY] Catch-up: no pending days to summarize")
         return []
 
     logger.info(
-        "[SUMMARY] Catch-up: %s pending period(s) (window=%s min, oldest=%s)",
-        len(eligible),
-        SUMMARY_PERIOD_MINUTES,
-        format_local_range(eligible[0][0], eligible[0][1]),
+        "[SUMMARY] Catch-up: %s pending day(s) (oldest=%s)",
+        len(pending),
+        pending[0][0].isoformat(),
     )
 
     created: list[models.ActivitySummary] = []
-    for index, (hour_start, hour_end, chunk_count) in enumerate(eligible, start=1):
-        period_label = format_local_range(hour_start, hour_end)
+    for index, (local_day, _, _, chunk_count) in enumerate(pending, start=1):
         logger.info(
             "[SUMMARY] Catch-up %s/%s: %s (%s unsummarized chunks)",
             index,
-            len(eligible),
-            period_label,
+            len(pending),
+            local_day.isoformat(),
             chunk_count,
         )
-
-        unsummarized = _unsummarized_chunks(db)
-        hour_chunks = _chunks_in_range(unsummarized, hour_start, hour_end)
-        if not hour_chunks:
-            logger.info("[SUMMARY] Catch-up %s/%s: skipped — no chunks left", index, len(eligible))
-            continue
-
-        natural_end = _period_end_for_chunks(hour_chunks, hour_end)
-        is_partial = natural_end < hour_end
-
         try:
-            summary = generate_hourly_summary(
-                db,
-                hour_start=hour_start,
-                hour_end=hour_end,
-                allow_partial=is_partial,
-            )
+            summary = generate_daily_summary(db, local_day=local_day)
         except SummaryOpenAIError as exc:
             if exc.quota_exceeded:
                 logger.error(
                     "[SUMMARY] Catch-up aborted at %s/%s — OpenAI quota exceeded "
-                    "(%s period(s) completed before failure)",
+                    "(%s day(s) completed before failure)",
                     index,
-                    len(eligible),
+                    len(pending),
                     len(created),
                 )
             else:
                 logger.error(
                     "[SUMMARY] Catch-up stopped at %s/%s — OpenAI error: %s",
                     index,
-                    len(eligible),
+                    len(pending),
                     exc,
                 )
             break
@@ -344,40 +249,16 @@ def catch_up_past_hours(db: Session) -> list[models.ActivitySummary]:
             logger.warning(
                 "[SUMMARY] Catch-up %s/%s: no summary produced for %s",
                 index,
-                len(eligible),
-                period_label,
+                len(pending),
+                local_day.isoformat(),
             )
 
     logger.info(
-        "[SUMMARY] Catch-up finished: %s/%s period(s) summarized",
+        "[SUMMARY] Catch-up finished: %s/%s day(s) summarized",
         len(created),
-        len(eligible),
+        len(pending),
     )
     return created
-
-
-def finalize_current_hour(db: Session) -> models.ActivitySummary | None:
-    now = utc_now()
-    hour_start = hour_start_utc_naive(now)
-    hour_end = next_hour_start_utc_naive(now)
-    return generate_hourly_summary(
-        db,
-        hour_start=hour_start,
-        hour_end=hour_end,
-        allow_partial=True,
-    )
-
-
-def process_hour_rollover(db: Session) -> models.ActivitySummary | None:
-    now = utc_now()
-    previous_hour_start = hour_start_utc_naive(now) - timedelta(minutes=SUMMARY_PERIOD_MINUTES)
-    previous_hour_end = hour_start_utc_naive(now)
-    return generate_hourly_summary(
-        db,
-        hour_start=previous_hour_start,
-        hour_end=previous_hour_end,
-        allow_partial=False,
-    )
 
 
 def process_daily_rollover(db: Session) -> models.ActivitySummary | None:
@@ -391,8 +272,12 @@ def handle_date_change_on_startup(db: Session) -> models.ActivitySummary | None:
     daily_summary = None
 
     if state.last_seen_date is not None and state.last_seen_date < today:
-        yesterday = today - timedelta(days=1)
-        daily_summary = generate_daily_summary(db, local_day=yesterday)
+        day = state.last_seen_date
+        while day < today:
+            summary = generate_daily_summary(db, local_day=day)
+            if summary:
+                daily_summary = summary
+            day += timedelta(days=1)
 
     state.last_seen_date = today
     db.add(state)

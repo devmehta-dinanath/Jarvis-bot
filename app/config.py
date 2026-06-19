@@ -1,8 +1,11 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 DATA_DIR = BASE_DIR / "data"
 JARVIS_DATABASE_FILENAME = "jarvis.db"
 DATABASE_PATH = DATA_DIR / JARVIS_DATABASE_FILENAME
@@ -135,17 +138,17 @@ MEETING_HIGHLIGHT_DEFAULT_DURATION_MINUTES = int(
 )
 CALENDAR_DEFAULT_TIMEZONE = os.getenv("CALENDAR_DEFAULT_TIMEZONE", "UTC")
 
-# --- OpenAI activity summaries (OCR text → hourly/daily) ---
+# --- OpenAI daily insights (OCR activity → today summary + tomorrow predictions) ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip() or None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 SUMMARY_ENABLED = os.getenv("SUMMARY_ENABLED", "true").lower() in {"1", "true", "yes"}
 SUMMARY_POLL_INTERVAL_SECONDS = float(os.getenv("SUMMARY_POLL_INTERVAL_SECONDS", "60"))
-# Summary window length in minutes (60 = hourly; use 30 for faster testing)
-SUMMARY_PERIOD_MINUTES = int(os.getenv("SUMMARY_PERIOD_MINUTES", "30"))
 SUMMARY_MAX_CHUNK_PREVIEW_CHARS = int(os.getenv("SUMMARY_MAX_CHUNK_PREVIEW_CHARS", "0"))
 SUMMARY_MAX_INPUT_CHARS = int(os.getenv("SUMMARY_MAX_INPUT_CHARS", "8000"))
-# 0 = no limit on batches per hour (all OCR data included via multi-pass)
+# Max OCR batches per day (0 = unlimited, expand batch size to fit all chunks)
 SUMMARY_MAX_BATCHES_PER_HOUR = int(os.getenv("SUMMARY_MAX_BATCHES_PER_HOUR", "0"))
+# Legacy; daily-only summaries no longer use period windows.
+SUMMARY_PERIOD_MINUTES = int(os.getenv("SUMMARY_PERIOD_MINUTES", "60"))
 
 # --- Google Calendar ---
 GOOGLE_CALENDAR_CREDENTIALS_PATH = Path(
@@ -173,3 +176,33 @@ GOOGLE_CALENDAR_SCOPES = [
     ).split(",")
     if scope.strip()
 ]
+
+# --- WhatsApp Cloud API pipeline (webhook → AI classify → suggestions) ---
+WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "true").lower() in {"1", "true", "yes"}
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+WHATSAPP_API_BASE = os.getenv("WHATSAPP_API_BASE", "https://graph.facebook.com").rstrip("/")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip() or None
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip() or None
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip() or None
+WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "").strip() or None
+WHATSAPP_POLL_INTERVAL_SECONDS = float(os.getenv("WHATSAPP_POLL_INTERVAL_SECONDS", "30"))
+WHATSAPP_HISTORY_CONTEXT_LIMIT = int(os.getenv("WHATSAPP_HISTORY_CONTEXT_LIMIT", "20"))
+# Free-form replies are only allowed within this many hours of the customer's last message.
+WHATSAPP_CUSTOMER_WINDOW_HOURS = float(os.getenv("WHATSAPP_CUSTOMER_WINDOW_HOURS", "24"))
+# Default meeting length (minutes) when the conversation gives no end time.
+WHATSAPP_DEFAULT_MEETING_MINUTES = int(os.getenv("WHATSAPP_DEFAULT_MEETING_MINUTES", "60"))
+# Default language code used when sending a template message.
+WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE = os.getenv("WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE", "en_US")
+# When a meeting time is free, auto-create a Google Calendar event (requires calendar OAuth).
+WHATSAPP_AUTO_ADD_CALENDAR = os.getenv("WHATSAPP_AUTO_ADD_CALENDAR", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+# When true, only the WhatsApp worker starts at boot (no screenpipe/OCR/activity/summary).
+WHATSAPP_ONLY_MODE = os.getenv("WHATSAPP_ONLY_MODE", "false").lower() in {"1", "true", "yes"}
+
+# --- Anand Sandesh subscriptions (PostgreSQL anand_sandesh_subscription) ---
+# Razorpay plan IDs map to category: 1-year → General(I), 5-year → Five Years(I)
+ANAND_SANDESH_PLAN_ID_ONE_YEAR = os.getenv("ANAND_SANDESH_PLAN_ID_ONE_YEAR", "").strip() or None
+ANAND_SANDESH_PLAN_ID_FIVE_YEAR = os.getenv("ANAND_SANDESH_PLAN_ID_FIVE_YEAR", "").strip() or None

@@ -102,6 +102,9 @@ class ScreenpipeService:
         return self._cli_process is not None and self._cli_process.poll() is None
 
     def start(self) -> None:
+        if not self.use_screenpipe_cli:
+            logger.info("Screenpipe service disabled (SCREENPIPE_ENABLED=false)")
+            return
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()

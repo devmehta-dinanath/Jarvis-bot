@@ -14,24 +14,36 @@ class SummaryOpenAIError(Exception):
         super().__init__(message)
         self.quota_exceeded = quota_exceeded
 
-_HOURLY_BATCH_SYSTEM = (
+
+_ACTIVITY_BATCH_SYSTEM = (
     "You summarize OCR text extracted from the user's computer screen. "
-    "This is ONE segment of a longer hour — only describe activity present in this segment. "
+    "This is ONE segment of a longer day — only describe activity present in this segment. "
     "Infer tasks from app names, window titles, URLs, and on-screen text. "
     "Ignore OCR noise (menu bars, UI chrome). "
     "Use bullet points. Be factual; do not invent details not supported by the text."
 )
 
-_HOURLY_MERGE_SYSTEM = (
-    "You merge segment summaries from the same hour of screen OCR activity into one "
-    "complete hourly summary. Preserve all distinct apps, tasks, and meetings mentioned "
+_ACTIVITY_MERGE_SYSTEM = (
+    "You merge segment summaries from the same day of screen OCR activity into one "
+    "complete activity digest. Preserve all distinct apps, tasks, and meetings mentioned "
     "across segments. Remove duplicates. Do not add facts that are not in the segment summaries."
 )
 
-_DAILY_SYSTEM = (
-    "You summarize a full day of hourly activity summaries from screen OCR. "
-    "Produce a concise daily overview: total focus areas, apps used, meetings, "
-    "and main accomplishments. Use bullet points. Do not invent details."
+_DAILY_INSIGHT_SYSTEM = (
+    "You produce end-of-day insights from screen activity OCR. "
+    "Use exactly this output format:\n\n"
+    "TODAY:\n"
+    "<bullet points: focus areas, apps used, meetings seen on screen, accomplishments>\n\n"
+    "TOMORROW:\n"
+    "### Scheduled meetings\n"
+    "<list confirmed calendar events if provided; otherwise say none scheduled>\n"
+    "### Likely tasks\n"
+    "<tasks inferred from unfinished work, todos, or patterns in today's activity>\n"
+    "### Follow-ups\n"
+    "<items that need a reply, review, or continuation>\n\n"
+    "Be factual for TODAY. For TOMORROW, clearly separate confirmed calendar events "
+    "from predictions inferred from today's activity. Do not invent calendar events "
+    "that are not listed in the calendar section."
 )
 
 
@@ -41,13 +53,12 @@ def get_openai_client() -> OpenAI | None:
     return OpenAI(api_key=OPENAI_API_KEY)
 
 
-def summarize_hourly_multi_pass(
+def summarize_activity_multi_pass(
     *,
     period_label: str,
     ocr_batches: list[str],
-    previous_partial: str | None = None,
 ) -> tuple[str, int, int]:
-    """Summarize all OCR batches for one hour, merging when split across multiple calls."""
+    """Summarize all OCR batches for one day, merging when split across multiple calls."""
     if not ocr_batches:
         raise ValueError("ocr_batches must not be empty")
 
@@ -63,7 +74,7 @@ def summarize_hourly_multi_pass(
             period_label,
             len(ocr_text),
         )
-        segment_text, prompt_tokens, completion_tokens = summarize_hourly_batch(
+        segment_text, prompt_tokens, completion_tokens = summarize_activity_batch(
             period_label=period_label,
             ocr_text=ocr_text,
             batch_index=index,
@@ -73,27 +84,24 @@ def summarize_hourly_multi_pass(
         total_prompt += prompt_tokens
         total_completion += completion_tokens
         logger.info(
-            "[SUMMARY] Hour segment %s/%s summarized (%s chars OCR → %s chars summary)",
+            "[SUMMARY] Day segment %s/%s summarized (%s chars OCR → %s chars summary)",
             index,
             len(ocr_batches),
             len(ocr_text),
             len(segment_text),
         )
 
-    needs_merge = len(segment_summaries) > 1 or previous_partial
-    if not needs_merge:
+    if len(segment_summaries) == 1:
         return segment_summaries[0], total_prompt, total_completion
 
     logger.info(
-        "[SUMMARY] Merging %s segment(s) for %s%s",
+        "[SUMMARY] Merging %s segment(s) for %s",
         len(segment_summaries),
         period_label,
-        " (with prior partial)" if previous_partial else "",
     )
-    merged_text, prompt_tokens, completion_tokens = merge_hourly_summaries(
+    merged_text, prompt_tokens, completion_tokens = merge_activity_summaries(
         period_label=period_label,
         segment_summaries=segment_summaries,
-        previous_partial=previous_partial,
     )
     return (
         merged_text,
@@ -102,7 +110,7 @@ def summarize_hourly_multi_pass(
     )
 
 
-def summarize_hourly_batch(
+def summarize_activity_batch(
     *,
     period_label: str,
     ocr_text: str,
@@ -110,44 +118,61 @@ def summarize_hourly_batch(
     batch_total: int,
 ) -> tuple[str, int, int]:
     user_content = (
-        f"Time period: {period_label}\n"
+        f"Date: {period_label}\n"
         f"Segment: {batch_index} of {batch_total}\n\n"
         f"OCR activity lines:\n{ocr_text}\n\n"
         "Write a factual summary for this segment only:"
     )
-    return _chat(_HOURLY_BATCH_SYSTEM, user_content, max_tokens=400)
+    return _chat(_ACTIVITY_BATCH_SYSTEM, user_content, max_tokens=500)
 
 
-def merge_hourly_summaries(
+def merge_activity_summaries(
     *,
     period_label: str,
     segment_summaries: list[str],
-    previous_partial: str | None = None,
 ) -> tuple[str, int, int]:
-    parts = [f"Time period: {period_label}", ""]
-    if previous_partial:
-        parts.extend(
-            [
-                "Earlier partial summary for this hour (include in final merge):",
-                previous_partial,
-                "",
-            ]
-        )
+    parts = [f"Date: {period_label}", ""]
     for index, summary in enumerate(segment_summaries, start=1):
         parts.append(f"Segment {index} summary:")
         parts.append(summary)
         parts.append("")
-    parts.append("Write one complete hourly summary covering all segments above:")
-    return _chat(_HOURLY_MERGE_SYSTEM, "\n".join(parts), max_tokens=500)
+    parts.append("Write one complete activity digest covering all segments above:")
+    return _chat(_ACTIVITY_MERGE_SYSTEM, "\n".join(parts), max_tokens=800)
 
 
-def summarize_daily(*, day_label: str, hourly_summaries: str) -> tuple[str, int, int]:
+def summarize_daily_insight(
+    *,
+    day_label: str,
+    tomorrow_label: str,
+    activity_digest: str,
+    calendar_context: str | None,
+) -> tuple[str, str, int, int]:
+    calendar_section = calendar_context or "No calendar connected or no events found."
     user_content = (
-        f"Date: {day_label}\n\n"
-        f"Hourly summaries:\n{hourly_summaries}\n\n"
-        "Write the daily activity summary:"
+        f"Date: {day_label}\n"
+        f"Tomorrow: {tomorrow_label}\n\n"
+        f"Today's screen activity:\n{activity_digest}\n\n"
+        f"Tomorrow's calendar:\n{calendar_section}\n\n"
+        "Write the daily insight using the required TODAY / TOMORROW format:"
     )
-    return _chat(_DAILY_SYSTEM, user_content, max_tokens=500)
+    raw_text, prompt_tokens, completion_tokens = _chat(
+        _DAILY_INSIGHT_SYSTEM,
+        user_content,
+        max_tokens=900,
+    )
+    today_text, tomorrow_text = parse_daily_insight_response(raw_text)
+    return today_text, tomorrow_text, prompt_tokens, completion_tokens
+
+
+def parse_daily_insight_response(text: str) -> tuple[str, str]:
+    marker = "\nTOMORROW:\n"
+    if marker in text:
+        today_part, tomorrow_part = text.split(marker, 1)
+        today = today_part.removeprefix("TODAY:").strip()
+        return today, tomorrow_part.strip()
+    if text.upper().startswith("TODAY:"):
+        return text[6:].strip(), ""
+    return text.strip(), ""
 
 
 def _chat(system: str, user_content: str, *, max_tokens: int = 500) -> tuple[str, int, int]:

@@ -1,6 +1,19 @@
+import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -190,6 +203,7 @@ class ActivitySummary(Base):
     period_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="complete")
     summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    predictions_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -237,3 +251,168 @@ class SummaryState(Base):
     daily_prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     daily_completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     budget_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+class WhatsAppContact(Base):
+    __tablename__ = "whatsapp_contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    wa_id: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    profile_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_inbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    messages: Mapped[list["WhatsAppMessage"]] = relationship(
+        "WhatsAppMessage",
+        back_populates="contact",
+        cascade="all, delete-orphan",
+        order_by="WhatsAppMessage.timestamp",
+    )
+
+
+class WhatsAppMessage(Base):
+    __tablename__ = "whatsapp_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    contact_id: Mapped[int] = mapped_column(
+        ForeignKey("whatsapp_contacts.id"),
+        nullable=False,
+        index=True,
+    )
+    wa_message_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    direction: Mapped[str] = mapped_column(String(20), nullable=False)
+    msg_type: Mapped[str] = mapped_column(String(30), default="text", nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    raw_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_important: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    language: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    contact: Mapped["WhatsAppContact"] = relationship(
+        "WhatsAppContact",
+        back_populates="messages",
+    )
+
+
+class WhatsAppSuggestion(Base):
+    __tablename__ = "whatsapp_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    contact_id: Mapped[int] = mapped_column(
+        ForeignKey("whatsapp_contacts.id"),
+        nullable=False,
+        index=True,
+    )
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("whatsapp_messages.id"),
+        nullable=True,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    draft_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("whatsapp_messages.id"),
+        nullable=True,
+    )
+
+    contact: Mapped["WhatsAppContact"] = relationship("WhatsAppContact")
+
+
+class AnandSandeshSubscription(Base):
+    __tablename__ = "anand_sandesh_subscription"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    address_sr_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prefix: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subscriber_no: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    section: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    care_of: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address_1: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address_2: Mapped[str | None] = mapped_column(Text, nullable=True)
+    city: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tehsil: Mapped[str | None] = mapped_column(Text, nullable=True)
+    district: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    country: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pincode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    through: Mapped[str | None] = mapped_column(Text, nullable=True)
+    through_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remarks2: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subscription_sr_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subs_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    noofcopies: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    receipt_no: Mapped[str | None] = mapped_column(Text, nullable=True)
+    period: Mapped[str | None] = mapped_column(Text, nullable=True)
+    whence_issued_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    whence_issued_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    upto_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    upto_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subscriberno: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subscriberno_prefix: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    frommonth_byhand: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tomonth_byhand: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    phone: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    payment_status: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default="pending",
+        index=True,
+    )
+    transaction_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screenshot_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    razorpay_subscription_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    razorpay_payment_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        nullable=True,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=True,
+    )

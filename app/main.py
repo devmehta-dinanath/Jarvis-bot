@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 
 _LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(name)s: %(message)s"
 
@@ -51,6 +52,7 @@ from app.config import (
     SCREENPIPE_CLI_COMMAND,
     SCREENPIPE_ENABLED,
     SCREENPIPE_START_CLI,
+    WHATSAPP_ONLY_MODE,
 )
 from app.services.screenpipe.auth import get_api_token
 from app.services.screenpipe.client import get_health
@@ -59,6 +61,8 @@ from app.services import service_manager
 from app.services.google_calendar.routes import router as google_calendar_router
 from app.services.meetings.routes import router as meetings_router
 from app.services.summary.routes import router as summary_router
+from app.services.whatsapp.routes import router as whatsapp_router
+from app.services.whatsapp.client import is_configured as wa_client_is_configured
 from app.services.vector.routes import router as vector_router
 from app.services.vector.store import get_vector_stats
 from app.services.google_calendar.service import google_calendar_service
@@ -101,10 +105,18 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 app.include_router(google_calendar_router)
 app.include_router(meetings_router)
 app.include_router(summary_router)
+app.include_router(whatsapp_router)
 app.include_router(vector_router)
 
 
@@ -118,7 +130,9 @@ def services_status() -> dict:
     capture_running = service_manager.screenpipe.is_running
     ocr_running = service_manager.paddle_ocr.is_running
     hint = None
-    if not AUTO_START_SERVICES:
+    if WHATSAPP_ONLY_MODE:
+        hint = "WhatsApp-only mode — screenpipe/OCR/activity pipelines are off."
+    elif not AUTO_START_SERVICES:
         hint = (
             "AUTO_START_SERVICES is false — no frames are captured. "
             "Set AUTO_START_SERVICES=true and restart."
@@ -137,6 +151,7 @@ def services_status() -> dict:
         hint = "Syncing frames from Screenpipe API; interact with your screen to trigger captures."
     return { 
         "auto_start_services": AUTO_START_SERVICES,
+        "whatsapp_only_mode": WHATSAPP_ONLY_MODE,
         "screenpipe_enabled": SCREENPIPE_ENABLED,
         "screenpipe_cli_command": SCREENPIPE_CLI_COMMAND,
         "screenpipe_api_url": SCREENPIPE_API_URL,
@@ -157,6 +172,11 @@ def services_status() -> dict:
             "running": service_manager.activity.is_running,
         },
         "summary": _summary_status(),
+        "whatsapp": {
+            "running": service_manager.whatsapp.is_running,
+            "enabled": service_manager.whatsapp.is_enabled,
+            "configured": wa_client_is_configured(),
+        },
         "google_calendar": google_calendar_service.auth_status().model_dump(),
         "vector": get_vector_stats(),
         "hint": hint,

@@ -78,6 +78,19 @@ class GoogleCalendarService:
             send_updates=send_updates,
         )
 
+    def query_freebusy(
+        self,
+        *,
+        time_min: str,
+        time_max: str,
+        calendar_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.client.query_freebusy(
+            time_min=time_min,
+            time_max=time_max,
+            calendar_ids=calendar_ids,
+        )
+
     @staticmethod
     def google_error_message(exc: HttpError) -> str:
         return GoogleCalendarClient.http_error_detail(exc)
