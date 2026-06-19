@@ -56,3 +56,53 @@ export function formatHourLabel(hour) {
   const normalized = hour % 12 === 0 ? 12 : hour % 12;
   return `${normalized}${suffix}`;
 }
+
+export function formatMeetingTime(iso) {
+  if (!iso) {
+    return "Time not set";
+  }
+
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+
+  return date.toLocaleString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+export function formatClockTime(iso) {
+  if (!iso) {
+    return "--:--";
+  }
+
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "--:--";
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+}
+
+export function meetingDurationMinutes(startIso, endIso) {
+  if (!startIso || !endIso) {
+    return 60;
+  }
+
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return 60;
+  }
+
+  return Math.max(15, Math.round((end.getTime() - start.getTime()) / 60000));
+}

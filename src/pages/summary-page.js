@@ -1,98 +1,134 @@
-import { getPowerWindow, formatHourLabel } from "../lib/time.js";
+import {
+  dismissSuggestion,
+  getPendingMeetingSuggestions,
+  scheduleMeetingSuggestion
+} from "../lib/api.js";
+import { getGreeting } from "../lib/time.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
 import { createStatChip } from "../ui/components/stat-chip.js";
+import { createWhatsAppRequestCard } from "../ui/components/whatsapp-request-card.js";
 
-const DAILY_HIGHLIGHTS = [
-  "3 follow-ups overdue — Rohan, Pierre, and Acme Corp.",
-  "Payment reminder due for Invoice #2841 by end of day.",
-  "Team standup notes still need your approval."
-];
+const REFRESH_MS = 15000;
 
-const HOURLY_TIMELINE = [
-  { time: "9:00", label: "Power window — deep work", active: true },
-  { time: "10:30", label: "Reply to Pierre (French)", active: false },
-  { time: "11:00", label: "Sync with Rohan", active: false },
-  { time: "14:00", label: "Afternoon focus block", active: false },
-  { time: "16:30", label: "Review OKR progress", active: false }
-];
+function dedupeSuggestions(suggestions) {
+  const seen = new Set();
+  return suggestions.filter((suggestion) => {
+    const key = suggestion.message_id ?? suggestion.id;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function createEmptyState(message) {
+  const empty = document.createElement("p");
+  empty.className = "os-empty-state";
+  empty.textContent = message;
+  return empty;
+}
+
+async function handleSchedule(suggestion, button) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Scheduling…";
+
+  try {
+    await scheduleMeetingSuggestion(suggestion.id);
+    button.textContent = "Scheduled";
+  } catch (error) {
+    button.textContent = "Try again";
+    button.disabled = false;
+    button.title = String(error.message || error);
+    window.setTimeout(() => {
+      button.textContent = originalLabel;
+      button.title = "";
+    }, 3000);
+    throw error;
+  }
+}
 
 export function createSummaryPage() {
   const page = document.createElement("section");
-  page.className = "os-page os-page--summary";
-
-  const powerWindow = getPowerWindow();
-  const currentHour = new Date().getHours();
+  page.className = "os-page os-page--now";
 
   const hero = document.createElement("article");
   hero.className = "hero-card";
 
-  const context = document.createElement("p");
-  context.className = "hero-card__context";
-  context.textContent = powerWindow.label;
+  const greeting = document.createElement("h2");
+  greeting.className = "hero-card__greeting";
+  greeting.textContent = getGreeting("Sujay");
 
   const stats = document.createElement("div");
   stats.className = "stat-row";
-  stats.append(
-    createStatChip(6, "Follow-ups", "urgent"),
-    createStatChip(2, "Payments", "warning"),
-    createStatChip(1, "FR Message", "info"),
-    createStatChip(2, "Meetings", "success")
-  );
 
-  hero.append(context, stats);
-  page.appendChild(hero);
+  const meetingSection = document.createElement("section");
+  meetingSection.className = "os-section";
 
-  const dailySection = document.createElement("section");
-  dailySection.className = "os-section";
-  dailySection.appendChild(createSectionHeader("Daily Summary", "accent"));
+  const sectionHeader = createSectionHeader("Wants to meet", "info", 0);
+  meetingSection.appendChild(sectionHeader);
 
-  const dailyCard = document.createElement("article");
-  dailyCard.className = "content-card";
+  const cardList = document.createElement("div");
+  cardList.className = "whatsapp-card-list";
+  meetingSection.appendChild(cardList);
 
-  const dailyTitle = document.createElement("h4");
-  dailyTitle.className = "content-card__title";
-  dailyTitle.textContent = "Today's overview";
+  hero.append(greeting, stats);
+  page.append(hero, meetingSection);
 
-  const dailyList = document.createElement("ul");
-  dailyList.className = "content-card__list";
+  async function reload() {
+    let suggestions = [];
 
-  DAILY_HIGHLIGHTS.forEach((item) => {
-    const li = document.createElement("li");
-    li.textContent = item;
-    dailyList.appendChild(li);
-  });
+    try {
+      const data = await getPendingMeetingSuggestions();
+      suggestions = dedupeSuggestions(
+        (data.items ?? []).filter((item) => item.kind === "meeting")
+      );
+    } catch (error) {
+      cardList.replaceChildren(
+        createEmptyState(`Could not load WhatsApp requests — ${error.message}`)
+      );
+      stats.replaceChildren(createStatChip("—", "Meetings", "info"));
+      sectionHeader.querySelector(".section-header__count").textContent = "0";
+      return;
+    }
 
-  dailyCard.append(dailyTitle, dailyList);
-  dailySection.appendChild(dailyCard);
-  page.appendChild(dailySection);
+    stats.replaceChildren(
+      createStatChip(suggestions.length, "Call requests", suggestions.length ? "urgent" : "success"),
+      createStatChip(suggestions.length, "WhatsApp", "info")
+    );
 
-  const hourlySection = document.createElement("section");
-  hourlySection.className = "os-section";
-  hourlySection.appendChild(
-    createSectionHeader(`Hourly — ${formatHourLabel(currentHour)} block`, "info")
-  );
+    const countEl = sectionHeader.querySelector(".section-header__count");
+    if (countEl) {
+      countEl.textContent = String(suggestions.length);
+    }
 
-  const hourlyGrid = document.createElement("div");
-  hourlyGrid.className = "timeline";
+    if (suggestions.length === 0) {
+      cardList.replaceChildren(
+        createEmptyState("No pending call requests from WhatsApp.")
+      );
+      return;
+    }
 
-  HOURLY_TIMELINE.forEach((slot) => {
-    const item = document.createElement("div");
-    item.className = `timeline__item${slot.active ? " timeline__item--active" : ""}`;
+    cardList.replaceChildren();
 
-    const time = document.createElement("span");
-    time.className = "timeline__time";
-    time.textContent = slot.time;
+    suggestions.forEach((suggestion) => {
+      cardList.appendChild(
+        createWhatsAppRequestCard(suggestion, {
+          onSchedule: handleSchedule,
+          onDismiss: async (item) => {
+            await dismissSuggestion(item.id);
+            await reload();
+          },
+          onSent: reload
+        })
+      );
+    });
+  }
 
-    const label = document.createElement("span");
-    label.className = "timeline__label";
-    label.textContent = slot.label;
-
-    item.append(time, label);
-    hourlyGrid.appendChild(item);
-  });
-
-  hourlySection.appendChild(hourlyGrid);
-  page.appendChild(hourlySection);
+  reload();
+  const timer = window.setInterval(reload, REFRESH_MS);
+  page.addEventListener("jarvis:destroy", () => window.clearInterval(timer));
 
   return page;
 }

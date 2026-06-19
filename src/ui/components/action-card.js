@@ -24,11 +24,15 @@ export function createActionCard({ title, description, accent = "urgent", action
     const actionRow = document.createElement("div");
     actionRow.className = "action-card__actions";
 
-    actions.forEach(({ label, variant = "ghost", primary = false }) => {
+    actions.forEach(({ label, variant = "ghost", primary = false, onClick, disabled = false }) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `btn btn--${variant}${primary ? " btn--primary" : ""}`;
       button.textContent = label;
+      button.disabled = disabled;
+      if (typeof onClick === "function") {
+        button.addEventListener("click", onClick);
+      }
       actionRow.appendChild(button);
     });
 
