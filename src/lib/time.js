@@ -1,3 +1,27 @@
+export const DISPLAY_TIMEZONE = "Asia/Kolkata";
+
+const LOCALE = "en-IN";
+
+function toDate(value) {
+  if (value instanceof Date) {
+    return value;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function formatDateTime(value, options = {}) {
+  const date = toDate(value);
+  if (!date) {
+    return String(value ?? "");
+  }
+
+  return date.toLocaleString(LOCALE, {
+    timeZone: DISPLAY_TIMEZONE,
+    ...options
+  });
+}
+
 export function getGreeting(name = "there") {
   const hour = new Date().getHours();
 
@@ -57,22 +81,44 @@ export function formatHourLabel(hour) {
   return `${normalized}${suffix}`;
 }
 
+export function isToday(iso) {
+  if (!iso) {
+    return false;
+  }
+
+  const date = toDate(iso);
+  if (!date) {
+    return false;
+  }
+
+  const dayKey = (value) =>
+    value.toLocaleDateString(LOCALE, {
+      timeZone: DISPLAY_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+
+  return dayKey(date) === dayKey(new Date());
+}
+
 export function formatMeetingTime(iso) {
   if (!iso) {
     return "Time not set";
   }
 
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
+  const date = toDate(iso);
+  if (!date) {
     return iso;
   }
 
-  return date.toLocaleString([], {
+  return formatDateTime(date, {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
+    hour12: true
   });
 }
 
@@ -81,15 +127,16 @@ export function formatClockTime(iso) {
     return "--:--";
   }
 
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
+  const date = toDate(iso);
+  if (!date) {
     return "--:--";
   }
 
-  return date.toLocaleTimeString([], {
+  return date.toLocaleTimeString(LOCALE, {
+    timeZone: DISPLAY_TIMEZONE,
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false
+    hour12: true
   });
 }
 

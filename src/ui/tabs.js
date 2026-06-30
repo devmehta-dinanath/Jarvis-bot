@@ -1,4 +1,3 @@
-import { startGreetingClock } from "../lib/time.js";
 import { createMeetingPage } from "../pages/meeting-page.js";
 import { createPlaceholderPage } from "../pages/placeholder-page.js";
 import { createSummaryPage } from "../pages/summary-page.js";
@@ -6,36 +5,23 @@ import { createCommandBar } from "./components/command-bar.js";
 
 const MENU_ITEMS = [
   {
-    id: "now",
-    label: "Now",
+    id: "whatsapp",
+    label: "WhatsApp Messages",
     renderPanel: createSummaryPage
   },
   {
-    id: "patterns",
-    label: "Patterns",
+    id: "calendar",
+    label: "Calendar",
+    renderPanel: createMeetingPage
+  },
+  {
+    id: "summary",
+    label: "Summary",
     renderPanel: () =>
       createPlaceholderPage(
-        "Patterns",
-        "Recurring habits and communication patterns will surface here."
+        "Summary",
+        "Daily activity insights and summaries will appear here."
       )
-  },
-  {
-    id: "okrs",
-    label: "OKRs",
-    renderPanel: () =>
-      createPlaceholderPage("OKRs", "Track quarterly objectives and key results.")
-  },
-  {
-    id: "people",
-    label: "People",
-    renderPanel: () =>
-      createPlaceholderPage("People", "Your contacts, context, and relationship notes.")
-  },
-  {
-    id: "live",
-    label: "Live",
-    badge: true,
-    renderPanel: createMeetingPage
   }
 ];
 

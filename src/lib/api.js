@@ -32,6 +32,22 @@ export function getPendingMeetingSuggestions() {
   return fetchJson("/api/v1/whatsapp/suggestions?kind=meeting&status=pending");
 }
 
+export function getPendingSuggestions() {
+  return fetchJson("/api/v1/whatsapp/suggestions?status=pending");
+}
+
+export function getInboxStatus() {
+  return fetchJson("/api/v1/whatsapp/inbox/status");
+}
+
+export function getWhatsAppCategories() {
+  return fetchJson("/api/v1/whatsapp/categories");
+}
+
+export function refreshPendingInbox() {
+  return fetchJson("/api/v1/whatsapp/inbox/refresh-pending", { method: "POST" });
+}
+
 export function getScheduledMeetingSuggestions() {
   return fetchJson("/api/v1/whatsapp/suggestions?kind=meeting&status=done");
 }
@@ -39,7 +55,7 @@ export function getScheduledMeetingSuggestions() {
 export function scheduleMeetingSuggestion(suggestionId) {
   return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/add-to-calendar`, {
     method: "POST",
-    body: JSON.stringify({ conference: true })
+    body: JSON.stringify({ conference: true, send_confirmation: true })
   });
 }
 

@@ -3,7 +3,7 @@ import {
   getScheduledMeetingSuggestions,
   getTodayCalendarEvents
 } from "../lib/api.js";
-import { formatClockTime, meetingDurationMinutes } from "../lib/time.js";
+import { formatClockTime, formatMeetingTime, isToday, meetingDurationMinutes } from "../lib/time.js";
 import { createActionCard } from "../ui/components/action-card.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
 import { createStatChip } from "../ui/components/stat-chip.js";
@@ -115,9 +115,24 @@ function mapWhatsAppMeeting(suggestion) {
     ),
     prep: details.agenda || suggestion.message_body || "Scheduled from WhatsApp",
     status: start && start < now ? "past" : "upcoming",
-    callUrl: details.calendar_html_link || null,
+    callUrl: details.meet_link || details.calendar_html_link || null,
     sortKey: start ? start.getTime() : 0
   };
+}
+
+function isTodaySuggestion(suggestion) {
+  return isToday(suggestion.details?.start);
+}
+
+function bookedDescription(suggestion) {
+  const details = suggestion.details ?? {};
+  if (details.agenda) {
+    return details.agenda;
+  }
+  if (details.start) {
+    return formatMeetingTime(details.start);
+  }
+  return suggestion.message_body || "Booked from WhatsApp";
 }
 
 function dedupeSuggestions(suggestions) {
@@ -196,7 +211,7 @@ export function createMeetingPage() {
     let bookedSuggestions = [];
     try {
       const data = await getScheduledMeetingSuggestions();
-      bookedSuggestions = dedupeSuggestions(data.items ?? []);
+      bookedSuggestions = dedupeSuggestions(data.items ?? []).filter(isTodaySuggestion);
     } catch {
       bookedSuggestions = [];
     }
@@ -246,7 +261,7 @@ export function createMeetingPage() {
         createEmptyState(
           calendarConnected
             ? "No meetings on your calendar today."
-            : "No meetings yet. Schedule one from the Now tab."
+            : "No meetings yet. Schedule one from the WhatsApp Messages tab."
         )
       );
     } else {
@@ -268,7 +283,7 @@ export function createMeetingPage() {
       bookedList.appendChild(
         createActionCard({
           title: details.title || `${suggestion.contact_name || "Contact"} meeting`,
-          description: details.agenda || suggestion.message_body || "Booked from WhatsApp",
+          description: bookedDescription(suggestion),
           accent: "success",
           actions: link
             ? [

@@ -627,6 +627,18 @@ button {
   line-height: 1.45;
 }
 
+.os-empty-state-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.os-empty-state--hint {
+  border-style: solid;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.78rem;
+}
+
 /* ── Buttons ── */
 
 .btn {
