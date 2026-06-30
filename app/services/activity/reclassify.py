@@ -46,13 +46,13 @@ def reclassify_activity_chunk(chunk: models.ActivityChunk, db: Session) -> model
         _write_activity_file(chunk)
 
     upsert_activity_chunk(
-        chunk_id=chunk.id,
-        recording_id=chunk.recording_id,
-        cleaned_text=chunk.cleaned_text or "",
-        app_name=chunk.app_name,
-        window_name=chunk.window_name,
+        chunk_id=chunk.id, 
+        recording_id=chunk.recording_id, 
+        cleaned_text=chunk.cleaned_text or "", 
+        app_name=chunk.app_name, 
+        window_name=chunk.window_name, 
         browser_url=chunk.browser_url,
-        category=chunk.category,
+        category=chunk.category, 
         timestamp=chunk.timestamp.isoformat(),
     )
 

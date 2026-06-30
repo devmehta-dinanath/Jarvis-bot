@@ -1,10 +1,7 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-# --- Outbound / action request bodies ---
 
 
 class SendMessageRequest(BaseModel):
@@ -52,9 +49,10 @@ class AddToCalendarRequest(BaseModel):
     end: str | None = Field(default=None, description="ISO end datetime override")
     calendar_id: str | None = None
     conference: bool = Field(default=False, description="Request a Google Meet link")
-
-
-# --- Responses ---
+    send_confirmation: bool = Field(
+        default=True,
+        description="Send a WhatsApp confirmation with the meeting link after scheduling",
+    )
 
 
 class WhatsAppContactResponse(BaseModel):
@@ -89,7 +87,9 @@ class WhatsAppMessageResponse(BaseModel):
     classified_at: datetime | None = None
     is_important: bool | None = None
     category: str | None = None
+    priority: str | None = None
     language: str | None = None
+    translation: str | None = None
     summary: str | None = None
 
 
@@ -106,16 +106,20 @@ class WhatsAppSuggestionResponse(BaseModel):
     message_id: int | None = None
     kind: str
     category: str | None = None
+    priority: str | None = None
     status: str
+    lane: str | None = None
+    confidence: int | None = None
     draft_text: str | None = None
     details: dict[str, Any] | None = None
     created_at: datetime
-    resolved_at: datetime | None = None
-    sent_message_id: int | None = None
-    contact_name: str | None = None
+    resolved_at: datetime | None = None 
+    sent_message_id: int | None = None  
+    contact_name: str | None = None 
     wa_id: str | None = None
-    message_body: str | None = None
-    message_summary: str | None = None
+    message_body: str | None = None 
+    message_summary: str | None = None 
+    message_translation: str | None = None 
 
 
 class WhatsAppSuggestionListResponse(BaseModel):
@@ -123,8 +127,63 @@ class WhatsAppSuggestionListResponse(BaseModel):
     total: int
 
 
+class FeedbackRequest(BaseModel):
+    """Body for POST /suggestions/{id}/feedback."""
+
+    feedback_type: Literal["wrong", "helpful", "dismissed"] = Field(
+        ...,
+        description=(
+            "wrong — chip shown for wrong category or wrong reason (triggers correction memory); "
+            "helpful — chip was exactly right (positive signal); "
+            "dismissed — chip ignored without acting on it (neutral)"
+        ),
+    )
+
+
+class FeedbackResponse(BaseModel):
+    ok: bool
+    feedback_id: int
+    feedback_type: str
+
+
 class WhatsAppSendResult(BaseModel):
     ok: bool
     wa_message_id: str | None = None
     message_id: int | None = None
     detail: str | None = None
+
+
+class InboxStatusResponse(BaseModel):
+    pending_count: int
+    last_inbound_at: datetime | None = None
+    last_inbound_preview: str | None = None
+    last_inbound_contact_id: int | None = None
+
+
+class RefreshPendingResponse(InboxStatusResponse):
+    ok: bool
+    reopened: int
+    reclassified: int
+
+
+class WhatsAppCategoryInfo(BaseModel):
+    id: str
+    label: str
+    lane: str
+    section: str | None = None
+    chip_label: str | None = None
+    demo_messages: list[str] = Field(default_factory=list)
+
+
+class WhatsAppSectionInfo(BaseModel):
+    id: str
+    title: str
+    accent: str
+    categories: list[str]
+
+
+class WhatsAppTaxonomyResponse(BaseModel):
+    sections: list[WhatsAppSectionInfo]
+    categories: list[WhatsAppCategoryInfo]
+    classifiable: list[str]
+    filters: list[str]

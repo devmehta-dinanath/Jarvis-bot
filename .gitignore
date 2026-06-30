@@ -10,6 +10,7 @@ data/chroma/*
 !data/.gitkeep
 data/google_calendar_credentials.json
 data/google_calendar_token.json
+data/.jarvis-xauthority
 .env
 media/
 .vscode/

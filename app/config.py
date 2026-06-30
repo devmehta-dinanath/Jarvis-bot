@@ -186,13 +186,55 @@ WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip() or None
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip() or None
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "").strip() or None
 WHATSAPP_POLL_INTERVAL_SECONDS = float(os.getenv("WHATSAPP_POLL_INTERVAL_SECONDS", "30"))
-WHATSAPP_HISTORY_CONTEXT_LIMIT = int(os.getenv("WHATSAPP_HISTORY_CONTEXT_LIMIT", "20"))
+WHATSAPP_HISTORY_CONTEXT_LIMIT = int(os.getenv("WHATSAPP_HISTORY_CONTEXT_LIMIT", "8"))
+WHATSAPP_CONTEXT_MESSAGE_MAX_CHARS = int(
+    os.getenv("WHATSAPP_CONTEXT_MESSAGE_MAX_CHARS", "240")
+)
+# Disable AI-written reply drafts by default to avoid a second OpenAI call per message.
+# Core classification still uses the model; reply text falls back to templates unless enabled.
+WHATSAPP_AI_DRAFTS_ENABLED = os.getenv("WHATSAPP_AI_DRAFTS_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 # Free-form replies are only allowed within this many hours of the customer's last message.
 WHATSAPP_CUSTOMER_WINDOW_HOURS = float(os.getenv("WHATSAPP_CUSTOMER_WINDOW_HOURS", "24"))
 # Default meeting length (minutes) when the conversation gives no end time.
 WHATSAPP_DEFAULT_MEETING_MINUTES = int(os.getenv("WHATSAPP_DEFAULT_MEETING_MINUTES", "60"))
+# A follow-up where the client is waiting becomes high priority after this many hours
+# since our last reply, and critical after the urgent threshold.
+WHATSAPP_FOLLOWUP_FLAG_HOURS = float(os.getenv("WHATSAPP_FOLLOWUP_FLAG_HOURS", "24"))
+WHATSAPP_FOLLOWUP_URGENT_HOURS = float(os.getenv("WHATSAPP_FOLLOWUP_URGENT_HOURS", "72"))
+# A new lead that has not replied within this window should be followed up on.
+WHATSAPP_LEAD_FOLLOWUP_HOURS = float(os.getenv("WHATSAPP_LEAD_FOLLOWUP_HOURS", "48"))
+# End-of-day reminder time for personal tasks/errands (local clock hour, 24h format).
+WHATSAPP_EOD_REMINDER_HOUR = int(os.getenv("WHATSAPP_EOD_REMINDER_HOUR", "17"))
+WHATSAPP_EOD_REMINDER_MINUTE = int(os.getenv("WHATSAPP_EOD_REMINDER_MINUTE", "0"))
+# Rule 1 — minimum LLM confidence (0-100) required before a chip is surfaced to the user.
+# Business-critical categories (payment, complaint) bypass this gate and always surface.
+WHATSAPP_CHIP_CONFIDENCE_MIN = int(os.getenv("WHATSAPP_CHIP_CONFIDENCE_MIN", "80"))
+# Rule 2 — how many recent "wrong" corrections to inject into the classifier prompt.
+WHATSAPP_CORRECTIONS_CONTEXT_LIMIT = int(os.getenv("WHATSAPP_CORRECTIONS_CONTEXT_LIMIT", "5"))
+# Category 17: how many days of silence on a personal contact before a nudge is raised.
+WHATSAPP_PERSONAL_SILENCE_DAYS = float(os.getenv("WHATSAPP_PERSONAL_SILENCE_DAYS", "3"))
+# How often (seconds) the background worker checks for silent personal contacts.
+WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS = float(
+    os.getenv("WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS", "1")
+)
+# Names/aliases of the account owner, used to detect direct mentions inside group chats.
+# Comma-separated, e.g. "Rahul,Rahul Mehta,@rahul".
+WHATSAPP_USER_NAMES = [
+    name.strip()
+    for name in os.getenv("WHATSAPP_USER_NAMES", "").split(",")
+    if name.strip()
+]
 # Default language code used when sending a template message.
 WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE = os.getenv("WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE", "en_US")
+# Optional Meta-approved template for meeting confirmations outside the 24h reply window.
+# Template body should accept {{1}} = meeting time, {{2}} = meet/calendar link.
+WHATSAPP_MEETING_CONFIRMATION_TEMPLATE = os.getenv(
+    "WHATSAPP_MEETING_CONFIRMATION_TEMPLATE", ""
+).strip()
 # When a meeting time is free, auto-create a Google Calendar event (requires calendar OAuth).
 WHATSAPP_AUTO_ADD_CALENDAR = os.getenv("WHATSAPP_AUTO_ADD_CALENDAR", "false").lower() in {
     "1",
@@ -202,7 +244,4 @@ WHATSAPP_AUTO_ADD_CALENDAR = os.getenv("WHATSAPP_AUTO_ADD_CALENDAR", "false").lo
 # When true, only the WhatsApp worker starts at boot (no screenpipe/OCR/activity/summary).
 WHATSAPP_ONLY_MODE = os.getenv("WHATSAPP_ONLY_MODE", "false").lower() in {"1", "true", "yes"}
 
-# --- Anand Sandesh subscriptions (PostgreSQL anand_sandesh_subscription) ---
-# Razorpay plan IDs map to category: 1-year → General(I), 5-year → Five Years(I)
-ANAND_SANDESH_PLAN_ID_ONE_YEAR = os.getenv("ANAND_SANDESH_PLAN_ID_ONE_YEAR", "").strip() or None
-ANAND_SANDESH_PLAN_ID_FIVE_YEAR = os.getenv("ANAND_SANDESH_PLAN_ID_FIVE_YEAR", "").strip() or None
+

@@ -40,6 +40,36 @@ def _extract_media_id(message: dict[str, Any], msg_type: str) -> str | None:
     return None
 
 
+def _is_forwarded_message(message: dict[str, Any]) -> bool:
+    """Return True when the Cloud API marks the message as a forwarded or viral forward.
+
+    WhatsApp sets context.forwarded=true for any forwarded message, and
+    context.frequently_forwarded=true for viral chain messages.  Both are treated
+    identically — the classifier decides later whether the sender added personal text.
+    """
+    context = message.get("context") or {}
+    return bool(context.get("forwarded") or context.get("frequently_forwarded"))
+
+
+def _is_group_message(message: dict[str, Any], value: dict[str, Any]) -> bool:
+    """Best-effort detection of a WhatsApp group message from the webhook payload.
+
+    The Cloud API exposes group origin inconsistently across rollouts, so we check the
+    common markers defensively.
+    """
+    if message.get("group_id") or message.get("group"):
+        return True
+    context = message.get("context") or {}
+    if context.get("group_id") or context.get("group"):
+        return True
+    if str(message.get("recipient_type") or "").lower() == "group":
+        return True
+    metadata = value.get("metadata") or {}
+    if metadata.get("group_id"):
+        return True
+    return False
+
+
 def process_webhook_payload(db: Session, payload: dict[str, Any]) -> int:
     """Persist inbound messages and status updates from a Meta webhook payload.
 
@@ -91,6 +121,8 @@ def _process_change_value(db: Session, value: dict[str, Any]) -> tuple[int, list
             wa_message_id=wa_message_id,
             media_id=_extract_media_id(message, msg_type),
             raw_payload=message,
+            is_group=_is_group_message(message, value),
+            is_forwarded=_is_forwarded_message(message),
         )
         new_messages += 1
         stored_messages.append(stored)
@@ -105,14 +137,20 @@ def _process_change_value(db: Session, value: dict[str, Any]) -> tuple[int, list
 
 
 def _classify_if_enabled(db: Session, message) -> None:
-    if message.msg_type != "text" or not (message.body or "").strip():
-        return
     try:
         from app.services import service_manager
         from app.services.whatsapp.classifier import WhatsAppAIError
 
         if not service_manager.whatsapp.is_enabled:
             return
+
+        if message.msg_type in ("audio", "voice"):
+            service_manager.whatsapp.handle_voice_note_now(db, message)
+            return
+
+        if message.msg_type != "text" or not (message.body or "").strip():
+            return
+
         service_manager.whatsapp.classify_message_now(db, message)
     except WhatsAppAIError as exc:
         logger.warning("[WHATSAPP] Immediate classification failed for %s: %s", message.id, exc)

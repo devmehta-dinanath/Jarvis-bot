@@ -73,15 +73,15 @@ def _frame_timestamp(frame: models.Frame) -> datetime:
 
 
 def _same_app(left: models.Frame, right: models.Frame) -> bool:
-    left_app = (left.app_name or "").casefold()
-    right_app = (right.app_name or "").casefold()
+    left_app = (left.app_name or "").casefold() 
+    right_app = (right.app_name or "").casefold() 
     if left_app and right_app:
-        return left_app == right_app
+        return left_app == right_app  
     if left_app or right_app:
-        return False
-    left_window = (left.window_name or "").casefold()
-    right_window = (right.window_name or "").casefold()
-    if left_window and right_window:
-        return left_window == right_window
-    # No metadata on either frame — chunk by time gap only.
+        return False 
+    left_window = (left.window_name or "").casefold() 
+    right_window = (right.window_name or "").casefold() 
+    if left_window and right_window: 
+        return left_window == right_window 
+    # No metadata on either frame — chunk by time gap only. 
     return True

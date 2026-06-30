@@ -12,13 +12,20 @@ from app.database import get_db
 from app.services import service_manager
 from app.services.whatsapp import actions
 from app.services.whatsapp import client as wa_client
+from app.services.whatsapp import inbox as wa_inbox
 from app.services.whatsapp import repository as repo
+from app.services.whatsapp import taxonomy as wa_taxonomy
 from app.services.whatsapp import webhook as wa_webhook
 from app.services.whatsapp.actions import WhatsAppActionError
 from app.services.whatsapp.schemas import (
     AddToCalendarRequest,
+    FeedbackRequest,
+    FeedbackResponse,
+    InboxStatusResponse,
+    RefreshPendingResponse,
     SendMessageRequest,
     SendReplyRequest,
+    WhatsAppTaxonomyResponse,
     WhatsAppContactListResponse,
     WhatsAppContactResponse,
     WhatsAppMessageListResponse,
@@ -32,9 +39,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/whatsapp", tags=["whatsapp"])
 
-
-# --- Webhook ---
-
+@router.get("/categories", response_model=WhatsAppTaxonomyResponse)
+def list_categories() -> WhatsAppTaxonomyResponse:
+    return WhatsAppTaxonomyResponse(**wa_taxonomy.taxonomy_payload())
 
 @router.get("/webhook")
 def verify_webhook(
@@ -75,14 +82,9 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)) -> di
     except Exception:
         logger.exception("[WHATSAPP] Failed to process webhook payload")
         db.rollback()
-        # Always 200 so Meta does not retry-storm; processing errors are logged.
         return {"received": True, "stored": 0}
 
     return {"received": True, "stored": stored}
-
-
-# --- Read ---
-
 
 @router.get("/contacts", response_model=WhatsAppContactListResponse)
 def list_contacts(
@@ -118,15 +120,20 @@ def list_contact_messages(
 def list_suggestions(
     status: str | None = Query(default="pending"),
     kind: str | None = Query(default=None),
+    lane: str | None = Query(
+        default=None,
+        description="work | life — filter suggestions by rendering lane",
+    ),
     contact_id: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> WhatsAppSuggestionListResponse:
     items, total = repo.list_suggestions(
-        db,
+        db, 
         status=status,
         kind=kind,
+        lane=lane,
         contact_id=contact_id,
         limit=limit,
         offset=offset,
@@ -137,8 +144,17 @@ def list_suggestions(
     )
 
 
-# --- Actions ---
+@router.get("/inbox/status", response_model=InboxStatusResponse)
+def get_inbox_status(db: Session = Depends(get_db)) -> InboxStatusResponse:
+    return InboxStatusResponse(**wa_inbox.inbox_status(db))
 
+
+@router.post("/inbox/refresh-pending", response_model=RefreshPendingResponse)
+def refresh_pending_inbox(
+    lookback_hours: int = Query(default=168, ge=1, le=720),
+    db: Session = Depends(get_db),
+) -> RefreshPendingResponse:
+    return RefreshPendingResponse(**wa_inbox.refresh_pending_suggestions(db, lookback_hours=lookback_hours))
 
 @router.post("/suggestions/{suggestion_id}/send-reply", response_model=WhatsAppSendResult)
 def send_reply(
@@ -193,6 +209,7 @@ def add_to_calendar(
             end=body.end,
             calendar_id=body.calendar_id,
             conference=body.conference,
+            send_confirmation=body.send_confirmation,
         )
     except WhatsAppActionError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -203,7 +220,55 @@ def add_to_calendar(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Google Calendar error: {exc}",
         ) from exc
-    return {"ok": True, "event_id": event.get("id"), "html_link": event.get("htmlLink")}
+    return {
+        "ok": True,
+        "event_id": event.get("id"),
+        "html_link": event.get("htmlLink"),
+        "meet_link": event.get("hangoutLink") or event.get("htmlLink"),
+        "reply_sent": event.get("reply_sent", False),
+        "reply_error": event.get("reply_error"),
+        "sent_message_id": event.get("sent_message_id"),
+    }
+
+
+@router.post("/suggestions/{suggestion_id}/feedback", response_model=FeedbackResponse)
+def record_feedback(
+    suggestion_id: int,
+    payload: FeedbackRequest,
+    db: Session = Depends(get_db),
+) -> FeedbackResponse:
+    suggestion = repo.get_suggestion(db, suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
+
+    message_snippet: str | None = None
+    if suggestion.message_id:
+        msg = db.get(models.WhatsAppMessage, suggestion.message_id)
+        if msg and msg.body:
+            message_snippet = msg.body.strip()[:300]
+
+    feedback = repo.record_feedback(
+        db,
+        suggestion_id=suggestion.id,
+        feedback_type=payload.feedback_type,
+        original_category=suggestion.category,
+        original_confidence=getattr(suggestion, "confidence", None),
+        message_snippet=message_snippet,
+        contact_id=suggestion.contact_id,
+        message_id=suggestion.message_id,
+    )
+    db.commit()
+    logger.info(
+        "[WHATSAPP] Feedback recorded suggestion=%s type=%s category=%s",
+        suggestion_id,
+        payload.feedback_type,
+        suggestion.category,
+    )
+    return FeedbackResponse(
+        ok=True,
+        feedback_id=feedback.id,
+        feedback_type=feedback.feedback_type,
+    )
 
 
 @router.post("/suggestions/{suggestion_id}/dismiss", response_model=WhatsAppSuggestionResponse)
@@ -250,10 +315,6 @@ def send_message(
         message_id=message.id,
     )
 
-
-# --- Helpers ---
-
-
 def _contact_response(contact) -> WhatsAppContactResponse:
     data = WhatsAppContactResponse.model_validate(contact)
     data.within_customer_window = repo.within_customer_window(contact)
@@ -272,6 +333,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
     wa_id = None
     message_body = None
     message_summary = None
+    message_translation = None
     if db is not None:
         contact = db.get(models.WhatsAppContact, suggestion.contact_id)
         if contact:
@@ -282,6 +344,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
             if message:
                 message_body = message.body
                 message_summary = message.summary
+                message_translation = message.translation
 
     return WhatsAppSuggestionResponse(
         id=suggestion.id,
@@ -289,6 +352,9 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         message_id=suggestion.message_id,
         kind=suggestion.kind,
         category=suggestion.category,
+        priority=suggestion.priority,
+        lane=getattr(suggestion, "lane", None),
+        confidence=getattr(suggestion, "confidence", None),
         status=suggestion.status,
         draft_text=suggestion.draft_text,
         details=details,
@@ -299,4 +365,5 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         wa_id=wa_id,
         message_body=message_body,
         message_summary=message_summary,
+        message_translation=message_translation,
     )

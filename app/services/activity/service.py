@@ -74,21 +74,21 @@ class ActivityClassificationService:
                     db.query(models.Frame.id, models.Frame.frame_index)
                     .filter(
                         models.Frame.recording_id == recording_id,
-                        models.Frame.ocr_status == "done",
-                        models.Frame.activity_status == "pending",
-                    )
+                        models.Frame.ocr_status == "done", 
+                        models.Frame.activity_status == "pending", 
+                    ) 
                     .order_by(models.Frame.frame_index.asc())
                     .all()
-                )
-                if pending_frames:
-                    frame_ids = ", ".join(str(row.id) for row in pending_frames)
+                ) 
+                if pending_frames: 
+                    frame_ids = ", ".join(str(row.id) for row in pending_frames) 
                     indexes = ", ".join(str(row.frame_index) for row in pending_frames)
-                    logger.debug(
-                        "[ACTIVITY] Classifying recording=%s pending_frames=%s "
-                        "frame_ids=[%s] indexes=[%s]",
-                        recording_id,
-                        len(pending_frames),
-                        frame_ids,
+                    logger.debug( 
+                        "[ACTIVITY] Classifying recording=%s pending_frames=%s " 
+                        "frame_ids=[%s] indexes=[%s]",  
+                        recording_id,  
+                        len(pending_frames),  
+                        frame_ids, 
                         indexes,
                     )
 

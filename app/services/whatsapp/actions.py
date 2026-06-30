@@ -8,6 +8,8 @@ from app import models
 from app.config import (
     CALENDAR_DEFAULT_TIMEZONE,
     WHATSAPP_DEFAULT_MEETING_MINUTES,
+    WHATSAPP_MEETING_CONFIRMATION_TEMPLATE,
+    WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE,
 )
 from app.services.google_calendar.schemas import EventCreate, EventDateTime
 from app.services.google_calendar.service import google_calendar_service
@@ -92,7 +94,8 @@ def send_reply(
     reply_text = text or suggestion.draft_text
     resolved_mode = mode
     if mode == "auto":
-        resolved_mode = "text" if repo.within_customer_window(contact) else "template"
+        in_window = repo.within_reply_window(db, contact, suggestion)
+        resolved_mode = "text" if in_window else "template"
 
     if resolved_mode == "template" and not template_name:
         raise WhatsAppActionError(
@@ -133,6 +136,70 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
+def _format_meeting_when(start_dt: datetime) -> str:
+    return (
+        start_dt.strftime("%a %-d %b %-I:%M%p")
+        .replace("AM", "am")
+        .replace("PM", "pm")
+    )
+
+
+def _meeting_confirmation_text(start_dt: datetime | None, link: str | None) -> str:
+    if start_dt:
+        when = _format_meeting_when(start_dt)
+        text = f"Yes, happy to connect! I've scheduled our meeting for {when}."
+    else:
+        text = "Yes, happy to connect! I've added our meeting to the calendar."
+    if link:
+        text += f" Here's the link: {link}"
+    return text
+
+
+def _meeting_template_components(start_dt: datetime | None, link: str | None) -> list[dict]:
+    when = _format_meeting_when(start_dt) if start_dt else "soon"
+    return [
+        {
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": when},
+                {"type": "text", "text": link or "—"},
+            ],
+        }
+    ]
+
+
+def _send_meeting_confirmation(
+    db: Session,
+    suggestion: models.WhatsAppSuggestion,
+    *,
+    text: str,
+    start_dt: datetime | None,
+    link: str | None,
+) -> models.WhatsAppMessage:
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    if contact is None:
+        raise WhatsAppActionError("Contact not found for suggestion")
+
+    if repo.within_reply_window(db, contact, suggestion):
+        return send_reply(db, suggestion, text=text, mode="text")
+
+    if WHATSAPP_MEETING_CONFIRMATION_TEMPLATE:
+        return send_reply(
+            db,
+            suggestion,
+            mode="template",
+            template_name=WHATSAPP_MEETING_CONFIRMATION_TEMPLATE,
+            template_language=WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE,
+            template_components=_meeting_template_components(start_dt, link),
+        )
+
+    raise WhatsAppActionError(
+        "Outside the 24-hour WhatsApp reply window. Set "
+        "WHATSAPP_MEETING_CONFIRMATION_TEMPLATE in .env, or tap Send reply "
+        "while the client is within the window."
+    )
+
+
 def add_to_calendar(
     db: Session,
     suggestion: models.WhatsAppSuggestion,
@@ -143,6 +210,7 @@ def add_to_calendar(
     end: str | None = None,
     calendar_id: str | None = None,
     conference: bool = False,
+    send_confirmation: bool = True,
 ) -> dict:
     if suggestion.kind != "meeting":
         raise WhatsAppActionError("Only meeting suggestions can be added to the calendar")
@@ -178,17 +246,63 @@ def add_to_calendar(
     )
     event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
 
+    meet_link = event.get("hangoutLink") or event.get("htmlLink")
     details["calendar_event_id"] = event.get("id")
     details["calendar_html_link"] = event.get("htmlLink")
+    if meet_link:
+        details["meet_link"] = meet_link
     suggestion.details = json.dumps(details)
-    suggestion.status = "done"
-    suggestion.resolved_at = datetime.utcnow()
     db.commit()
     db.refresh(suggestion)
 
+    reply_sent = False
+    reply_error: str | None = None
+    sent_message_id: int | None = None
+    if send_confirmation:
+        confirmation = _meeting_confirmation_text(start_dt, meet_link)
+        suggestion.draft_text = confirmation
+        db.commit()
+        db.refresh(suggestion)
+        try:
+            sent = _send_meeting_confirmation(
+                db,
+                suggestion,
+                text=confirmation,
+                start_dt=start_dt,
+                link=meet_link,
+            )
+            reply_sent = True
+            sent_message_id = sent.id
+        except Exception as exc:
+            reply_error = str(exc)
+            logger.exception(
+                "[WHATSAPP] Calendar event created but confirmation reply failed "
+                "for suggestion %s",
+                suggestion.id,
+            )
+    else:
+        suggestion.status = "done"
+        suggestion.resolved_at = datetime.utcnow()
+        db.commit()
+        db.refresh(suggestion)
+
+    if reply_sent or not send_confirmation:
+        pass  # send_reply or the no-confirmation branch already marked done
+    elif send_confirmation:
+        suggestion.status = "pending"
+        suggestion.resolved_at = None
+        db.commit()
+        db.refresh(suggestion)
+
     logger.info(
-        "[WHATSAPP] Created calendar event %s for suggestion %s",
+        "[WHATSAPP] Created calendar event %s for suggestion %s (reply_sent=%s)",
         event.get("id"),
         suggestion.id,
+        reply_sent,
     )
+    event["reply_sent"] = reply_sent
+    if reply_error:
+        event["reply_error"] = reply_error
+    if sent_message_id is not None:
+        event["sent_message_id"] = sent_message_id
     return event

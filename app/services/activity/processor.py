@@ -222,12 +222,12 @@ def _write_activity_file(recording_id: int, chunk: models.ActivityChunk) -> None
         "category": chunk.category,
         "timestamp": chunk.timestamp.isoformat(),
         "end_timestamp": chunk.end_timestamp.isoformat() if chunk.end_timestamp else None,
-        "window_name": chunk.window_name,
-        "browser_url": chunk.browser_url,
-        "frame_count": chunk.frame_count,
-        "cleaned_text": chunk.cleaned_text,
-        "transcript_status": chunk.transcript_status,
-        "transcript_text": chunk.transcript_text,
+        "window_name": chunk.window_name, 
+        "browser_url": chunk.browser_url, 
+        "frame_count": chunk.frame_count, 
+        "cleaned_text": chunk.cleaned_text, 
+        "transcript_status": chunk.transcript_status, 
+        "transcript_text": chunk.transcript_text, 
     }
     path = activity_dir / f"chunk_{chunk.id:06d}.json"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

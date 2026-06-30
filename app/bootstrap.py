@@ -29,6 +29,27 @@ ACTIVITY_SUMMARY_COLUMNS: dict[str, str] = {
 }
 
 
+WHATSAPP_CONTACT_COLUMNS: dict[str, str] = {
+    "contact_type": "VARCHAR(20)",
+    "last_replied_at": "DATETIME",
+}
+
+
+WHATSAPP_MESSAGE_COLUMNS: dict[str, str] = {
+    "priority": "VARCHAR(20)",
+    "translation": "TEXT",
+    "is_group": "BOOLEAN NOT NULL DEFAULT 0",
+    "is_forwarded": "BOOLEAN NOT NULL DEFAULT 0",
+}
+
+
+WHATSAPP_SUGGESTION_COLUMNS: dict[str, str] = {
+    "priority": "VARCHAR(20)",
+    "lane": "VARCHAR(10)",
+    "confidence": "INTEGER",
+}
+
+
 RECORDING_COLUMNS: dict[str, str] = {
     "source_video_path": "VARCHAR(500)",
     "capture_command": "TEXT",
@@ -50,7 +71,27 @@ def bootstrap_database() -> None:
     _ensure_frame_columns()
     _ensure_activity_chunk_columns()
     _ensure_activity_summary_columns()
+    _ensure_columns("whatsapp_contacts", WHATSAPP_CONTACT_COLUMNS)
+    _ensure_columns("whatsapp_messages", WHATSAPP_MESSAGE_COLUMNS)
+    _ensure_columns("whatsapp_suggestions", WHATSAPP_SUGGESTION_COLUMNS)
     MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_columns(table: str, columns: dict[str, str]) -> None:
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    missing = {name: ddl for name, ddl in columns.items() if name not in existing}
+    if not missing:
+        return
+
+    with engine.begin() as connection:
+        for column_name, column_type in missing.items():
+            connection.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_type}")
+            )
 
 
 def _ensure_recording_columns() -> None:
@@ -68,31 +109,31 @@ def _ensure_recording_columns() -> None:
         return
 
     with engine.begin() as connection:
-        for column_name, column_type in missing.items():
+        for column_name, column_type in missing.items(): 
             connection.execute(
                 text(f"ALTER TABLE recordings ADD COLUMN {column_name} {column_type}")
             )
 
-
-def _ensure_activity_chunk_columns() -> None:
-    inspector = inspect(engine)
-    if "activity_chunks" not in inspector.get_table_names():
-        return
-
-    existing = {column["name"] for column in inspector.get_columns("activity_chunks")}
-    missing = {
-        name: ddl
-        for name, ddl in ACTIVITY_CHUNK_COLUMNS.items()
-        if name not in existing
-    }
+ 
+def _ensure_activity_chunk_columns() -> None: 
+    inspector = inspect(engine) 
+    if "activity_chunks" not in inspector.get_table_names(): 
+        return 
+ 
+    existing = {column["name"] for column in inspector.get_columns("activity_chunks")} 
+    missing = { 
+        name: ddl  
+        for name, ddl in ACTIVITY_CHUNK_COLUMNS.items() 
+        if name not in existing  
+    } 
     if not missing:
-        return
+        return  
 
-    with engine.begin() as connection:
+    with engine.begin() as connection: 
         for column_name, column_type in missing.items():
-            connection.execute(
+            connection.execute( 
                 text(f"ALTER TABLE activity_chunks ADD COLUMN {column_name} {column_type}")
-            )
+            ) 
 
 
 def _ensure_activity_summary_columns() -> None:

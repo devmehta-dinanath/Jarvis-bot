@@ -4,7 +4,11 @@ from typing import Any
 
 from openai import APIError, RateLimitError
 
-from app.config import CALENDAR_DEFAULT_TIMEZONE, OPENAI_MODEL
+from app.config import (
+    CALENDAR_DEFAULT_TIMEZONE,
+    OPENAI_MODEL,
+    WHATSAPP_CONTEXT_MESSAGE_MAX_CHARS,
+)
 from app.services.summary.client import get_openai_client
 
 logger = logging.getLogger(__name__)
@@ -14,19 +18,153 @@ class WhatsAppAIError(Exception):
     """OpenAI call failed for WhatsApp classification/drafting."""
 
 
-# Single source of truth for the category taxonomy. Extend here to add categories.
-CATEGORIES = ("meeting", "budget", "scope", "timeline", "follow_up", "other")
-# Categories that produce a drafted reply suggestion (everything except meeting).
-REPLY_CATEGORIES = ("budget", "scope", "timeline", "follow_up", "other")
+CATEGORIES = (
+    "meeting",
+    "payment",
+    "lead",
+    "document",
+    "complaint",
+    "shipment",
+    "personal_date",
+    "personal_task",
+    "family_plan",
+    "budget",
+    "scope",
+    "timeline",
+    "follow_up",
+    "other",
+)
+REPLY_CATEGORIES = (
+    "payment",
+    "lead",
+    "document",
+    "complaint",
+    "shipment",
+    "budget",
+    "scope",
+    "timeline",
+    "follow_up",
+    "other",
+)
+
+LIFE_LANE_CATEGORIES = ("personal_date", "personal_task", "family_plan")
+WORK_LANE_CATEGORIES = tuple(c for c in CATEGORIES if c not in LIFE_LANE_CATEGORIES)
+ALWAYS_IMPORTANT = ("payment", "complaint")
+FILTER_LABELS = ("forwarded", "spam")
+PRIORITIES = ("low", "normal", "medium", "high", "very_high", "critical")
+_CATEGORY_PRIORITY = {
+    "payment": "critical",
+    "complaint": "critical",
+    "lead": "very_high",
+    "meeting": "high",
+    "document": "high",
+    "follow_up": "high",
+    "shipment": "medium",
+    "personal_date": "low",
+    "personal_task": "low",
+    "family_plan": "low",
+}
 
 _CATEGORY_GUIDE = (
-    "- meeting: the client wants to schedule/confirm a call or meeting, or proposes a time.\n"
-    "- budget: pricing, cost, quotation, payment, or any amount the client asks about.\n"
+    "- meeting: the client wants to schedule/confirm a call or meeting, asks about availability, "
+    "or proposes/confirms a date, time, or location (e.g. 'Let's meet Thursday at 3pm', "
+    "'Are you free tomorrow?', 'Confirming our meeting on Friday').\n"
+    "- payment: anything about money changing hands — the client says they paid/transferred an "
+    "amount, asks you to check/verify a payment, or chases an unpaid/pending/overdue invoice "
+    "('Payment done please check', 'Amount transferred', 'Invoice still pending', "
+    "'I sent the old invoice can you check', 'When will you pay?'). "
+    "If they are chasing an invoice they already sent or asking you to check payment status → "
+    "payment (usually overdue). If they only say they paid → payment (received).\n"
+    "- lead: a NEW business opportunity from someone who is not yet an active client — a fresh "
+    "inquiry, catalogue/price request, sourcing/supplier request, or a referral "
+    "('can you share the catalogue?', 'we are looking for a supplier', 'someone referred me', "
+    "'what are your bulk prices?').\n"
+    "- document: the client is asking us to SEND or SHARE a specific document or file we have not "
+    "yet sent — an invoice copy, price list, catalogue, shipping/customs documents, brochure, "
+    "report, etc. ('Please send the invoice', 'Share the price list', 'I need the shipping "
+    "documents'). Do NOT use document when they are chasing/checking an invoice they already sent — "
+    "that is payment. "
+    "- complaint: the client is unhappy, frustrated, or reporting a problem — late/undelivered "
+    "order, damaged/defective product, poor service, or repeated unanswered follow-ups "
+    "('Order not arrived yet', 'This product is damaged', 'This is the third time I am messaging', "
+    "'Very unhappy with the service'). A frustrated/angry tone makes it a complaint even if it "
+    "mentions a shipment.\n"
+    "- shipment: a neutral/factual delivery or logistics status update about an order — customs, "
+    "dispatch, transit, delay, or receipt confirmation, WITHOUT an angry tone "
+    "('Shipment cleared customs', 'Package delayed by 2 days', 'Goods received in good condition', "
+    "'Out for delivery today').\n"
+    "- budget: pricing, cost, quotation, or any amount discussion with an EXISTING client that is "
+    "not itself a payment notification.\n"
     "- scope: questions about project scope, features, deliverables, requirements, or details.\n"
     "- timeline: deadlines, delivery dates, ETAs, or 'when will it be ready'.\n"
-    "- follow_up: the client is chasing a pending reply/deliverable ('any update?', reminders).\n"
+    "- follow_up: the client is waiting for a reply or chasing a pending response/deliverable "
+    "('please confirm', 'still waiting for your reply', 'did you get my message?', "
+    "'following up on my last message').\n"
+    "- personal_date: a PERSONAL message mentioning a date, birthday, anniversary, appointment, "
+    "or upcoming personal event that should be remembered "
+    "('Mum's birthday is on the 15th', 'Our anniversary is next Friday', "
+    "'Dad's surgery is on the 20th', 'School concert is Tuesday'). "
+    "Classify this even if there is no direct question — the date itself is the action item.\n"
+    "- personal_task: a PERSONAL errand, task, or reminder request — something physical to do or "
+    "pick up, a booking, or a domestic reminder "
+    "('get Crocin and Vitamin C on the way home', 'pick up the dry cleaning', "
+    "'we need milk', 'book a table for Saturday night', 'pay the electricity bill').\n"
+    "- family_plan: a PERSONAL social plan or outing being proposed or confirmed — a family dinner, "
+    "movie, get-together, trip, or any casual shared activity with family or close friends "
+    "('Let's go to dinner Saturday at 8pm', 'Family lunch on Sunday at Mum's place', "
+    "'Movie tonight at 7?', 'Are you free Saturday evening?', "
+    "'We're all going to the beach Sunday morning'). "
+    "Distinguish from 'meeting' which is professional/work. "
+    "Classify as family_plan whenever the plan is social/personal, even if it mentions a date and time.\n"
     "- other: any other important client query that does not fit the above."
 )
+
+
+def base_priority(category: str) -> str:
+    """Default priority for a category before any time-based escalation."""
+    return _CATEGORY_PRIORITY.get(category, "normal")
+
+
+def max_priority(a: str, b: str) -> str:
+    """Return the more urgent of two priority levels."""
+    order = {level: i for i, level in enumerate(PRIORITIES)}
+    return a if order.get(a, 0) >= order.get(b, 0) else b
+
+
+def payment_reply_hint(payment_status: str | None) -> str:
+    """Drafting context for a payment reply, tailored to received vs overdue."""
+    if payment_status == "received":
+        return (
+            "The client says they have made a payment to us. Thank them, confirm you will verify "
+            "and acknowledge once it reflects. Do NOT confirm receipt as a fact yet."
+        )
+    return (
+        "The client is chasing a payment we owe or an unpaid/pending invoice. Acknowledge it, "
+        "apologise for any delay, and give a clear next step or timeline. Do NOT invent a date "
+        "you cannot honour."
+    )
+
+
+def complaint_priority(anger_level: str | None) -> str:
+    """A complaint is always urgent; the angrier the tone, the higher the level."""
+    if anger_level == "low":
+        return "very_high"
+    return "critical"
+
+
+def shipment_reply_hint(shipment_status: str | None) -> str:
+    """Drafting context for a shipment update reply, tailored to delay vs good news."""
+    if shipment_status == "delayed":
+        return (
+            "This is a delivery DELAY. Draft a proactive, reassuring update to send to the end "
+            "client BEFORE they have to ask — acknowledge the delay, give the revised "
+            "expectation if known, apologise for the inconvenience, and confirm you are tracking "
+            "it. Do NOT invent a new delivery date you cannot confirm."
+        )
+    return (
+        "This is a positive/neutral shipment update. Acknowledge it briefly and warmly and let "
+        "the client know things are on track / received — closing the loop for this shipment."
+    )
 
 _CLASSIFY_SYSTEM = (
     "You triage inbound WhatsApp messages from clients for a freelancer/agency. "
@@ -35,19 +173,145 @@ _CLASSIFY_SYSTEM = (
     "(set is_important=false, category=greeting). "
     "Important messages MUST be classified into exactly one category:\n"
     f"{_CATEGORY_GUIDE}\n"
+    "IMPORTANT CLASSIFICATION RULES:\n"
+    "- Classify by the UNDERLYING INTENT and meaning of the message, NOT by matching keywords. "
+    "The quoted phrases above are only illustrative examples — real messages will be worded very "
+    "differently, in any language, with typos, slang, abbreviations, voice-to-text errors, or "
+    "mixed languages. Infer what the client actually wants.\n"
+    "- Always map the message to the SINGLE best-fitting category from the list. Only use 'other' "
+    "when an important message genuinely does not fit any specific category — do not use it as a "
+    "lazy default.\n"
+    "- If a message carries more than one intent, choose the category with the highest stakes/"
+    "urgency (a complaint or payment outranks a routine question; an unhappy tone outranks "
+    "everything).\n"
+    "- Never invent facts; base the category only on what the message and history actually say.\n"
+    "- SPAM: if the message is clearly promotional, prize/lottery/offer spam, bulk broadcast, "
+    "or sent by an unknown number with no conversation history and no legitimate business intent, "
+    "set category='spam' and is_important=false. Never surface spam as an action item.\n"
+    "- LIFE LANE vs WORK LANE: this system has two lanes that feel completely different to the user. "
+    "WORK LANE (meeting, payment, lead, document, complaint, shipment, budget, scope, timeline, "
+    "follow_up, other) — these produce urgent chips with business tone, draft replies, and "
+    "follow-up timers. The tone is professional and action-driven. "
+    "LIFE LANE (personal_date, personal_task, family_plan) — these are messages from family or "
+    "close friends, not clients. They are GENUINELY IMPORTANT but NEVER URGENT. "
+    "They produce gentle reminders, calendar entries, and soft nudges — never red flags, never "
+    "business-style drafts, never action-driven language. The tone is always warm, caring, and "
+    "human. Priority is ALWAYS low — this is a hard rule with no exceptions. "
+    "A message about a family dinner is not less important than a payment message — it simply "
+    "belongs in a different world and must never feel like a work task.\n"
+    "- LANGUAGE: messages may arrive in ANY language (French, Arabic, Hindi, Spanish, Portuguese, "
+    "etc.) or mixed languages. First detect the language, understand the message natively, then "
+    "classify it into the SAME categories by intent. If the message is not in English, also "
+    "provide a faithful English translation in the 'translation' field; if it is already English, "
+    "set translation=null.\n"
     "Use the recent conversation history for context (e.g. a vague 'any update?' is follow_up "
-    "on the prior thread). "
+    "on the prior thread; a one-word 'yes' may confirm a meeting). "
+    "For category=payment, also set payment_status: 'received' when the client says THEY have "
+    "paid/transferred money to us, or 'overdue' when the client is chasing money WE owe or an "
+    "unpaid invoice. For any other category set payment_status=null. "
+    "For category=document, set document_type to the short name of the requested document "
+    "(e.g. 'invoice', 'price list', 'catalogue', 'shipping documents'); otherwise null. "
+    "For category=complaint, set anger_level to 'low', 'medium', or 'high' based on the tone "
+    "(strong frustration words, ALL CAPS, repeated-follow-up signals like 'third time' raise it); "
+    "otherwise null. "
+    "For category=shipment, set shipment_status: 'delayed' when it reports a delay/problem with "
+    "delivery, or 'good' for positive/neutral progress (cleared customs, out for delivery, goods "
+    "received); otherwise null. "
     "Respond ONLY with a JSON object with keys: "
     "is_important (boolean), category (one of "
     f"{', '.join(CATEGORIES)}, or 'greeting'), "
-    "language (the detected language name), summary (one short sentence describing the ask)."
+    "payment_status ('received', 'overdue', or null), "
+    "document_type (string or null), anger_level ('low', 'medium', 'high', or null), "
+    "shipment_status ('delayed', 'good', or null), "
+    "language (the detected language name), translation (English translation or null), "
+    "summary (one short sentence describing the ask), "
+    "confidence (integer 0-100 — how certain you are that your category is correct; "
+    "only use 80+ when the message unambiguously fits that category; "
+    "use lower values when the message is vague, ambiguous, or could fit multiple categories)."
 )
+
+def _corrections_block(corrections: list[dict]) -> str:
+    """Build a system-level memory block from past user corrections.
+
+    Each correction dict is expected to have:
+      - original_category (str)
+      - message_snippet (str | None)
+    """
+    if not corrections:
+        return ""
+    lines = [
+        "\n\nCORRECTION MEMORY — the user marked these past classifications as WRONG. "
+        "Study them carefully. NEVER repeat the same mistake:\n"
+    ]
+    for i, c in enumerate(corrections, 1):
+        snippet = (c.get("message_snippet") or "").strip()
+        if len(snippet) > 120:
+            snippet = snippet[:120].rstrip() + "..."
+        cat = c.get("original_category") or "unknown"
+        if snippet:
+            lines.append(
+                f"{i}. Message: \"{snippet}\" → was wrongly classified as \"{cat}\". "
+                f"Do not classify similar messages as \"{cat}\" without very high certainty."
+            )
+        else:
+            lines.append(
+                f"{i}. A message was wrongly classified as \"{cat}\". "
+                f"Be extra careful before assigning \"{cat}\"."
+            )
+    lines.append(
+        "\nThese corrections take priority over all other rules. "
+        "If in doubt — lower your confidence score rather than guessing."
+    )
+    return "\n".join(lines)
+
+
+def _forwarded_system() -> str:
+    return (
+        _CLASSIFY_SYSTEM
+        + "\n\nFORWARDED MESSAGE: This message was forwarded by the sender rather than written "
+        "by them. Apply this rule strictly: if the sender has NOT added their own personal text "
+        "(a direct question, request, or comment addressed to you), set category='forwarded' and "
+        "is_important=false — ignore the forwarded content entirely. "
+        "Only classify and surface the message if there is clear personal text from the sender "
+        "themselves in addition to the forwarded content "
+        "(e.g. 'Did you see this? Should we do this?' or 'FYI — can you check?'). "
+        "In that case, classify by the sender's personal intent, not by the forwarded content."
+    )
+
+
+def _group_system(user_names: list[str] | None) -> str:
+    names = ", ".join(user_names) if user_names else "the account owner"
+    return (
+        _CLASSIFY_SYSTEM
+        + "\n\nGROUP CHAT MODE: This message arrived in a WhatsApp GROUP, not a direct chat. "
+        "Apply STRICT filtering. Set group_relevant=true ONLY if the message directly involves "
+        f"the account owner ({names}) — i.e. they are directly mentioned/addressed by name, OR "
+        "there is a clear payment, meeting, or urgent request that directly involves them. "
+        "For all other group chatter (general discussion, news, banter, messages aimed at other "
+        "people), set group_relevant=false and is_important=false. "
+        "Also set addressed=true if the owner is directly named/mentioned, else false. "
+        "Add both keys 'group_relevant' (boolean) and 'addressed' (boolean) to the JSON."
+    )
+
 
 _REPLY_SYSTEM = (
     "You draft a concise, professional WhatsApp reply on behalf of a freelancer/agency to a "
-    "client. Reply in the SAME language as the client's message. Be warm but to the point. "
+    "client. ALWAYS write the reply in English — even when the client's message is in another "
+    "language. Be warm but to the point. "
     "Do not invent facts, prices, or commitments; if information is needed, ask for it or say "
-    "you will confirm shortly. Return ONLY the reply text, no preamble."
+    "you will confirm shortly. Return ONLY the reply text in English, no preamble."
+)
+
+_COMPLAINT_SYSTEM = (
+    "You draft a WhatsApp reply to an UNHAPPY client on behalf of a freelancer/agency. "
+    "ALWAYS write the reply in English — even when the client's message is in another language. "
+    "You MUST: "
+    "(1) acknowledge and empathise with the problem FIRST and take it seriously; "
+    "(2) apologise sincerely for the inconvenience; "
+    "(3) THEN offer a concrete next step or ask for the detail you need to resolve it. "
+    "Never be dismissive, defensive, or blame the client. Do not invent facts, refunds, or "
+    "commitments you cannot keep. Keep it calm, human, and reassuring. "
+    "Return ONLY the reply text in English, no preamble."
 )
 
 _MEETING_SYSTEM = (
@@ -55,10 +319,36 @@ _MEETING_SYSTEM = (
     "Use the provided current date/time to resolve relative phrases like 'tomorrow', 'next Monday', "
     "or 'at 3pm' into concrete ISO 8601 datetimes in the given timezone. "
     "Respond ONLY with a JSON object with keys: title (short meeting title), agenda (1-3 lines), "
+    "location (place, video link, or phone if mentioned, else null), "
     "start (ISO 8601 datetime with timezone offset if resolved, else null), "
-    "end (ISO 8601 datetime if given or inferable, else null). "
+    "end (ISO 8601 datetime if given or inferable, else null), "
+    "confirmed (true only if the client states a definite, agreed time; false if the plan is "
+    "tentative, proposed, or still being negotiated such as 'are you free?' or 'maybe Friday?'). "
     "If the client wants to meet but gives no specific time, set start and end to null."
 )
+
+
+def _is_english(language: str | None) -> bool:
+    if not language:
+        return True
+    return language.strip().lower() in ("english", "en", "en-us", "en-gb")
+
+
+def _language_context_block(language: str | None, translation: str | None) -> str:
+    """Give the drafter English context when the inbound message is not in English."""
+    if _is_english(language):
+        return ""
+    lines: list[str] = []
+    if language:
+        lines.append(f"The client's message is in {language}.")
+    if translation:
+        lines.append(f"English meaning: {translation}")
+    else:
+        lines.append(
+            "Understand the client's message (translate mentally if needed) and write your reply "
+            "in English."
+        )
+    return "\n".join(lines) + "\n\n"
 
 
 def _history_block(history: list[dict[str, str]]) -> str:
@@ -68,6 +358,8 @@ def _history_block(history: list[dict[str, str]]) -> str:
     for item in history:
         who = "Client" if item.get("direction") == "inbound" else "Me"
         text = (item.get("body") or "").strip()
+        if len(text) > WHATSAPP_CONTEXT_MESSAGE_MAX_CHARS:
+            text = text[:WHATSAPP_CONTEXT_MESSAGE_MAX_CHARS].rstrip() + "..."
         if text:
             lines.append(f"{who}: {text}")
     return "\n".join(lines) if lines else "(no prior messages)"
@@ -84,45 +376,302 @@ def _chat_json(system: str, user_content: str, *, max_tokens: int) -> dict[str, 
     return {}
 
 
-def classify_message(history: list[dict[str, str]], message: str) -> dict[str, Any]:
+def _silent_filter_result(label: str, language: str | None = None) -> dict[str, Any]:
+    """Canonical result shape for a silently discarded message (forwarded/spam/group)."""
+    return {
+        "is_important": False,
+        "category": label,
+        "lane": "work",
+        "priority": "low",
+        "confidence": None,
+        "payment_status": None,
+        "document_type": None,
+        "anger_level": None,
+        "shipment_status": None,
+        "language": language,
+        "translation": None,
+        "summary": None,
+    }
+
+
+def classify_message(
+    history: list[dict[str, str]],
+    message: str,
+    *,
+    is_group: bool = False,
+    is_forwarded: bool = False,
+    user_names: list[str] | None = None,
+    corrections: list[dict] | None = None,
+) -> dict[str, Any]:
+    if is_group:
+        system = _group_system(user_names)
+    elif is_forwarded:
+        system = _forwarded_system()
+    else:
+        system = _CLASSIFY_SYSTEM
+
+    if corrections:
+        system = system + _corrections_block(corrections)
+
+    context_tags: list[str] = []
+    if is_group:
+        context_tags.append("This message is from a GROUP chat.")
+    if is_forwarded:
+        context_tags.append("This message was FORWARDED by the sender.")
+    context_line = "\n".join(context_tags) + "\n\n" if context_tags else ""
+
     user_content = (
+        f"{context_line}"
         f"Recent conversation:\n{_history_block(history)}\n\n"
         f"New client message:\n{message}\n\n"
         "Classify this new message as JSON:"
     )
-    data = _chat_json(_CLASSIFY_SYSTEM, user_content, max_tokens=200)
+    data = _chat_json(system, user_content, max_tokens=220)
+
+    detected_language = (data.get("language") or "").strip() or None
+    category = str(data.get("category") or "greeting").strip().lower()
+
+    if category in FILTER_LABELS:
+        return _silent_filter_result(category, detected_language)
+
+    if is_group and not bool(data.get("group_relevant", False)):
+        return _silent_filter_result("group", detected_language)
 
     is_important = bool(data.get("is_important", False))
-    category = str(data.get("category") or "greeting").strip().lower()
+    if category in ALWAYS_IMPORTANT and category in CATEGORIES:
+        is_important = True
+    if is_group:
+        is_important = True
     if not is_important:
         category = "greeting"
     elif category not in CATEGORIES:
         category = "other"
+
+    payment_status = str(data.get("payment_status") or "").strip().lower() or None
+    if category != "payment":
+        payment_status = None
+    elif payment_status not in ("received", "overdue"):
+        payment_status = "overdue"
+
+    document_type = str(data.get("document_type") or "").strip() or None
+    if category != "document":
+        document_type = None
+
+    anger_level = str(data.get("anger_level") or "").strip().lower() or None
+    if category != "complaint":
+        anger_level = None
+    elif anger_level not in ("low", "medium", "high"):
+        anger_level = "high"
+
+    shipment_status = str(data.get("shipment_status") or "").strip().lower() or None
+    if category != "shipment":
+        shipment_status = None
+    elif shipment_status not in ("delayed", "good"):
+        shipment_status = "good"
+
+    language = (data.get("language") or "").strip() or None
+    translation = (data.get("translation") or "").strip() or None
+    if language and language.lower() in ("english", "en", "en-us", "en-gb"):
+        translation = None
+
+    priority = base_priority(category) if is_important else "low"
+    if is_group and is_important:
+        priority = max_priority(priority, "high")
+
+    raw_conf = data.get("confidence")
+    try:
+        confidence: int | None = max(0, min(100, int(raw_conf)))
+    except (TypeError, ValueError):
+        confidence = None
+
+    lane = "life" if category in LIFE_LANE_CATEGORIES else "work"
+
     return {
         "is_important": is_important,
         "category": category,
-        "language": (data.get("language") or "").strip() or None,
+        "lane": lane,
+        "priority": priority,
+        "confidence": confidence,
+        "payment_status": payment_status,
+        "document_type": document_type,
+        "anger_level": anger_level,
+        "shipment_status": shipment_status,
+        "language": language,
+        "translation": translation,
         "summary": (data.get("summary") or "").strip() or None,
     }
 
 
-def draft_reply(history: list[dict[str, str]], message: str, category: str) -> str:
-    category_hint = {
+def draft_reply(
+    history: list[dict[str, str]],
+    message: str,
+    category: str,
+    *,
+    context_hint: str | None = None,
+    language: str | None = None,
+    translation: str | None = None,
+) -> str:
+    category_hint = context_hint or {
         "budget": "The client is asking about budget/pricing. Acknowledge and indicate next step.",
         "scope": "The client is asking about scope/requirements. Clarify or confirm details.",
         "timeline": "The client is asking about timeline. Confirm or propose dates.",
         "follow_up": "The client is following up. Acknowledge and give a status or next step.",
         "other": "Respond helpfully to the client's query.",
         "meeting": "The client wants to meet. Acknowledge and confirm a time or propose options.",
+        "lead": (
+            "This is a NEW lead/inquiry. Reply professionally and warmly as a first impression, "
+            "thank them for reaching out, briefly invite the key detail you need (e.g. quantity, "
+            "requirement) and signal you can share a catalogue/quote."
+        ),
+        "payment": "The client's message is about a payment. Acknowledge it clearly.",
+        "document": (
+            "The client has requested a specific document/information. Acknowledge the request "
+            "and confirm you will send it shortly; if anything is needed to send it, ask briefly."
+        ),
+        "shipment": (
+            "This is a shipment/delivery update. Acknowledge it appropriately and keep the client "
+            "informed."
+        ),
+        "greeting": (
+            "This is a casual/greeting message — there is no task to action. Reply warmly and "
+            "briefly in a friendly tone that matches the client's message (including festival or "
+            "well-wishing greetings). Keep it to one or two short sentences."
+        ),
     }.get(category, "Respond helpfully to the client's query.")
 
+    lang_block = _language_context_block(language, translation)
     user_content = (
+        f"{lang_block}"
         f"Recent conversation:\n{_history_block(history)}\n\n"
         f"Client's latest message:\n{message}\n\n"
         f"Context: {category_hint}\n\n"
-        "Write the reply text:"
+        "Write the reply text in English:"
     )
-    return _chat(_REPLY_SYSTEM, user_content, max_tokens=400, json_mode=False).strip()
+    return _chat(_REPLY_SYSTEM, user_content, max_tokens=160, json_mode=False).strip()
+
+
+def draft_complaint_reply(
+    history: list[dict[str, str]],
+    message: str,
+    anger_level: str | None = None,
+    *,
+    language: str | None = None,
+    translation: str | None = None,
+) -> str:
+    """Draft an empathetic reply to an unhappy client (acknowledge first, then resolve)."""
+    tone = {
+        "high": "The client is very angry. Lead with sincere empathy and a clear apology.",
+        "medium": "The client is frustrated. Acknowledge the frustration and apologise.",
+        "low": "The client is mildly unhappy. Acknowledge the issue warmly.",
+    }.get(anger_level or "high", "Acknowledge the issue and apologise sincerely.")
+
+    lang_block = _language_context_block(language, translation)
+    user_content = (
+        f"{lang_block}"
+        f"Recent conversation:\n{_history_block(history)}\n\n"
+        f"Client's latest message:\n{message}\n\n"
+        f"Tone guidance: {tone}\n\n"
+        "Write the empathetic reply text in English (acknowledge the problem first, then a next step):"
+    )
+    return _chat(_COMPLAINT_SYSTEM, user_content, max_tokens=180, json_mode=False).strip()
+
+
+_PERSONAL_DATE_SYSTEM = (
+    "You extract a personal date or upcoming event from a WhatsApp message. "
+    "Use the provided current date/time to resolve relative phrases like 'next Friday', "
+    "'on the 15th', 'tomorrow', 'in two weeks' into concrete ISO 8601 dates in the given timezone. "
+    "Respond ONLY with a JSON object with keys: "
+    "event_label (short description of what the date is for, e.g. 'Mum birthday', "
+    "'Wedding anniversary', 'Dad surgery', 'School concert'), "
+    "date (ISO 8601 date string YYYY-MM-DD if resolved, else null), "
+    "reminder_title (a natural calendar event title, e.g. 'Remember: Mum birthday'), "
+    "notes (any extra context from the message, or null)."
+)
+
+_PERSONAL_TASK_SYSTEM = (
+    "You extract a personal errand, task, or to-do from a WhatsApp message. "
+    "Respond ONLY with a JSON object with keys: "
+    "task_summary (concise one-line description of what needs to be done, "
+    "e.g. 'Buy Crocin and Vitamin C on the way home', 'Pick up dry cleaning', "
+    "'Book table for Saturday night'), "
+    "items (list of specific items/things if the task involves picking something up, else []), "
+    "timing_hint (any timing context like 'on the way home', 'before Saturday', or null)."
+)
+
+
+def extract_personal_date(message: str) -> dict[str, Any]:
+    """Extract a personal date/event and resolve it to a concrete date."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
+    user_content = (
+        f"Current date/time: {now.isoformat()} ({CALENDAR_DEFAULT_TIMEZONE})\n\n"
+        f"Message:\n{message}\n\n"
+        "Extract the personal date as JSON:"
+    )
+    data = _chat_json(_PERSONAL_DATE_SYSTEM, user_content, max_tokens=140)
+    return {
+        "event_label": (data.get("event_label") or "").strip() or "Personal date",
+        "date": (data.get("date") or "").strip() or None,
+        "reminder_title": (
+            (data.get("reminder_title") or "").strip()
+            or f"Remember: {(data.get('event_label') or 'personal date').strip()}"
+        ),
+        "notes": (data.get("notes") or "").strip() or None,
+    }
+
+
+def extract_personal_task(message: str) -> dict[str, Any]:
+    """Extract a personal errand or task description."""
+    user_content = (
+        f"Message:\n{message}\n\n"
+        "Extract the personal task as JSON:"
+    )
+    data = _chat_json(_PERSONAL_TASK_SYSTEM, user_content, max_tokens=120)
+    items = data.get("items") or []
+    if not isinstance(items, list):
+        items = []
+    return {
+        "task_summary": (data.get("task_summary") or "").strip() or message.strip()[:120],
+        "items": [str(i).strip() for i in items if str(i).strip()],
+        "timing_hint": (data.get("timing_hint") or "").strip() or None,
+    }
+
+
+_FAMILY_PLAN_SYSTEM = (
+    "You extract a personal social plan or family outing from a WhatsApp message. "
+    "Use the provided current date/time to resolve relative phrases like 'tonight', 'Saturday', "
+    "'next Sunday', 'this weekend' into concrete ISO 8601 dates in the given timezone. "
+    "Respond ONLY with a JSON object with keys: "
+    "event_label (short human-readable title for the event, e.g. 'Family dinner', "
+    "'Movie night', 'Sunday lunch at Mum's'), "
+    "date (ISO 8601 date string YYYY-MM-DD if resolved, else null), "
+    "time (HH:MM 24-hour string if mentioned, else null), "
+    "place (venue or location if mentioned, else null), "
+    "confirmed (true if the plan is confirmed/agreed, false if it is still a proposal or question)."
+)
+
+
+def extract_family_plan(message: str) -> dict[str, Any]:
+    """Extract a personal social event from a message and resolve the date/time."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
+    user_content = (
+        f"Current date/time: {now.isoformat()} ({CALENDAR_DEFAULT_TIMEZONE})\n\n"
+        f"Message:\n{message}\n\n"
+        "Extract the family plan as JSON:"
+    )
+    data = _chat_json(_FAMILY_PLAN_SYSTEM, user_content, max_tokens=140)
+    return {
+        "event_label": (data.get("event_label") or "").strip() or "Family plan",
+        "date": (data.get("date") or "").strip() or None,
+        "time": (data.get("time") or "").strip() or None,
+        "place": (data.get("place") or "").strip() or None,
+        "confirmed": bool(data.get("confirmed", False)),
+    }
 
 
 def extract_meeting(history: list[dict[str, str]], message: str) -> dict[str, Any]:
@@ -136,12 +685,14 @@ def extract_meeting(history: list[dict[str, str]], message: str) -> dict[str, An
         f"Client's latest message:\n{message}\n\n"
         "Extract meeting details as JSON:"
     )
-    data = _chat_json(_MEETING_SYSTEM, user_content, max_tokens=300)
+    data = _chat_json(_MEETING_SYSTEM, user_content, max_tokens=220)
     return {
         "title": (data.get("title") or "").strip() or "Meeting with client",
         "agenda": (data.get("agenda") or "").strip() or None,
+        "location": (data.get("location") or "").strip() or None,
         "start": (data.get("start") or None),
         "end": (data.get("end") or None),
+        "confirmed": bool(data.get("confirmed", False)),
     }
 
 

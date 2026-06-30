@@ -259,7 +259,10 @@ class WhatsAppContact(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     wa_id: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
     profile_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # "personal" | "work" | None — set explicitly or auto-inferred from Life Lane messages.
+    contact_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     last_inbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_replied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -292,6 +295,8 @@ class WhatsAppMessage(Base):
     )
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
     msg_type: Mapped[str] = mapped_column(String(30), default="text", nullable=False)
+    is_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_forwarded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     media_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str | None] = mapped_column(String(30), nullable=True)
@@ -306,7 +311,9 @@ class WhatsAppMessage(Base):
     classified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_important: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     category: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    priority: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     language: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    translation: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     contact: Mapped["WhatsAppContact"] = relationship(
@@ -331,6 +338,11 @@ class WhatsAppSuggestion(Base):
     )
     kind: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    priority: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    # "work" | "life" — determines rendering lane in the UI.
+    lane: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    # LLM self-reported confidence (0-100). Chips below WHATSAPP_CHIP_CONFIDENCE_MIN are not shown.
+    confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
     draft_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -346,6 +358,44 @@ class WhatsAppSuggestion(Base):
     )
 
     contact: Mapped["WhatsAppContact"] = relationship("WhatsAppContact")
+
+
+class WhatsAppFeedback(Base):
+    """Stores every correction the user makes so the classifier can learn from them.
+
+    feedback_type values:
+      - "wrong"     — chip was shown for the wrong category / wrong reason
+      - "helpful"   — chip was exactly right (positive signal)
+      - "dismissed" — chip was not actioned (neutral, lower signal than "wrong")
+    """
+
+    __tablename__ = "whatsapp_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    suggestion_id: Mapped[int | None] = mapped_column(
+        ForeignKey("whatsapp_suggestions.id"),
+        nullable=True,
+        index=True,
+    )
+    contact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("whatsapp_contacts.id"),
+        nullable=True,
+        index=True,
+    )
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("whatsapp_messages.id"),
+        nullable=True,
+    )
+    feedback_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    original_category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    original_confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # First 300 chars of the original message — stored so the LLM can learn from the exact text.
+    message_snippet: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
 
 
 class AnandSandeshSubscription(Base):

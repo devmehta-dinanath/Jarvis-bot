@@ -1,869 +1,777 @@
 {
   "info": {
-    "_postman_id": "jarvis-bot-be-verify-db",
-    "name": "Jarvis Bot BE — DB Verification",
-    "description": "Verify SQLite + Chroma data: totals, OCR per frame, last N frames, chunks, embeddings, and OpenAI activity summaries.\n\n**Setup:** Import → set `base_url` (http://127.0.0.1:8000) and `recording_id` (usually 1). Set `OPENAI_API_KEY` in server `.env` for summaries.\n\n**Start here:** folder **0. Pipeline Dashboard** → `Pipeline Stats (all)` or `Recording Stats (last 5 frames)`.\n\n**Summaries:** folder **6. Activity Summaries** — requires `OPENAI_API_KEY` + activity chunks with OCR text.\n\nOpen Postman Console (View → Show Postman Console) to see printed totals.",
+    "_postman_id": "9b7a95d2-7f57-4f93-8757-jarvis-bot-be",
+    "name": "jarvis-bot-be API",
+    "description": "Postman collection for the Jarvis backend. Set the collection variables before running requests. Most endpoints do not require auth, but WhatsApp webhook verification/signature and Google Calendar OAuth depend on external service setup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    {
-      "key": "base_url",
-      "value": "http://127.0.0.1:8000"
-    },
-    {
-      "key": "recording_id",
-      "value": "1"
-    },
-    {
-      "key": "chunk_id",
-      "value": "1"
-    },
-    {
-      "key": "category",
-      "value": "code"
-    },
-    {
-      "key": "search_query",
-      "value": "terminal docker"
-    },
-    {
-      "key": "summary_date",
-      "value": "2026-06-11"
-    }
+    { "key": "base_url", "value": "http://127.0.0.1:8000" },
+    { "key": "recording_id", "value": "1" },
+    { "key": "chunk_id", "value": "1" },
+    { "key": "highlight_id", "value": "1" },
+    { "key": "calendar_event_id", "value": "primary" },
+    { "key": "wa_id", "value": "15551234567" },
+    { "key": "contact_id", "value": "1" },
+    { "key": "suggestion_id", "value": "1" },
+    { "key": "google_oauth_code", "value": "paste-google-oauth-code-here" },
+    { "key": "wa_verify_token", "value": "your-webhook-verify-token" },
+    { "key": "wa_webhook_challenge", "value": "challenge-token" },
+    { "key": "wa_signature", "value": "sha256=replace-with-meta-signature" }
   ],
   "item": [
     {
-      "name": "0. Pipeline Dashboard (START HERE)",
+      "name": "Core",
       "item": [
         {
-          "name": "Pipeline Stats — ALL totals + last 5 frames each",
+          "name": "Health",
           "request": {
             "method": "GET",
-            "header": [],
+            "url": "{{base_url}}/health"
+          }
+        },
+        {
+          "name": "Services Status",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/services/status"
+          }
+        },
+        {
+          "name": "Pipeline Stats",
+          "request": {
+            "method": "GET",
             "url": {
               "raw": "{{base_url}}/api/v1/pipeline/stats?recent_frames=5",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "pipeline", "stats"],
-              "query": [{ "key": "recent_frames", "value": "5" }]
-            },
-            "description": "One call: total frames, OCR counts, activity chunks by category, Chroma embedding count, and last 5 frames with paddle/screenpipe OCR previews per recording."
-          },
+              "query": [
+                { "key": "recent_frames", "value": "5" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Recordings",
+      "item": [
+        {
+          "name": "List Recordings",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/recordings"
+          }
+        },
+        {
+          "name": "Create Recording",
           "event": [
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
-                  "const j = pm.response.json();",
-                  "console.log('=== PIPELINE DASHBOARD ===');",
-                  "console.log('database:', j.database);",
-                  "console.log('chroma_embeddings:', j.chroma_embeddings);",
-                  "console.log('chroma_path:', j.chroma_path);",
-                  "(j.recordings || []).forEach(r => {",
-                  "  console.log(`\\n--- recording ${r.recording_id}: ${r.title} ---`);",
-                  "  console.log('total_frames:', r.total_frames);",
-                  "  console.log('ocr_done:', r.ocr_done, '| queued:', r.ocr_queued, '| failed:', r.ocr_failed);",
-                  "  console.log('activity_processed:', r.activity_processed, '| pending:', r.activity_pending);",
-                  "  console.log('images_on_disk:', r.images_on_disk);",
-                  "  console.log('activity_chunks_total:', r.activity_chunks_total);",
-                  "  (r.activity_chunks_by_category || []).forEach(c => console.log(`  category ${c.category}: ${c.count}`));",
-                  "  console.log('recent_frames:');",
-                  "  (r.recent_frames || []).forEach(f => console.log(",
-                  "    `  frame ${f.frame_index} id=${f.id} ocr=${f.ocr_status} paddle=${f.paddle_chars} screenpipe=${f.screenpipe_chars} img=${f.image_on_disk}`",
-                  "  ));",
-                  "});"
-                ],
-                "type": "text/javascript"
+                  "const data = pm.response.json();",
+                  "if (data && data.id) pm.collectionVariables.set('recording_id', String(data.id));"
+                ]
               }
             }
-          ]
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Demo recording\",\n  \"status\": \"queued\",\n  \"source\": \"screen\",\n  \"notes\": \"Created from Postman\",\n  \"source_video_path\": \"/tmp/demo.mp4\",\n  \"capture_command\": null\n}"
+            },
+            "url": "{{base_url}}/api/v1/recordings"
+          }
         },
         {
-          "name": "Recording Stats — last 5 frames + OCR text",
+          "name": "Start Recording Pipeline",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data && data.id) pm.collectionVariables.set('recording_id', String(data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Queued pipeline job\",\n  \"source\": \"screen\",\n  \"notes\": \"Run async pipeline job\",\n  \"source_video_path\": \"/tmp/demo.mp4\",\n  \"capture_command\": null,\n  \"frame_interval_seconds\": 1.0\n}"
+            },
+            "url": "{{base_url}}/api/v1/recordings/start"
+          }
+        },
+        {
+          "name": "Get Recording",
           "request": {
             "method": "GET",
-            "header": [],
+            "url": "{{base_url}}/api/v1/recordings/{{recording_id}}"
+          }
+        },
+        {
+          "name": "Get Recording Frames",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/recordings/{{recording_id}}/frames"
+          }
+        },
+        {
+          "name": "Recording Pipeline Stats",
+          "request": {
+            "method": "GET",
             "url": {
               "raw": "{{base_url}}/api/v1/recordings/{{recording_id}}/pipeline/stats?recent_frames=5",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "recordings", "{{recording_id}}", "pipeline", "stats"],
-              "query": [{ "key": "recent_frames", "value": "5" }]
-            },
-            "description": "Per-recording dashboard. Change recent_frames=10 for last 10 frames. Each frame includes paddle_preview and screenpipe_preview (first 200 chars)."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const r = pm.response.json();",
-                  "console.log('total_frames:', r.total_frames);",
-                  "console.log('ocr_done:', r.ocr_done, '/', r.total_frames);",
-                  "console.log('chunks:', r.activity_chunks_total, '| chroma:', r.chroma_embeddings);",
-                  "(r.recent_frames || []).forEach(f => {",
-                  "  console.log(`\\nFrame ${f.frame_index} (id=${f.id})`);",
-                  "  console.log('  app:', f.app_name, '| ocr:', f.ocr_status, '| activity:', f.activity_status);",
-                  "  console.log('  paddle_chars:', f.paddle_chars, '| screenpipe_chars:', f.screenpipe_chars);",
-                  "  console.log('  paddle:', f.paddle_preview);",
-                  "  console.log('  screenpipe:', f.screenpipe_preview);",
-                  "});"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "Recording Stats — last 10 frames",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/recordings/{{recording_id}}/pipeline/stats?recent_frames=10",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "recordings", "{{recording_id}}", "pipeline", "stats"],
-              "query": [{ "key": "recent_frames", "value": "10" }]
+              "query": [
+                { "key": "recent_frames", "value": "5" }
+              ]
             }
           }
-        }
-      ]
-    },
-    {
-      "name": "1. Health & Services",
-      "item": [
-        {
-          "name": "Health Check",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/health"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('API is up', () => pm.response.to.have.status(200));",
-                  "const j = pm.response.json();",
-                  "console.log('status:', j.status);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
         },
         {
-          "name": "Services Status (capture, OCR, vector count)",
+          "name": "Update Recording",
           "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/services/status"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const j = pm.response.json();",
-                  "console.log('screenpipe running:', j.screenpipe?.running);",
-                  "console.log('OCR running:', j.paddle_ocr?.running);",
-                  "console.log('activity running:', j.activity?.running);",
-                  "console.log('summary enabled:', j.summary?.enabled);",
-                  "console.log('summary worker:', j.summary?.worker_running);",
-                  "console.log('summary tokens today:', j.summary?.daily_prompt_tokens, '/', j.summary?.daily_completion_tokens);",
-                  "console.log('Chroma embeddings count:', j.vector?.count);",
-                  "console.log('hint:', j.hint);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "2. Recordings (SQLite)",
-      "item": [
-        {
-          "name": "List All Recordings",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/recordings"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const rows = pm.response.json();",
-                  "console.log('recordings count:', rows.length);",
-                  "rows.forEach(r => console.log(",
-                  "  `id=${r.id} total_frames=${r.total_frames} ocr_done=${r.ocr_completed_frames} processed=${r.processed_frames} status=${r.status}`",
-                  "));",
-                  "if (rows.length) pm.collectionVariables.set('recording_id', String(rows[0].id));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "Get Recording Detail (+ all frames)",
-          "request": {
-            "method": "GET",
-            "header": [],
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Updated recording title\",\n  \"notes\": \"Updated via Postman\",\n  \"status\": \"processing\"\n}"
+            },
             "url": "{{base_url}}/api/v1/recordings/{{recording_id}}"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const r = pm.response.json();",
-                  "console.log('recording_id:', r.id);",
-                  "console.log('total_frames:', r.total_frames);",
-                  "console.log('ocr_completed_frames:', r.ocr_completed_frames);",
-                  "console.log('processed_frames:', r.processed_frames);",
-                  "console.log('frames in response:', (r.frames || []).length);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "3. Frames & OCR Text (SQLite)",
-      "item": [
-        {
-          "name": "List Frames for Recording",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/recordings/{{recording_id}}/frames"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const frames = pm.response.json();",
-                  "const done = frames.filter(f => f.ocr_status === 'done');",
-                  "const withPaddle = frames.filter(f => f.ocr_text && f.ocr_text.length > 0);",
-                  "const withScreenpipe = frames.filter(f => f.screenpipe_ocr_text && f.screenpipe_ocr_text.length > 0);",
-                  "const processed = frames.filter(f => f.activity_status === 'processed');",
-                  "console.log('total frames:', frames.length);",
-                  "console.log('ocr done:', done.length);",
-                  "console.log('with paddle ocr_text:', withPaddle.length);",
-                  "console.log('with screenpipe ocr_text:', withScreenpipe.length);",
-                  "console.log('activity processed:', processed.length);",
-                  "if (frames.length) {",
-                  "  const last = frames[frames.length - 1];",
-                  "  pm.collectionVariables.set('frame_id', String(last.id));",
-                  "  console.log('latest frame:', last.id, 'index', last.frame_index);",
-                  "  console.log('paddle chars:', (last.ocr_text || '').length);",
-                  "  console.log('screenpipe chars:', (last.screenpipe_ocr_text || '').length);",
-                  "  console.log('paddle preview:', (last.ocr_text || '').slice(0, 120));",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
+          }
         },
         {
-          "name": "Get Latest Frame OCR (from recording detail)",
+          "name": "Delete Recording",
           "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/recordings/{{recording_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "recordings", "{{recording_id}}"]
-            },
-            "description": "Open response → frames[] → check ocr_text, screenpipe_ocr_text, ocr_status, activity_status per frame."
+            "method": "DELETE",
+            "url": "{{base_url}}/api/v1/recordings/{{recording_id}}"
           }
         }
       ]
     },
     {
-      "name": "4. Activity Chunks (SQLite)",
+      "name": "Activity",
       "item": [
         {
-          "name": "List Chunks — total count",
+          "name": "List Activity Chunks",
           "request": {
             "method": "GET",
-            "header": [],
             "url": {
-              "raw": "{{base_url}}/api/v1/activity/chunks?limit=5&offset=0",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "activity", "chunks"],
-              "query": [
-                { "key": "limit", "value": "5" },
-                { "key": "offset", "value": "0" }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const j = pm.response.json();",
-                  "console.log('TOTAL chunks in SQLite:', j.total);",
-                  "console.log('returned items:', j.items.length);",
-                  "if (j.items.length) {",
-                  "  pm.collectionVariables.set('chunk_id', String(j.items[0].id));",
-                  "  j.items.forEach(c => console.log(`chunk ${c.id} category=${c.category} frames=${c.frame_count} chars=${(c.cleaned_text||'').length}`));",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "List Chunks — filter by category",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/activity/chunks?category={{category}}&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "activity", "chunks"],
-              "query": [
-                { "key": "category", "value": "{{category}}" },
-                { "key": "limit", "value": "10" }
-              ]
-            },
-            "description": "Categories: code, meetings, email, browsing, documents, messages, linkedin, social, shopping, video, calendar, other"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const j = pm.response.json();",
-                  "console.log(`category=${pm.collectionVariables.get('category')} total=${j.total}`);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "List Chunks — filter by recording_id",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/activity/chunks?recording_id={{recording_id}}&limit=10",
+              "raw": "{{base_url}}/api/v1/activity/chunks?recording_id={{recording_id}}&category=meetings&limit=100&offset=0",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "activity", "chunks"],
               "query": [
                 { "key": "recording_id", "value": "{{recording_id}}" },
-                { "key": "limit", "value": "10" }
+                { "key": "category", "value": "meetings" },
+                { "key": "limit", "value": "100" },
+                { "key": "offset", "value": "0" }
               ]
             }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const j = pm.response.json();",
-                  "console.log(`recording ${pm.collectionVariables.get('recording_id')} chunks total=${j.total}`);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
+          }
         },
         {
-          "name": "List Chunks — recording + category",
+          "name": "Get Activity Chunk",
           "request": {
             "method": "GET",
-            "header": [],
+            "url": "{{base_url}}/api/v1/activity/chunks/{{chunk_id}}"
+          }
+        },
+        {
+          "name": "Get Recording Activity Chunks",
+          "request": {
+            "method": "GET",
             "url": {
-              "raw": "{{base_url}}/api/v1/recordings/{{recording_id}}/activity/chunks?category={{category}}&limit=10",
+              "raw": "{{base_url}}/api/v1/recordings/{{recording_id}}/activity/chunks?category=meetings&limit=100&offset=0",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "recordings", "{{recording_id}}", "activity", "chunks"],
               "query": [
-                { "key": "category", "value": "{{category}}" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Get Single Chunk (full cleaned_text)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/activity/chunks/{{chunk_id}}"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const c = pm.response.json();",
-                  "console.log('chunk_id:', c.id);",
-                  "console.log('category:', c.category);",
-                  "console.log('app:', c.app_name);",
-                  "console.log('frame_count:', c.frame_count);",
-                  "console.log('frame_ids:', c.frame_ids);",
-                  "console.log('cleaned_text chars:', (c.cleaned_text || '').length);",
-                  "console.log('preview:', (c.cleaned_text || '').slice(0, 200));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "5. Chroma Embeddings (Vector DB)",
-      "item": [
-        {
-          "name": "Vector Stats (total + sample)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/vector/stats"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const j = pm.response.json();",
-                  "console.log('Chroma enabled:', j.enabled);",
-                  "console.log('Chroma ready:', j.ready);",
-                  "console.log('TOTAL embeddings:', j.count);",
-                  "console.log('collection:', j.collection);",
-                  "console.log('path:', j.path);",
-                  "(j.sample || []).forEach(s => console.log(s.id, s.category, s.preview));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "List Embeddings — total count",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/vector/embeddings?limit=5&offset=0",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "vector", "embeddings"],
-              "query": [
-                { "key": "limit", "value": "5" },
+                { "key": "category", "value": "meetings" },
+                { "key": "limit", "value": "100" },
                 { "key": "offset", "value": "0" }
               ]
             }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const j = pm.response.json();",
-                  "console.log('TOTAL embeddings in Chroma:', j.total);",
-                  "console.log('returned:', j.items.length);",
-                  "j.items.forEach(e => console.log(",
-                  "  `${e.id} cat=${e.category} paddle=${e.paddle_chars} screenpipe=${e.screenpipe_chars} merged=${e.merged_chars}`",
-                  "));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "List Embeddings — filter by category",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/vector/embeddings?category={{category}}&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "vector", "embeddings"],
-              "query": [
-                { "key": "category", "value": "{{category}}" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const j = pm.response.json();",
-                  "console.log(`embeddings category=${pm.collectionVariables.get('category')} total=${j.total}`);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "List Embeddings — filter by recording_id",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/vector/embeddings?recording_id={{recording_id}}&limit=10",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "vector", "embeddings"],
-              "query": [
-                { "key": "recording_id", "value": "{{recording_id}}" },
-                { "key": "limit", "value": "10" }
-              ]
-            }
           }
         },
         {
-          "name": "List All Categories",
+          "name": "Classify Recording Activity",
           "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/vector/categories"
-          }
-        },
-        {
-          "name": "Semantic Search (test embeddings work)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/vector/search?query={{search_query}}&limit=5",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "vector", "search"],
-              "query": [
-                { "key": "query", "value": "{{search_query}}" },
-                { "key": "limit", "value": "5" }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const j = pm.response.json();",
-                  "console.log('search hits:', j.count);",
-                  "(j.results || []).forEach(r => console.log(r.similarity, r.metadata?.category, r.document?.slice(0, 80)));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "Semantic Search — with category filter",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/vector/search?query={{search_query}}&category={{category}}&limit=5",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "vector", "search"],
-              "query": [
-                { "key": "query", "value": "{{search_query}}" },
-                { "key": "category", "value": "{{category}}" },
-                { "key": "limit", "value": "5" }
-              ]
-            }
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/recordings/{{recording_id}}/activity/classify"
           }
         }
       ]
     },
     {
-      "name": "6. Activity Summaries (OpenAI OCR)",
+      "name": "Summaries",
       "item": [
         {
-          "name": "Summary Stats (tokens)",
+          "name": "List Summaries",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/summaries/stats",
-            "description": "OpenAI summary worker status and today's token counts. Requires OPENAI_API_KEY in server .env."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const j = pm.response.json();",
-                  "console.log('=== SUMMARY STATS ===');",
-                  "console.log('enabled:', j.enabled);",
-                  "console.log('worker_running:', j.worker_running);",
-                  "console.log('model:', j.model);",
-                  "console.log('tokens in/out:', j.daily_prompt_tokens, '/', j.daily_completion_tokens);",
-                  "console.log('tokens_date:', j.tokens_date);",
-                  "console.log('last_seen_date:', j.last_seen_date);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "List Hourly Summaries — by date",
-          "request": {
-            "method": "GET",
-            "header": [],
             "url": {
-              "raw": "{{base_url}}/api/v1/summaries?period_type=hourly&date={{summary_date}}&limit=50",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "summaries"],
-              "query": [
-                { "key": "period_type", "value": "hourly" },
-                { "key": "date", "value": "{{summary_date}}" },
-                { "key": "limit", "value": "50" }
-              ]
-            },
-            "description": "Hourly summaries for a local calendar day (CALENDAR_DEFAULT_TIMEZONE). Set summary_date collection variable."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "const j = pm.response.json();",
-                  "console.log('hourly summaries total:', j.total);",
-                  "j.items.forEach(s => console.log(",
-                  "  `${s.status} ${s.period_start} → ${s.period_end} | chunks=${s.chunk_count} | ${s.summary_text.slice(0, 120)}…`",
-                  "));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "List Daily Summaries — by date",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/summaries?period_type=daily&date={{summary_date}}&limit=10",
+              "raw": "{{base_url}}/api/v1/summaries?period_type=daily&limit=50&offset=0",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "summaries"],
               "query": [
                 { "key": "period_type", "value": "daily" },
-                { "key": "date", "value": "{{summary_date}}" },
-                { "key": "limit", "value": "10" }
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
               ]
             }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const j = pm.response.json();",
-                  "console.log('daily summaries total:', j.total);",
-                  "j.items.forEach(s => console.log(s.summary_text));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
+          }
         },
         {
-          "name": "Latest Daily Summary",
+          "name": "Latest Summary",
           "request": {
             "method": "GET",
-            "header": [],
             "url": {
               "raw": "{{base_url}}/api/v1/summaries/latest?period_type=daily",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "summaries", "latest"],
-              "query": [{ "key": "period_type", "value": "daily" }]
-            },
-            "description": "Most recent daily summary (shown on startup when date changes)."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 404) {",
-                  "  console.log('No daily summary yet — need hourly summaries first');",
-                  "} else {",
-                  "  const s = pm.response.json();",
-                  "  console.log('daily summary:', s.summary_text);",
-                  "  console.log('period:', s.period_start, '→', s.period_end);",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
+              "query": [
+                { "key": "period_type", "value": "daily" }
+              ]
             }
-          ]
+          }
         },
         {
-          "name": "Latest Hourly Summary",
+          "name": "Pending Summary Days",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/summaries/latest?period_type=hourly",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "summaries", "latest"],
-              "query": [{ "key": "period_type", "value": "hourly" }]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 404) {",
-                  "  console.log('No hourly summary yet');",
-                  "} else {",
-                  "  const s = pm.response.json();",
-                  "  console.log('status:', s.status);",
-                  "  console.log('summary:', s.summary_text);",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
+            "url": "{{base_url}}/api/v1/summaries/pending"
+          }
         },
         {
-          "name": "Pending Summaries (unsummarized OCR chunks)",
+          "name": "Summary Stats",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/summaries/pending",
-            "description": "Hours with activity chunks that have OCR text but no summary yet."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const j = pm.response.json();",
-                  "console.log('pending hour periods:', j.items.length);",
-                  "j.items.forEach(p => console.log(",
-                  "  `${p.period_start} → ${p.period_end} | unsummarized_chunks=${p.unsummarized_chunk_count}`",
-                  "));"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
+            "url": "{{base_url}}/api/v1/summaries/stats"
+          }
         },
         {
-          "name": "Generate Hourly Summary (manual — previous hour)",
+          "name": "Generate Summary",
           "request": {
             "method": "POST",
-            "header": [],
             "url": {
-              "raw": "{{base_url}}/api/v1/summaries/generate?period_type=hourly",
+              "raw": "{{base_url}}/api/v1/summaries/generate?period_start=2026-06-28T00:00:00",
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "summaries", "generate"],
-              "query": [{ "key": "period_type", "value": "hourly" }]
-            },
-            "description": "Manually trigger hourly summary for previous clock hour. Uses OCR text from activity_chunks. Costs OpenAI tokens."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 503) {",
-                  "  console.log('Summary disabled — set OPENAI_API_KEY in .env');",
-                  "} else if (pm.response.code === 404) {",
-                  "  console.log('Nothing to summarize for that period');",
-                  "} else {",
-                  "  const s = pm.response.json();",
-                  "  console.log('generated hourly:', s.summary_text);",
-                  "  console.log('tokens:', s.prompt_tokens, '/', s.completion_tokens);",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
+              "query": [
+                { "key": "period_start", "value": "2026-06-28T00:00:00" }
+              ]
             }
-          ]
-        },
-        {
-          "name": "Generate Daily Summary (manual — yesterday)",
-          "request": {
-            "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/summaries/generate?period_type=daily",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "summaries", "generate"],
-              "query": [{ "key": "period_type", "value": "daily" }]
-            },
-            "description": "Manually trigger daily summary from saved hourly summaries for yesterday."
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 404) {",
-                  "  console.log('No hourly summaries for yesterday yet');",
-                  "} else {",
-                  "  const s = pm.response.json();",
-                  "  console.log('generated daily:', s.summary_text);",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
+          }
         }
       ]
     },
     {
-      "name": "7. Full Verification Run",
+      "name": "Vector",
       "item": [
         {
-          "name": "RUN ALL CHECKS (use Collection Runner)",
+          "name": "Vector Stats",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": "{{base_url}}/api/v1/services/status",
-            "description": "Run the whole collection with Postman Collection Runner.\n\nCompare these totals — they should be close:\n- recordings[].total_frames\n- activity/chunks → total\n- vector/stats → count\n- vector/embeddings → total\n\nFrames with ocr_status=done should equal ocr_completed_frames on recording."
-          },
+            "url": "{{base_url}}/api/v1/vector/stats"
+          }
+        },
+        {
+          "name": "List Embeddings",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/vector/embeddings?recording_id={{recording_id}}&category=meetings&limit=100&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vector", "embeddings"],
+              "query": [
+                { "key": "recording_id", "value": "{{recording_id}}" },
+                { "key": "category", "value": "meetings" },
+                { "key": "limit", "value": "100" },
+                { "key": "offset", "value": "0" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Vector Categories",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/vector/categories"
+          }
+        },
+        {
+          "name": "Vector Search POST",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"invoice follow up\",\n  \"recording_id\": {{recording_id}},\n  \"category\": \"meetings\",\n  \"limit\": 10\n}"
+            },
+            "url": "{{base_url}}/api/v1/vector/search"
+          }
+        },
+        {
+          "name": "Vector Search GET",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/vector/search?query=invoice%20follow%20up&recording_id={{recording_id}}&category=meetings&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "vector", "search"],
+              "query": [
+                { "key": "query", "value": "invoice follow up" },
+                { "key": "recording_id", "value": "{{recording_id}}" },
+                { "key": "category", "value": "meetings" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Google Calendar",
+      "item": [
+        {
+          "name": "Calendar Status",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/calendar/status"
+          }
+        },
+        {
+          "name": "Calendar Auth Status",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/calendar/auth/status"
+          }
+        },
+        {
+          "name": "Calendar Auth URL",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/calendar/auth/url"
+          }
+        },
+        {
+          "name": "Calendar Auth Callback",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/calendar/auth/callback?code={{google_oauth_code}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "calendar", "auth", "callback"],
+              "query": [
+                { "key": "code", "value": "{{google_oauth_code}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Calendar Auth Exchange",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{google_oauth_code}}\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/calendar/auth/exchange"
+          }
+        },
+        {
+          "name": "Revoke Calendar Token",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/api/v1/calendar/auth/token"
+          }
+        },
+        {
+          "name": "List Calendars",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/calendar/calendars"
+          }
+        },
+        {
+          "name": "List Events",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/calendar/events?calendar_id=primary&max_results=50&single_events=true",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "calendar", "events"],
+              "query": [
+                { "key": "calendar_id", "value": "primary" },
+                { "key": "max_results", "value": "50" },
+                { "key": "single_events", "value": "true" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Event",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/calendar/events/{{calendar_event_id}}?calendar_id=primary",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "calendar", "events", "{{calendar_event_id}}"],
+              "query": [
+                { "key": "calendar_id", "value": "primary" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Event",
           "event": [
             {
               "listen": "test",
               "script": {
+                "type": "text/javascript",
                 "exec": [
-                  "const j = pm.response.json();",
-                  "console.log('=== PIPELINE SUMMARY ===');",
-                  "console.log('Chroma embeddings:', j.vector?.count);",
-                  "console.log('Screenpipe:', j.screenpipe?.running ? 'ON' : 'OFF');",
-                  "console.log('OCR:', j.paddle_ocr?.running ? 'ON' : 'OFF');",
-                  "console.log('Activity:', j.activity?.running ? 'ON' : 'OFF');",
-                  "console.log('Summary:', j.summary?.enabled ? (j.summary?.worker_running ? 'ON' : 'disabled') : 'OFF');",
-                  "console.log('Summary tokens today:', j.summary?.daily_prompt_tokens, '/', j.summary?.daily_completion_tokens);"
-                ],
-                "type": "text/javascript"
+                  "const data = pm.response.json();",
+                  "if (data && data.id) pm.collectionVariables.set('calendar_event_id', String(data.id));"
+                ]
               }
             }
-          ]
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"summary\": \"Jarvis demo event\",\n  \"description\": \"Created from Postman\",\n  \"location\": \"Google Meet\",\n  \"start\": {\n    \"dateTime\": \"2026-06-30T10:00:00+05:30\",\n    \"timeZone\": \"Asia/Kolkata\"\n  },\n  \"end\": {\n    \"dateTime\": \"2026-06-30T10:30:00+05:30\",\n    \"timeZone\": \"Asia/Kolkata\"\n  },\n  \"attendees\": [\n    \"demo@example.com\"\n  ],\n  \"recurrence\": [],\n  \"colorId\": \"5\",\n  \"send_updates\": \"none\",\n  \"conference\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/calendar/events?calendar_id=primary",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "calendar", "events"],
+              "query": [
+                { "key": "calendar_id", "value": "primary" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Event",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"summary\": \"Jarvis demo event updated\",\n  \"description\": \"Updated from Postman\",\n  \"status\": \"confirmed\",\n  \"send_updates\": \"none\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/calendar/events/{{calendar_event_id}}?calendar_id=primary",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "calendar", "events", "{{calendar_event_id}}"],
+              "query": [
+                { "key": "calendar_id", "value": "primary" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Event",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/api/v1/calendar/events/{{calendar_event_id}}?calendar_id=primary&send_updates=none",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "calendar", "events", "{{calendar_event_id}}"],
+              "query": [
+                { "key": "calendar_id", "value": "primary" },
+                { "key": "send_updates", "value": "none" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Meetings",
+      "item": [
+        {
+          "name": "Get Meeting Detail",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/meetings/chunks/{{chunk_id}}"
+          }
+        },
+        {
+          "name": "Reclassify Chunk",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/meetings/chunks/{{chunk_id}}/reclassify"
+          }
+        },
+        {
+          "name": "Sync Transcript",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/meetings/chunks/{{chunk_id}}/sync-transcript?force=false",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "meetings", "chunks", "{{chunk_id}}", "sync-transcript"],
+              "query": [
+                { "key": "force", "value": "false" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Chunk Highlights",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/meetings/chunks/{{chunk_id}}/highlights"
+          }
+        },
+        {
+          "name": "Create Chunk Highlight",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data && data.id) pm.collectionVariables.set('highlight_id', String(data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Client follow-up reminder\",\n  \"notes\": \"Important decision point from the meeting\",\n  \"started_at\": null,\n  \"ended_at\": null,\n  \"duration_minutes\": 30,\n  \"add_to_calendar\": false,\n  \"calendar_id\": null,\n  \"conference\": false\n}"
+            },
+            "url": "{{base_url}}/api/v1/meetings/chunks/{{chunk_id}}/highlights"
+          }
+        },
+        {
+          "name": "Get Highlight",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/meetings/highlights/{{highlight_id}}"
+          }
+        },
+        {
+          "name": "Add Highlight To Google Calendar",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"calendar_id\": \"primary\",\n  \"conference\": false\n}"
+            },
+            "url": "{{base_url}}/api/v1/meetings/highlights/{{highlight_id}}/calendar"
+          }
+        }
+      ]
+    },
+    {
+      "name": "WhatsApp",
+      "item": [
+        {
+          "name": "WhatsApp Categories",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/whatsapp/categories"
+          }
+        },
+        {
+          "name": "Verify Webhook",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/whatsapp/webhook?hub.mode=subscribe&hub.verify_token={{wa_verify_token}}&hub.challenge={{wa_webhook_challenge}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "whatsapp", "webhook"],
+              "query": [
+                { "key": "hub.mode", "value": "subscribe" },
+                { "key": "hub.verify_token", "value": "{{wa_verify_token}}" },
+                { "key": "hub.challenge", "value": "{{wa_webhook_challenge}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Receive Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Hub-Signature-256", "value": "{{wa_signature}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [\n    {\n      \"id\": \"WABA_ID\",\n      \"changes\": [\n        {\n          \"field\": \"messages\",\n          \"value\": {\n            \"messaging_product\": \"whatsapp\",\n            \"metadata\": {\n              \"display_phone_number\": \"15550000000\",\n              \"phone_number_id\": \"123456789\"\n            },\n            \"contacts\": [\n              {\n                \"profile\": {\n                  \"name\": \"Demo User\"\n                },\n                \"wa_id\": \"{{wa_id}}\"\n              }\n            ],\n            \"messages\": [\n              {\n                \"from\": \"{{wa_id}}\",\n                \"id\": \"wamid.demo-message-id\",\n                \"timestamp\": \"1719640000\",\n                \"type\": \"text\",\n                \"text\": {\n                  \"body\": \"Can we meet tomorrow at 3pm?\"\n                }\n              }\n            ]\n          }\n        }\n      ]\n    }\n  ]\n}"
+            },
+            "url": "{{base_url}}/api/v1/whatsapp/webhook"
+          }
+        },
+        {
+          "name": "List Contacts",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/whatsapp/contacts?limit=50&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "whatsapp", "contacts"],
+              "query": [
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Contact Messages",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/whatsapp/contacts/{{wa_id}}/messages?limit=100&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "whatsapp", "contacts", "{{wa_id}}", "messages"],
+              "query": [
+                { "key": "limit", "value": "100" },
+                { "key": "offset", "value": "0" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Suggestions",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/whatsapp/suggestions?status=pending&limit=50&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "whatsapp", "suggestions"],
+              "query": [
+                { "key": "status", "value": "pending" },
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Inbox Status",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/whatsapp/inbox/status"
+          }
+        },
+        {
+          "name": "Refresh Pending Inbox",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/whatsapp/inbox/refresh-pending?lookback_hours=168",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "whatsapp", "inbox", "refresh-pending"],
+              "query": [
+                { "key": "lookback_hours", "value": "168" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Send Suggestion Reply",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Thanks for your message. I will confirm shortly.\",\n  \"mode\": \"text\",\n  \"template_name\": null,\n  \"template_language\": null,\n  \"template_components\": null\n}"
+            },
+            "url": "{{base_url}}/api/v1/whatsapp/suggestions/{{suggestion_id}}/send-reply"
+          }
+        },
+        {
+          "name": "Add Suggestion To Calendar",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Client meeting\",\n  \"agenda\": \"Discuss next steps\",\n  \"start\": \"2026-06-30T15:00:00+05:30\",\n  \"end\": \"2026-06-30T16:00:00+05:30\",\n  \"calendar_id\": \"primary\",\n  \"conference\": true,\n  \"send_confirmation\": true\n}"
+            },
+            "url": "{{base_url}}/api/v1/whatsapp/suggestions/{{suggestion_id}}/add-to-calendar"
+          }
+        },
+        {
+          "name": "Suggestion Feedback",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"feedback_type\": \"helpful\"\n}"
+            },
+            "url": "{{base_url}}/api/v1/whatsapp/suggestions/{{suggestion_id}}/feedback"
+          }
+        },
+        {
+          "name": "Dismiss Suggestion",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/whatsapp/suggestions/{{suggestion_id}}/dismiss"
+          }
+        },
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"{{wa_id}}\",\n  \"mode\": \"text\",\n  \"body\": \"Hello from Postman\",\n  \"template_name\": null,\n  \"template_language\": null,\n  \"template_components\": null\n}"
+            },
+            "url": "{{base_url}}/api/v1/whatsapp/messages/send"
+          }
         }
       ]
     }

@@ -31,7 +31,8 @@ services:
       - ./media:/app/media
       - ${HOME}/.screenpipe:/root/.screenpipe
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${XAUTHORITY:-${HOME}/.Xauthority}:/tmp/.Xauthority:ro
+      # Prepared by scripts/docker-up.sh → data/.jarvis-xauthority (do not use nested ${} here)
+      - ./data/.jarvis-xauthority:/tmp/.Xauthority:ro
       - /run/user/${UID:-1000}/pulse:/run/user/${UID:-1000}/pulse:rw
     devices:
       - /dev/dri:/dev/dri

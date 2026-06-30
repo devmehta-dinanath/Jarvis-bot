@@ -10,7 +10,10 @@ fi
 
 export UID="${UID:-$(id -u)}"
 export DISPLAY="${DISPLAY:-:0}"
-export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
+
+# shellcheck source=scripts/docker-x11.sh
+source "$(dirname "$0")/docker-x11.sh"
+prepare_xauthority_mount "data/.jarvis-xauthority"
 
 if [ "$(uname -s)" = "Linux" ]; then
   xhost +local:docker 2>/dev/null || true
