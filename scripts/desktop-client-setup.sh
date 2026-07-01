@@ -427,45 +427,84 @@ check_backend_screenpipe_env() {
 
 start_frontend() {
   if [ "$START_FRONTEND" != true ]; then
-    return
+    log_detail "Frontend auto-start disabled (--no-frontend)"
+    return 0
   fi
   if [ ! -f "$FRONTEND_DIR/package.json" ]; then
-    log "Frontend not found at $FRONTEND_DIR — skipping UI launch"
-    return
+    warn "Frontend not found at $FRONTEND_DIR — skipping UI launch"
+    return 1
   fi
   if ! command -v npm >/dev/null 2>&1; then
-    log "npm not found — cannot start frontend"
-    return
+    warn "npm not found — cannot start frontend"
+    return 1
   fi
-  if [ ! -d "$FRONTEND_DIR/node_modules/electron" ]; then
-    log "Electron not installed — run: cd $FRONTEND_DIR && npm install"
-    return
+
+  local electron_bin="$FRONTEND_DIR/node_modules/.bin/electron"
+  if [ ! -x "$electron_bin" ]; then
+    log_detail "Electron missing — running npm install in $FRONTEND_DIR ..."
+    if ! (cd "$FRONTEND_DIR" && npm install --no-fund --no-audit); then
+      warn "npm install failed — cannot start frontend"
+      return 1
+    fi
   fi
-  if pgrep -f "electron.*${FRONTEND_DIR}" >/dev/null 2>&1 \
-    || pgrep -f "electron.*jarvis-bot-fe" >/dev/null 2>&1; then
-    log "Frontend already running"
-    return
+  if [ ! -x "$electron_bin" ]; then
+    warn "Electron binary not found at $electron_bin"
+    return 1
   fi
 
   local log_file="$BACKEND_DIR/data/frontend.log"
   local pid_file="$BACKEND_DIR/data/.jarvis-frontend.pid"
   mkdir -p "$BACKEND_DIR/data"
 
-  log "Starting Electron UI from $FRONTEND_DIR ..."
+  if [ -f "$pid_file" ]; then
+    local old_pid
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+      log_ok "Frontend already running (pid $old_pid)"
+      return 0
+    fi
+  fi
+
+  export_host_env
+  load_env_file "$FRONTEND_DIR/.env"
+  export JARVIS_API_URL="${JARVIS_API_URL:-http://127.0.0.1:8000}"
+
+  log_detail "DISPLAY=$DISPLAY"
+  log_detail "JARVIS_API_URL=$JARVIS_API_URL"
+  log_detail "Launching: $electron_bin . --no-sandbox"
+  log_detail "Log file: $log_file"
+
+  : >"$log_file"
   (
     cd "$FRONTEND_DIR"
-    load_env_file "$FRONTEND_DIR/.env"
-    export DISPLAY="${DISPLAY:-:0}"
-    export JARVIS_API_URL="${JARVIS_API_URL:-http://127.0.0.1:8000}"
-    nohup npm start >>"$log_file" 2>&1 &
+    export DISPLAY JARVIS_API_URL
+    nohup env DISPLAY="$DISPLAY" JARVIS_API_URL="$JARVIS_API_URL" \
+      "$electron_bin" . --no-sandbox >>"$log_file" 2>&1 &
     echo $! >"$pid_file"
   )
-  sleep 2
-  if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-    log "Frontend started (pid $(cat "$pid_file"), log: $log_file)"
-  else
-    log "WARN: Frontend may have failed to start. Check: $log_file"
-  fi
+
+  local pid="" tries=15
+  while [ "$tries" -gt 0 ]; do
+    sleep 1
+    tries=$((tries - 1))
+    [ -f "$pid_file" ] && pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      log_ok "Frontend started (electron pid $pid)"
+      log_detail "If the window is not visible, check: tail -f $log_file"
+      return 0
+    fi
+    if pgrep -f "${FRONTEND_DIR}/node_modules/electron" >/dev/null 2>&1; then
+      log_ok "Frontend electron process is running"
+      return 0
+    fi
+  done
+
+  warn "Frontend did not stay running — last log lines:"
+  tail -30 "$log_file" 2>/dev/null | while IFS= read -r line; do
+    log_detail "  $line"
+  done
+  log_detail "Retry manually: cd $FRONTEND_DIR && DISPLAY=$DISPLAY JARVIS_API_URL=$JARVIS_API_URL npm start"
+  return 1
 }
 
 ensure_linux_desktop() {
@@ -584,60 +623,131 @@ ensure_client_docker_files() {
 fetch_screenpipe_token() {
   cd "$BACKEND_DIR"
   local env_file="$BACKEND_DIR/.env"
-  local token
+  local token out TOKEN
   token="$(env_file_get "$env_file" SCREENPIPE_API_TOKEN)"
   if [ -n "$token" ] && [ "${token#sp-}" != "$token" ]; then
+    log_ok "SCREENPIPE_API_TOKEN already in .env"
     return 0
   fi
-  log "Fetching Screenpipe API token..."
+
   export_host_env
-  docker compose -f docker-compose.client.yml build jarvis-client 2>/dev/null || true
-  TOKEN="$(docker compose -f docker-compose.client.yml run --rm --no-deps jarvis-client screenpipe auth token 2>/dev/null | tail -1 || true)"
+  log_detail "Running: screenpipe auth token (inside container) ..."
+
+  if docker compose -f docker-compose.client.yml ps --status running -q jarvis-client 2>/dev/null | grep -q .; then
+    out="$(docker compose -f docker-compose.client.yml exec -T jarvis-client screenpipe auth token 2>&1 || true)"
+  else
+    log_detail "Container not up yet — one-off run for token"
+    docker compose -f docker-compose.client.yml build jarvis-client >/dev/null 2>&1 || true
+    out="$(docker compose -f docker-compose.client.yml run --rm --no-deps jarvis-client screenpipe auth token 2>&1 || true)"
+  fi
+
+  TOKEN="$(printf '%s\n' "$out" | grep -E '^sp-' | tail -1 || true)"
+  if [ -z "$TOKEN" ]; then
+    TOKEN="$(printf '%s\n' "$out" | grep -Eo 'sp-[a-zA-Z0-9_-]+' | tail -1 || true)"
+  fi
+
   if [ -n "$TOKEN" ] && [ "${TOKEN#sp-}" != "$TOKEN" ]; then
     env_file_set "$env_file" "SCREENPIPE_API_TOKEN" "$TOKEN"
-    log "Saved SCREENPIPE_API_TOKEN to backend .env"
+    log_ok "Saved SCREENPIPE_API_TOKEN to backend .env"
+    if docker compose -f docker-compose.client.yml ps --status running -q jarvis-client 2>/dev/null | grep -q .; then
+      log_detail "Restarting container to load new token ..."
+      docker compose -f docker-compose.client.yml up -d
+      sleep 3
+    fi
+    return 0
   fi
+
+  warn "Could not fetch Screenpipe token yet"
+  log_detail "auth output: $(printf '%s' "$out" | tr '\n' ' ' | head -c 300)"
 }
 
 wait_for_health() {
-  local tries=60
+  local tries=60 elapsed=0
+  log_detail "Polling http://127.0.0.1:8000/health ..."
   while [ "$tries" -gt 0 ]; do
     if curl -sf "http://127.0.0.1:8000/health" >/dev/null 2>&1; then
       return 0
     fi
+    if [ $((elapsed % 15)) -eq 0 ] && [ "$elapsed" -gt 0 ]; then
+      log_detail "  still waiting (${elapsed}s) ..."
+    fi
     tries=$((tries - 1))
+    elapsed=$((elapsed + 3))
     sleep 3
   done
   die "Client container did not become healthy. Check: docker compose -f $BACKEND_DIR/docker-compose.client.yml logs"
 }
 
-verify_screenpipe_and_ocr() {
-  local url="http://127.0.0.1:8000/api/v1/services/status"
-  local tries=40
-  local status=""
+print_service_status() {
+  local status="${1:-}"
+  if [ -z "$status" ]; then
+    status="$(curl -sf "http://127.0.0.1:8000/api/v1/services/status" 2>/dev/null || true)"
+  fi
+  if [ -z "$status" ]; then
+    log_detail "  status API not reachable yet"
+    return 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$status" | python3 - <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    sp = d.get("screenpipe") or {}
+    ocr = d.get("paddle_ocr") or {}
+    print(f"  cli_running={sp.get('cli_running')}  screenpipe_running={sp.get('running')}")
+    print(f"  paddle_ocr_running={ocr.get('running')}  manager_started={d.get('manager_started')}")
+    if d.get("hint"):
+        print(f"  hint: {d['hint']}")
+except Exception as e:
+    print(f"  (could not parse status: {e})")
+PY
+  else
+    log_detail "  $(echo "$status" | tr -d '\n' | head -c 200)"
+  fi
+}
 
-  log "Verifying Screenpipe capture + OCR in Docker (first run may download models)..."
-  while [ "$tries" -gt 0 ]; do
-    if status="$(curl -sf "$url" 2>/dev/null)"; then
+verify_screenpipe_and_ocr() {
+  local max_wait="${SCREENPIPE_VERIFY_SECONDS:-90}"
+  local elapsed=0
+
+  log_detail "First Screenpipe start can take 2–5 min (model download)."
+  log_detail "Checking for up to ${max_wait}s — setup continues even if still warming up."
+
+  while [ "$elapsed" -lt "$max_wait" ]; do
+    local status
+    status="$(curl -sf "http://127.0.0.1:8000/api/v1/services/status" 2>/dev/null || true)"
+
+    if [ -n "$status" ]; then
+      log_detail "[${elapsed}s] service status:"
+      print_service_status "$status"
+
       if echo "$status" | grep -q '"cli_running": true'; then
-        log "Screenpipe CLI is running inside the container"
-        if echo "$status" | grep -q '"paddle_ocr".*"running": true'; then
-          log "Paddle OCR worker is running"
-        fi
-        if echo "$status" | grep -Eq '"health":\s*\{[^}]*"ok"'; then
-          log "Screenpipe API is healthy"
-        fi
-        log "Switch apps or click on screen to trigger frame capture + OCR"
+        log_ok "Screenpipe CLI is running"
+        echo "$status" | grep -q '"paddle_ocr".*"running": true' \
+          && log_ok "Paddle OCR worker is running"
+        log_detail "Switch apps or click on screen to trigger capture"
         return 0
       fi
+
+      if echo "$status" | grep -q '"paddle_ocr".*"running": true' \
+        && echo "$status" | grep -q '"manager_started": true'; then
+        log_ok "API + OCR worker up (Screenpipe CLI may still be downloading models)"
+        log_detail "Watch logs: docker compose -f $BACKEND_DIR/docker-compose.client.yml logs -f"
+        return 0
+      fi
+    else
+      log_detail "[${elapsed}s] waiting for status API ..."
     fi
-    tries=$((tries - 1))
-    sleep 5
+
+    sleep 10
+    elapsed=$((elapsed + 10))
   done
 
-  log "WARN: Screenpipe may still be starting. Check status:"
-  log "  curl -s $url | python3 -m json.tool"
-  log "  docker compose -f $BACKEND_DIR/docker-compose.client.yml logs -f"
+  warn "Screenpipe verify timed out after ${max_wait}s — container may still be starting"
+  log_detail "Tail container logs:"
+  (cd "$BACKEND_DIR" && docker compose -f docker-compose.client.yml logs --tail=30) || true
+  log_detail "Follow live: docker compose -f $BACKEND_DIR/docker-compose.client.yml logs -f"
+  return 0
 }
 
 print_clone_summary() {
@@ -733,10 +843,6 @@ log_step "Prepare display (X11) for Screenpipe"
 prepare_x11
 log_ok "X11 prepared (DISPLAY=$DISPLAY)"
 
-log_step "Fetch Screenpipe API token"
-fetch_screenpipe_token
-check_backend_screenpipe_env || true
-
 log_step "Build and start Docker container"
 ensure_client_docker_files
 export_host_env
@@ -751,13 +857,17 @@ log_step "Wait for local API health"
 wait_for_health
 log_ok "Local API healthy at http://127.0.0.1:8000/health"
 
-log_step "Verify Screenpipe + OCR"
-verify_screenpipe_and_ocr
-
 if [ "$START_FRONTEND" = true ]; then
   log_step "Start Electron frontend"
   check_frontend_env
-  start_frontend
+  start_frontend || warn "Frontend launch failed — see $BACKEND_DIR/data/frontend.log"
 fi
+
+log_step "Fetch Screenpipe API token"
+fetch_screenpipe_token
+check_backend_screenpipe_env || true
+
+log_step "Verify Screenpipe + OCR"
+verify_screenpipe_and_ocr
 
 print_running_summary

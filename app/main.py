@@ -69,7 +69,6 @@ from app.services.summary.routes import router as summary_router
 from app.services.whatsapp.routes import router as whatsapp_router
 from app.services.whatsapp.client import is_configured as wa_client_is_configured
 from app.services.vector.routes import router as vector_router
-from app.services.sync.routes import router as sync_router
 from app.services.vector.store import get_vector_stats
 from app.services.google_calendar.service import google_calendar_service
 from app.services.pipeline import process_recording_job
@@ -125,6 +124,8 @@ app.include_router(summary_router)
 app.include_router(whatsapp_router)
 app.include_router(vector_router)
 if is_server_role():
+    from app.services.sync.routes import router as sync_router
+
     app.include_router(sync_router)
 
 

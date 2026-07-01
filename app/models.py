@@ -197,6 +197,21 @@ class MeetingHighlight(Base):
     )
 
 
+class SyncDevice(Base):
+    __tablename__ = "sync_devices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    device_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    os_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
 class ActivitySummary(Base):
     __tablename__ = "activity_summaries"
     __table_args__ = (
