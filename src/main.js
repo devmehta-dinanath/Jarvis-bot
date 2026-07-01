@@ -1,5 +1,27 @@
 const { app, BrowserWindow, screen, ipcMain, shell } = require("electron");
+const fs = require("fs");
 const path = require("path");
+
+function loadDotEnv() {
+  const envPath = path.join(__dirname, "..", ".env");
+  if (!fs.existsSync(envPath)) {
+    return;
+  }
+  for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) {
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+    if (key && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadDotEnv();
 
 function getRightPanelBounds() {
   const { workArea } = screen.getPrimaryDisplay();
