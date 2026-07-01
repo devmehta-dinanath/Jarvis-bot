@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements-server.txt .
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -21,7 +21,7 @@ RUN apt-get update \
     && ln -sf python3.12 /opt/venv/bin/python3 \
     && /opt/venv/bin/python -m ensurepip --upgrade \
     && /opt/venv/bin/python -m pip install --upgrade pip setuptools wheel \
-    && /opt/venv/bin/python -m pip install -r requirements.txt \
+    && /opt/venv/bin/python -m pip install -r requirements-server.txt \
     && rm -rf /var/lib/apt/lists/*
 
 COPY app ./app

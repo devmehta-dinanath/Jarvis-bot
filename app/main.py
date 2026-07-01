@@ -66,7 +66,6 @@ from app.services import service_manager
 from app.services.meetings.routes import router as meetings_router
 from app.services.vector.store import get_vector_stats
 from app.services.google_calendar.service import google_calendar_service
-from app.services.pipeline import process_recording_job
 
 
 def _summary_status() -> dict:
@@ -321,6 +320,8 @@ def start_recording_pipeline(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide source_video_path or capture_command.",
         )
+
+    from app.services.pipeline import process_recording_job
 
     recording = crud.create_recording(
         db,
