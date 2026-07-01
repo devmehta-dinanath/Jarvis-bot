@@ -2,9 +2,11 @@ import logging
 import shlex
 import subprocess
 import threading
+from collections import deque
 from subprocess import Popen
 
 from app.config import (
+    MEETING_AUDIO_SYNC_ENABLED,
     SCREENPIPE_CLI_COMMAND,
     SCREENPIPE_HEALTH_TIMEOUT_SECONDS,
     SCREENPIPE_IDLE_CAPTURE_INTERVAL_MS,
@@ -18,6 +20,8 @@ from app.services.screenpipe.client import wait_until_healthy
 logger = logging.getLogger(__name__)
 
 _DRAIN_THREADS: dict[int, threading.Thread] = {}
+_RECENT_OUTPUT: dict[int, deque[str]] = {}
+_RECENT_OUTPUT_MAX_LINES = 40
 
 # Routine Screenpipe stderr noise (audio gaps, missing D-Bus in Docker, etc.).
 _SCREENPIPE_NOISE_SUBSTRINGS = (
@@ -48,9 +52,39 @@ class ScreenpipeCliError(RuntimeError):
     pass
 
 
+def _normalize_screenpipe_command(args: list[str]) -> list[str]:
+    """Normalize CLI args to match official docs (docs.screenpipe.com).
+
+    Official usage: `screenpipe record` — screen + audio capture on by default.
+    Only pass `--disable-audio` when audio should be off. The legacy
+    `record --audio-all` form is invalid and crashes with exit code 2.
+    """
+    if not args:
+        return args
+
+    if "--audio-all" in args:
+        logger.info(
+            "Removing invalid --audio-all flag; `screenpipe record` captures "
+            "mic + system audio automatically (per Screenpipe docs)."
+        )
+        args = [arg for arg in args if arg != "--audio-all"]
+
+    if MEETING_AUDIO_SYNC_ENABLED and "--disable-audio" in args:
+        logger.info(
+            "Removing --disable-audio because MEETING_AUDIO_SYNC_ENABLED=true; "
+            "audio is required for meeting transcripts."
+        )
+        args = [arg for arg in args if arg != "--disable-audio"]
+
+    if args[0].endswith("screenpipe") and "record" not in args:
+        args.append("record")
+
+    return args
+
+
 def build_screenpipe_cli_args(command: str) -> list[str]:
     """Append visual change-detection flags when missing (needed on Linux Docker)."""
-    args = shlex.split(command)
+    args = _normalize_screenpipe_command(shlex.split(command))
     if not args:
         return args
 
@@ -77,7 +111,14 @@ def start_screenpipe_record(
         raise ScreenpipeCliError("SCREENPIPE_CLI_COMMAND is empty")
 
     effective_command = shlex.join(args)
-    logger.info("Starting Screenpipe CLI: %s", effective_command)
+    if effective_command != command.strip():
+        logger.info(
+            "Screenpipe CLI adjusted for runtime: %s (from %s)",
+            effective_command,
+            command.strip(),
+        )
+    else:
+        logger.info("Starting Screenpipe CLI: %s", effective_command)
     process = Popen(
         args,
         stdout=subprocess.PIPE,
@@ -86,6 +127,7 @@ def start_screenpipe_record(
         bufsize=1,
         start_new_session=True,
     )
+    _RECENT_OUTPUT[process.pid] = deque(maxlen=_RECENT_OUTPUT_MAX_LINES)
     _start_output_drainer(process)
     logger.info("Screenpipe CLI pid=%s (waiting for API in background thread)", process.pid)
 
@@ -102,6 +144,21 @@ def start_screenpipe_record(
         )
 
     return process
+
+
+def _remember_screenpipe_line(process: Popen, text: str) -> None:
+    buffer = _RECENT_OUTPUT.get(process.pid)
+    if buffer is not None:
+        buffer.append(text)
+
+
+def recent_screenpipe_output(process: Popen | None) -> str:
+    if process is None:
+        return ""
+    buffer = _RECENT_OUTPUT.pop(process.pid, None)
+    if not buffer:
+        return ""
+    return "\n".join(buffer)
 
 
 def _log_screenpipe_line(text: str) -> None:
@@ -128,6 +185,7 @@ def _start_output_drainer(process: Popen) -> None:
             for line in process.stdout:
                 text = line.rstrip()
                 if text:
+                    _remember_screenpipe_line(process, text)
                     _log_screenpipe_line(text)
         except Exception:
             logger.debug("Screenpipe CLI output drainer stopped", exc_info=True)

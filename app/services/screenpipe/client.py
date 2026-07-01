@@ -88,12 +88,97 @@ def get_health(api_url: str) -> dict[str, Any]:
         return {"status": "unreachable", "error": str(exc)}
 
 
+_AUDIO_OK_STATUSES = frozenset({"ok", "healthy", "recording", "active", "enabled"})
+
+
+def _audio_status_value(health: dict[str, Any]) -> str:
+    return str(health.get("audio_status", "")).casefold()
+
+
+def is_audio_capture_active(health: dict[str, Any]) -> bool:
+    """True when Screenpipe reports an active audio pipeline (GET /health)."""
+    if _audio_status_value(health) in _AUDIO_OK_STATUSES:
+        return True
+    pipeline = health.get("audio_pipeline")
+    if isinstance(pipeline, dict):
+        devices = pipeline.get("audio_devices")
+        if isinstance(devices, list) and devices:
+            return True
+        if pipeline.get("transcriptions_completed", 0) > 0:
+            return True
+        if pipeline.get("chunks_sent", 0) > 0:
+            return True
+    return bool(health.get("last_audio_timestamp"))
+
+
+def _audio_pipeline_summary(health: dict[str, Any]) -> str:
+    pipeline = health.get("audio_pipeline")
+    if not isinstance(pipeline, dict):
+        return ""
+    parts: list[str] = []
+    devices = pipeline.get("audio_devices")
+    if isinstance(devices, list) and devices:
+        parts.append(f"devices={', '.join(str(d) for d in devices)}")
+    if pipeline.get("meeting_detected"):
+        app = pipeline.get("meeting_app") or "unknown"
+        parts.append(f"meeting={app}")
+    words = pipeline.get("total_words")
+    if isinstance(words, int) and words > 0:
+        parts.append(f"words={words}")
+    wpm = pipeline.get("words_per_minute")
+    if isinstance(wpm, (int, float)) and wpm > 0:
+        parts.append(f"wpm={wpm:.1f}")
+    return "; ".join(parts)
+
+
+def list_audio_devices(api_url: str) -> list[dict[str, Any]]:
+    """GET /audio/list — available input/output devices (docs.screenpipe.com)."""
+    try:
+        payload = _request_json(f"{api_url}/audio/list", timeout=8, auth=False)
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+    except Exception as exc:
+        logger.debug("Could not list Screenpipe audio devices: %s", exc)
+    return []
+
+
+def _start_default_audio_devices(api_url: str, devices: list[dict[str, Any]]) -> None:
+    """POST /audio/device/start for each default device when global /audio/start is not enough."""
+    _ensure_api_token()
+    for device in devices:
+        name = str(device.get("name") or "").strip()
+        if not name or not device.get("is_default"):
+            continue
+        body = json.dumps({"device_name": name}).encode()
+        try:
+            _request_json(
+                f"{api_url}/audio/device/start",
+                timeout=10,
+                method="POST",
+                body=body,
+            )
+            logger.info("[CAPTURE] Started Screenpipe audio device: %s", name)
+        except Exception as exc:
+            logger.warning("[CAPTURE] Could not start audio device %s: %s", name, exc)
+
+
 def ensure_audio_capture(api_url: str) -> dict[str, Any]:
-    """Try to enable Screenpipe audio when it is disabled."""
+    """Ensure Screenpipe audio is recording (mic + system audio for meetings).
+
+    Per Screenpipe docs, `screenpipe record` enables audio by default. This
+    function verifies /health and calls POST /audio/start (and per-device start
+    when needed) if the pipeline is still idle.
+    """
     health = get_health(api_url)
-    audio_status = str(health.get("audio_status", "")).casefold()
-    if audio_status in {"ok", "healthy"}:
-        return {"enabled": True, "message": "Audio already active", "health": health}
+    if is_audio_capture_active(health):
+        summary = _audio_pipeline_summary(health)
+        message = "Audio capture active"
+        if summary:
+            message = f"{message} ({summary})"
+        return {"enabled": True, "message": message, "health": health}
+
+    devices = list_audio_devices(api_url)
+    device_names = [str(d["name"]) for d in devices if d.get("name")]
 
     try:
         _ensure_api_token()
@@ -104,23 +189,47 @@ def ensure_audio_capture(api_url: str) -> dict[str, Any]:
             body=b"{}",
         )
         health = get_health(api_url)
-        audio_status = str(health.get("audio_status", "")).casefold()
-        if audio_status in {"ok", "healthy"}:
-            return {"enabled": True, "message": "Audio capture started", "health": health}
-        return {
-            "enabled": False,
-            "message": (
-                "Audio still disabled. Ensure PulseAudio is running on the host "
-                "(screenpipe needs mic/system audio access)."
-            ),
-            "health": health,
-        }
+        if is_audio_capture_active(health):
+            return {
+                "enabled": True,
+                "message": "Audio capture started via POST /audio/start",
+                "health": health,
+                "devices": devices,
+            }
     except Exception as exc:
-        return {
-            "enabled": False,
-            "message": f"Could not start audio capture: {exc}",
-            "health": health,
-        }
+        logger.debug("POST /audio/start failed: %s", exc)
+
+    if devices:
+        _start_default_audio_devices(api_url, devices)
+        health = get_health(api_url)
+        if is_audio_capture_active(health):
+            return {
+                "enabled": True,
+                "message": f"Audio started on default device(s): {', '.join(device_names)}",
+                "health": health,
+                "devices": devices,
+            }
+
+    details = str(health.get("device_status_details") or health.get("message") or "").strip()
+    message = (
+        "Audio not active yet. `screenpipe record` enables audio by default — "
+        "ensure mic + system audio are available"
+    )
+    if device_names:
+        message += f" (found: {', '.join(device_names)})"
+    else:
+        message += " (no audio devices reported by GET /audio/list)"
+    if details:
+        message += f". {details}"
+    message += (
+        ". Docker/Linux: mount PulseAudio at /run/user/$UID/pulse and set PULSE_SERVER."
+    )
+    return {
+        "enabled": False,
+        "message": message,
+        "health": health,
+        "devices": devices,
+    }
 
 
 def list_audio_transcripts(

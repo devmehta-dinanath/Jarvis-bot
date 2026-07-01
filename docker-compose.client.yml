@@ -20,7 +20,8 @@ services:
       SCREENPIPE_ENABLED: "true"
       SCREENPIPE_START_CLI: "true"
       SCREENPIPE_API_URL: http://127.0.0.1:3030
-      SCREENPIPE_CLI_COMMAND: ${SCREENPIPE_CLI_COMMAND:-screenpipe record --audio-all}
+      # Official default: audio capture is ON with `screenpipe record` (no extra flags).
+      SCREENPIPE_CLI_COMMAND: screenpipe record
       SCREENPIPE_API_TOKEN: ${SCREENPIPE_API_TOKEN:-}
       SCREENPIPE_LOCAL_API_KEY: ${SCREENPIPE_LOCAL_API_KEY:-}
       JARVIS_SERVER_URL: ${JARVIS_SERVER_URL:-http://127.0.0.1:8000}

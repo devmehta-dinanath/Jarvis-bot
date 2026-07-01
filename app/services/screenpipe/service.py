@@ -1,4 +1,5 @@
 import logging
+import shlex
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -30,7 +31,9 @@ from app.services.screenpipe.capture import capture_single_frame
 from app.services.screenpipe.x11_change import X11ScreenChangeCapture
 from app.services.screenpipe.cli import (
     ScreenpipeCliError,
+    build_screenpipe_cli_args,
     log_screenpipe_output,
+    recent_screenpipe_output,
     start_screenpipe_record,
     stop_screenpipe_record,
 )
@@ -175,8 +178,24 @@ class ScreenpipeService:
                     return
 
         if self._cli_process is not None and self._cli_process.poll() is not None:
-            logger.error("Screenpipe CLI exited (code=%s)", self._cli_process.returncode)
-            log_screenpipe_output(self._cli_process)
+            code = self._cli_process.returncode
+            effective = shlex.join(build_screenpipe_cli_args(self.cli_command))
+            recent = recent_screenpipe_output(self._cli_process)
+            logger.error(
+                "Screenpipe CLI exited (code=%s). command=%s",
+                code,
+                effective,
+            )
+            if recent:
+                logger.error("Screenpipe CLI recent output:\n%s", recent)
+            else:
+                log_screenpipe_output(self._cli_process)
+            if code == 2:
+                logger.error(
+                    "Exit code 2 usually means invalid CLI flags. "
+                    "Use `screenpipe record` (audio is on by default). "
+                    "Do not pass `record --audio-all`. Ensure DISPLAY + PulseAudio."
+                )
             self._cli_process = None
             self._stop_event.wait(self.poll_interval_seconds)
             return

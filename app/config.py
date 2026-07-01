@@ -68,6 +68,8 @@ LIVE_RECORDING_TITLE = os.getenv("LIVE_RECORDING_TITLE", "Live capture")
 
 # --- Screenpipe CLI (event-driven capture on screen change) ---
 SCREENPIPE_ENABLED = os.getenv("SCREENPIPE_ENABLED", "true").lower() in {"1", "true", "yes"}
+# Official CLI: `screenpipe record` — screen + audio on by default (docs.screenpipe.com).
+# Use `--disable-audio` only when meeting transcripts are not needed.
 SCREENPIPE_CLI_COMMAND = os.getenv("SCREENPIPE_CLI_COMMAND", "screenpipe record")
 SCREENPIPE_API_URL = os.getenv("SCREENPIPE_API_URL", "http://127.0.0.1:3030").rstrip("/")
 # Bearer token for /frames, /search, etc. (not needed for /health). Also reads SCREENPIPE_LOCAL_API_KEY.

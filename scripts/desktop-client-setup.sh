@@ -370,6 +370,8 @@ setup_backend_env() {
   env_file_set "$env_file" "SUMMARY_ENABLED" "false"
   env_file_set "$env_file" "CHROMA_ENABLED" "false"
   env_file_set "$env_file" "SCREENPIPE_ENABLED" "true"
+  env_file_set "$env_file" "SCREENPIPE_CLI_COMMAND" "screenpipe record"
+  env_file_set "$env_file" "MEETING_AUDIO_SYNC_ENABLED" "true"
 
   if [ "$LOCAL_ONLY" = true ]; then
     SERVER_URL="${SERVER_URL:-http://127.0.0.1:8000}"
@@ -430,6 +432,33 @@ check_backend_screenpipe_env() {
   fi
   log_ok "Backend .env OK (SCREENPIPE_API_TOKEN=set)"
   return 0
+}
+
+fix_screenpipe_cli_env() {
+  local env_file="$BACKEND_DIR/.env"
+  [ -f "$env_file" ] || return 0
+  local cmd
+  cmd="$(env_file_get "$env_file" SCREENPIPE_CLI_COMMAND)"
+  if [ -z "$cmd" ] \
+    || [[ "$cmd" == *"record --audio-all"* ]] \
+    || [[ "$cmd" == *"--audio-all"* ]] \
+    || [[ "$cmd" == *"--disable-audio"* ]]; then
+    env_file_set "$env_file" "SCREENPIPE_CLI_COMMAND" "screenpipe record"
+    log_ok "Fixed SCREENPIPE_CLI_COMMAND → screenpipe record (audio on by default)"
+  fi
+}
+
+check_host_pulseaudio() {
+  local uid="${HOST_UID:-$(id -u)}"
+  local pulse_sock="/run/user/${uid}/pulse/native"
+  if [ -S "$pulse_sock" ]; then
+    log_ok "PulseAudio socket found ($pulse_sock) — meeting audio capture enabled"
+    return 0
+  fi
+  warn "PulseAudio not found at $pulse_sock"
+  log_detail "Meeting transcripts need host audio. Install/start PipeWire/PulseAudio, then restart Docker."
+  log_detail "  systemctl --user status pipewire pipewire-pulse"
+  return 1
 }
 
 start_frontend() {
@@ -597,7 +626,7 @@ prepare_x11() {
     mkdir -p "$BACKEND_DIR/data"
   fi
   xhost +local:docker 2>/dev/null || true
-  pkill -f "screenpipe record" 2>/dev/null || true
+  pkill -f "screenpipe.*record" 2>/dev/null || true
   mkdir -p "$BACKEND_DIR/data" "$BACKEND_DIR/media" "${HOME}/.screenpipe"
 }
 
@@ -698,6 +727,33 @@ wait_for_health() {
   die "Client container did not become healthy. Check: docker compose -f $BACKEND_DIR/docker-compose.client.yml logs"
 }
 
+verify_screenpipe_audio() {
+  local health devices
+  health="$(curl -sf "http://127.0.0.1:3030/health" 2>/dev/null || true)"
+  if [ -z "$health" ]; then
+    warn "Screenpipe /health not reachable yet — audio may still be starting"
+    return 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$health" | python3 - <<'PY' 2>/dev/null || true
+import json, sys
+d = json.load(sys.stdin)
+ap = d.get("audio_pipeline") or {}
+print(f"audio_status={d.get('audio_status')} meeting={ap.get('meeting_detected')}")
+if ap.get("audio_devices"):
+    print("devices=" + ", ".join(str(x) for x in ap["audio_devices"]))
+PY
+  fi
+  devices="$(curl -sf "http://127.0.0.1:3030/audio/list" 2>/dev/null || true)"
+  if [ -n "$devices" ] && [ "$devices" != "[]" ]; then
+    log_ok "Screenpipe audio devices: $devices"
+  else
+    warn "No audio devices from GET /audio/list — check PulseAudio on host"
+    return 1
+  fi
+  return 0
+}
+
 print_service_status() {
   local status="${1:-}"
   if [ -z "$status" ]; then
@@ -714,7 +770,12 @@ try:
     d = json.load(sys.stdin)
     sp = d.get("screenpipe") or {}
     ocr = d.get("paddle_ocr") or {}
+    health = sp.get("health") or {}
+    ap = health.get("audio_pipeline") or {}
     print(f"  cli_running={sp.get('cli_running')}  screenpipe_running={sp.get('running')}")
+    print(f"  audio_status={health.get('audio_status')}  meeting_detected={ap.get('meeting_detected')}")
+    if ap.get("audio_devices"):
+        print(f"  audio_devices={ap.get('audio_devices')}")
     print(f"  paddle_ocr_running={ocr.get('running')}  manager_started={d.get('manager_started')}")
     if d.get("hint"):
         print(f"  hint: {d['hint']}")
@@ -743,9 +804,10 @@ verify_screenpipe_and_ocr() {
 
       if echo "$status" | grep -q '"cli_running": true'; then
         log_ok "Screenpipe CLI is running"
+        verify_screenpipe_audio || true
         echo "$status" | grep -q '"paddle_ocr".*"running": true' \
           && log_ok "Paddle OCR worker is running"
-        log_detail "Switch apps or click on screen to trigger capture"
+        log_detail "Join a meeting or speak — audio transcripts sync automatically"
         return 0
       fi
 
@@ -861,10 +923,12 @@ setup_env
 
 log_step "Prepare display (X11) for Screenpipe"
 prepare_x11
+check_host_pulseaudio || true
 log_ok "X11 prepared (DISPLAY=$DISPLAY)"
 
 log_step "Build and start Docker container"
 ensure_client_docker_files
+fix_screenpipe_cli_env
 stop_conflicting_containers
 export_host_env
 log_detail "HOST_UID=$HOST_UID DISPLAY=$DISPLAY"
