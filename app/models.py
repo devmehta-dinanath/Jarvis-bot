@@ -37,6 +37,9 @@ class Recording(Base):
     ocr_completed_frames: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    device_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    client_recording_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    sync_status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -86,6 +89,7 @@ class Frame(Base):
     )
     captured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sync_status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
 
     recording: Mapped[Recording] = relationship("Recording", back_populates="frames")
 
@@ -107,6 +111,8 @@ class ActivityChunk(Base):
     transcript_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     frame_ids: Mapped[str] = mapped_column(Text, nullable=False)
     frame_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    client_chunk_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    sync_status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,

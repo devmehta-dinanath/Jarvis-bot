@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 from app import models
 from app.services.activity.chunker import FrameChunk, chunk_frames
 from app.services.activity.classifier import classify_activity
-from app.config import SAVE_ACTIVITY_JSON_FILES, SCREENPIPE_API_URL, SCREENPIPE_ENABLED
+from app.config import (
+    CHROMA_ENABLED,
+    SAVE_ACTIVITY_JSON_FILES,
+    SCREENPIPE_API_URL,
+    SCREENPIPE_ENABLED,
+    is_client_role,
+)
 from app.services.activity.cleaner import merge_cleaned_texts, merge_frame_ocr_sources
 from app.services.activity.metadata import merge_metadata
 from app.services.screenpipe.client import ScreenpipeApiError, fetch_frame_ocr_text
@@ -93,22 +99,27 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
             sync_meeting_transcript(chunk, db)
             if chunk.transcript_status in {"synced", "empty"}:
                 transcripts_synced += 1
-        chunk_indexed = upsert_activity_chunk(
-            chunk_id=chunk.id,
-            recording_id=recording.id,
-            cleaned_text=chunk.cleaned_text or "",
-            app_name=chunk.app_name,
-            window_name=chunk.window_name,
-            browser_url=chunk.browser_url,
-            category=chunk.category,
-            timestamp=chunk.timestamp.isoformat(),
-            frame_ids=frame_ids,
-            paddle_chars=getattr(chunk, "_paddle_chars", 0),
-            screenpipe_chars=getattr(chunk, "_screenpipe_chars", 0),
-        )
-        if chunk_indexed:
-            indexed += 1
-            enforce_frame_image_retention(db, recording_id=recording.id)
+        chunk_indexed = False
+        if is_client_role():
+            chunk.sync_status = "pending"
+            chunk.client_chunk_id = chunk.id
+        elif CHROMA_ENABLED:
+            chunk_indexed = upsert_activity_chunk(
+                chunk_id=chunk.id,
+                recording_id=recording.id,
+                cleaned_text=chunk.cleaned_text or "",
+                app_name=chunk.app_name,
+                window_name=chunk.window_name,
+                browser_url=chunk.browser_url,
+                category=chunk.category,
+                timestamp=chunk.timestamp.isoformat(),
+                frame_ids=frame_ids,
+                paddle_chars=getattr(chunk, "_paddle_chars", 0),
+                screenpipe_chars=getattr(chunk, "_screenpipe_chars", 0),
+            )
+            if chunk_indexed:
+                indexed += 1
+                enforce_frame_image_retention(db, recording_id=recording.id)
         _log_activity_group(
             chunk,
             recording_id=recording.id,
@@ -116,6 +127,7 @@ def process_recording_activity(recording: models.Recording, db: Session) -> list
             indexed=chunk_indexed,
         )
 
+    db.commit()
     chunks = [chunk for chunk, _, _, _ in created]
     logger.debug(
         "[ACTIVITY] Recording %s: classified %s frame(s) into %s chunk(s), "

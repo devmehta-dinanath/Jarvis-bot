@@ -1,18 +1,50 @@
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 DATA_DIR = BASE_DIR / "data"
 JARVIS_DATABASE_FILENAME = "jarvis.db"
+CLIENT_BUFFER_DATABASE_FILENAME = "client-buffer.db"
 DATABASE_PATH = DATA_DIR / JARVIS_DATABASE_FILENAME
+CLIENT_BUFFER_DATABASE_PATH = DATA_DIR / CLIENT_BUFFER_DATABASE_FILENAME
 LEGACY_DATABASE_PATH = DATA_DIR / "screenpipe.db"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_DATABASE_URL = f"sqlite:///{DATABASE_PATH.resolve().as_posix()}"
+DEFAULT_CLIENT_DATABASE_URL = (
+    f"sqlite:///{CLIENT_BUFFER_DATABASE_PATH.resolve().as_posix()}"
+)
+
+# --- Deployment role: server (central DB + integrations) vs client (capture + sync) ---
+_raw_role = os.getenv("APP_ROLE", "client").strip().lower()
+if os.getenv("WHATSAPP_ONLY_MODE", "false").lower() in {"1", "true", "yes"}:
+    if _raw_role != "server":
+        logger.warning(
+            "WHATSAPP_ONLY_MODE is deprecated; use APP_ROLE=server instead"
+        )
+    _raw_role = "server"
+APP_ROLE = _raw_role if _raw_role in {"server", "client"} else "client"
+
+JARVIS_SERVER_URL = os.getenv("JARVIS_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+SYNC_API_KEY = os.getenv("SYNC_API_KEY", "").strip() or None
+SYNC_ENABLED = os.getenv("SYNC_ENABLED", "true").lower() in {"1", "true", "yes"}
+SYNC_POLL_INTERVAL_SECONDS = float(os.getenv("SYNC_POLL_INTERVAL_SECONDS", "5.0"))
+SYNC_BATCH_LIMIT = int(os.getenv("SYNC_BATCH_LIMIT", "50"))
+CLIENT_DEVICE_ID = os.getenv("CLIENT_DEVICE_ID", "").strip()
+
+
+def is_server_role() -> bool:
+    return APP_ROLE == "server"
+
+
+def is_client_role() -> bool:
+    return APP_ROLE == "client"
 
 SCREENPIPE_DIR_NAME = "screenpipe"
 FRAMES_DIR_NAME = "frames"
@@ -241,7 +273,7 @@ WHATSAPP_AUTO_ADD_CALENDAR = os.getenv("WHATSAPP_AUTO_ADD_CALENDAR", "false").lo
     "true",
     "yes",
 }
-# When true, only the WhatsApp worker starts at boot (no screenpipe/OCR/activity/summary).
+# Deprecated — use APP_ROLE=server. Kept for backward compatibility.
 WHATSAPP_ONLY_MODE = os.getenv("WHATSAPP_ONLY_MODE", "false").lower() in {"1", "true", "yes"}
 
 

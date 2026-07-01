@@ -5,6 +5,7 @@ from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
+from app.config import is_server_role
 from app.database import get_db
 from app.services.google_calendar.service import google_calendar_service
 from app.services.activity.reclassify import reclassify_activity_chunk
@@ -79,6 +80,14 @@ def sync_chunk_transcript(
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> models.ActivityChunk:
+    if is_server_role():
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "Meeting transcript sync from Screenpipe runs on desktop clients. "
+                "Transcripts are uploaded to the server automatically."
+            ),
+        )
     chunk = _require_meeting_chunk(crud.get_activity_chunk(db, chunk_id))
     return sync_meeting_transcript(chunk, db, force=force)
 

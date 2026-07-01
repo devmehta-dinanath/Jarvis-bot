@@ -241,7 +241,7 @@ class FrameOcrSummary(BaseModel):
     captured_at: datetime | None = None
     processed_at: datetime | None = None
 
-
+                                                                                              
 class CategoryCount(BaseModel):
     category: str
     count: int

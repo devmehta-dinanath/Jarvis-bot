@@ -61,6 +61,20 @@ RECORDING_COLUMNS: dict[str, str] = {
     "ocr_completed_frames": "INTEGER NOT NULL DEFAULT 0",
     "started_at": "DATETIME",
     "completed_at": "DATETIME",
+    "device_id": "VARCHAR(64)",
+    "client_recording_id": "INTEGER",
+    "sync_status": "VARCHAR(50) NOT NULL DEFAULT 'pending'",
+}
+
+
+FRAME_SYNC_COLUMNS: dict[str, str] = {
+    "sync_status": "VARCHAR(50) NOT NULL DEFAULT 'pending'",
+}
+
+
+ACTIVITY_CHUNK_SYNC_COLUMNS: dict[str, str] = {
+    "client_chunk_id": "INTEGER",
+    "sync_status": "VARCHAR(50) NOT NULL DEFAULT 'pending'",
 }
 
 
@@ -69,7 +83,9 @@ def bootstrap_database() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_recording_columns()
     _ensure_frame_columns()
+    _ensure_frame_sync_columns()
     _ensure_activity_chunk_columns()
+    _ensure_activity_chunk_sync_columns()
     _ensure_activity_summary_columns()
     _ensure_columns("whatsapp_contacts", WHATSAPP_CONTACT_COLUMNS)
     _ensure_columns("whatsapp_messages", WHATSAPP_MESSAGE_COLUMNS)
@@ -92,6 +108,14 @@ def _ensure_columns(table: str, columns: dict[str, str]) -> None:
             connection.execute(
                 text(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_type}")
             )
+
+
+def _ensure_frame_sync_columns() -> None:
+    _ensure_columns("frames", FRAME_SYNC_COLUMNS)
+
+
+def _ensure_activity_chunk_sync_columns() -> None:
+    _ensure_columns("activity_chunks", ACTIVITY_CHUNK_SYNC_COLUMNS)
 
 
 def _ensure_recording_columns() -> None:

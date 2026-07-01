@@ -45,34 +45,90 @@ media/
     ocr/                # frame_000001.txt (OCR text when done)
 ```
 
-## Same data folders (Docker bind mounts)
+## Deployment (server + desktop)
 
-Docker writes to your project folders on the host:
+Jarvis runs as **two roles**:
 
-| Path | Contents |
-|------|----------|
-| `data/jarvis.db` | SQLite — open in VS Code |
-| `media/recording_<id>/` | frames, OCR text, capture video |
+| Role | Machine | Script | What runs |
+|------|---------|--------|-----------|
+| **Server** | VPS / always-on Linux | `./scripts/server-deploy.sh` | Central DB, WhatsApp, Google Calendar, AI summaries, sync API |
+| **Desktop client** | Linux laptop/desktop | `./scripts/desktop-client-setup.sh --server-url URL` | Screenpipe, OCR, activity capture → syncs to server |
 
 ```text
-  Local uvicorn                    Docker container
-        |                                |
-        v                                v
-   data/jarvis.db      <=========>  /app/data/jarvis.db
-   media/               <=========>  /app/media/
+  Desktop (client)                    Server (VPS)
+  Screenpipe + OCR        ──sync──►   jarvis.db (central)
+  client-buffer.db (local queue)      WhatsApp + Calendar + AI
 ```
 
-Optional: `cp .env.example .env` (for Docker `AUTO_START_SERVICES`, etc.). Do **not** set `DATABASE_URL` in `.env` for local uvicorn.
-
-**Run one server at a time** (same port `8000` and one SQLite writer). Stop Docker before local, or the other way around:
+### Server setup
 
 ```bash
-docker compose down    # stop Docker
-# or
-# Ctrl+C on uvicorn
+cp .env.server.example .env   # or let server-deploy.sh create it
+./scripts/server-deploy.sh
 ```
 
-## Screenpipe CLI (default)
+- Health: http://127.0.0.1:8000/health
+- Give desktop users: `http://<server-ip>:8000`
+- Stop: `docker compose -f docker-compose.server.yml down`
+
+### Desktop client setup
+
+```bash
+./scripts/desktop-client-setup.sh --server-url http://YOUR_SERVER_IP:8000
+```
+
+Anyone can run this on a Linux desktop with Docker. It installs Docker if missing, clones the repo (with `--clone URL`), and starts the capture container.
+
+- Local status: http://127.0.0.1:8000/api/v1/services/status
+- Stop: `docker compose -f docker-compose.client.yml down`
+
+### Frontend (jarvis-bot-fe)
+
+Point the Electron app at the **server**, not the desktop:
+
+```bash
+# jarvis-bot-fe/.env
+JARVIS_API_URL=http://YOUR_SERVER_IP:8000
+```
+
+### Config templates
+
+| File | Role |
+|------|------|
+| `.env.server.example` | Server — API keys, WhatsApp, `SYNC_API_KEY` |
+| `.env.client.example` | Desktop — `JARVIS_SERVER_URL`, Screenpipe, same `SYNC_API_KEY` |
+
+### Database note
+
+- **Server** owns `data/jarvis.db` — the only long-term database.
+- **Desktop** uses `data/client-buffer.db` locally while uploading; it never writes to the server's DB directly.
+- For multi-user scale, set `DATABASE_URL=postgresql://...` on the server.
+
+### Local development (both roles on one machine)
+
+```bash
+# Terminal 1 — server
+cp .env.server.example .env
+docker compose -f docker-compose.server.yml up --build
+
+# Terminal 2 — client
+cp .env.client.example .env
+# set JARVIS_SERVER_URL=http://127.0.0.1:8000 and matching SYNC_API_KEY
+./scripts/desktop-client-setup.sh --server-url http://127.0.0.1:8000
+```
+
+## Data folders
+
+| Path | Server | Desktop client |
+|------|--------|----------------|
+| `data/jarvis.db` | Central database | — |
+| `data/client-buffer.db` | — | Local upload queue |
+| `data/chroma/` | Vector search index | — |
+| `media/recording_<id>/` | Synced metadata (optional images) | Local frame captures |
+
+**Do not run server and client on the same port without Docker** — both use `:8000` by default inside their containers.
+
+## Screenpipe CLI (desktop client only)
 
 No ffmpeg interval config. On startup this backend:
 
@@ -88,59 +144,14 @@ Requires **Node.js** (`npx`) or the `screenpipe` binary on your PATH.
 npx -y screenpipe@latest record
 ```
 
-### Docker only (recommended — works on any Linux machine)
+### Docker compose files
 
-Everything runs **inside Docker**. No host Python, Node, screenpipe, or uvicorn required.
-
-| Component | Where it runs |
-|-----------|----------------|
-| FastAPI | container |
-| `screenpipe record --audio-all` | container |
-| Paddle OCR | container |
-| Meeting audio | container → host PulseAudio socket |
-| `data/` + `media/` | bind-mounted to project folder |
-
-**New machine — two commands:**
-
-```bash
-./scripts/docker-setup.sh   # once: creates .env, builds image, gets API token
-./scripts/docker-up.sh      # start everything
-```
-
-**Daily use:**
-
-```bash
-./scripts/docker-up.sh      # start
-./scripts/docker-down.sh    # stop
-./scripts/docker-doctor.sh  # check display, audio, API health
-```
-
-- API: http://127.0.0.1:8000  
-- Status: http://127.0.0.1:8000/api/v1/services/status  
-
-Frames sync when you **use the desktop** (Screenpipe is event-driven). First start can take 2–3 minutes.
-
-**Host requirements (any Linux desktop):**
-
-| Required | Why |
-|----------|-----|
-| Docker + Docker Compose | runs the stack |
-| Logged-in GUI session (X11/Wayland) | screen capture |
-| PipeWire or PulseAudio (default on Ubuntu) | meeting audio transcripts |
-
-**Not required on host:** Python, Node, screenpipe, uvicorn, venv.
-
-**API token:** `docker-setup.sh` tries to write `SCREENPIPE_API_TOKEN` to `.env` automatically. Or run:
-
-```bash
-docker compose exec jarvis-bot screenpipe auth token
-```
-
-**Meeting audio in Docker:** the container mounts your PulseAudio socket (`/run/user/$UID/pulse`) and `/dev/snd`. Check:
-
-```bash
-curl http://127.0.0.1:3030/health   # audio_status should be "ok"
-```
+| File | Role |
+|------|------|
+| `docker-compose.server.yml` | Server stack |
+| `docker-compose.client.yml` | Desktop capture stack |
+| `Dockerfile.server` | Lightweight API image (no Screenpipe/Paddle) |
+| `Dockerfile.client` | Full capture image |
 
 ### Local (venv, no Docker)
 
@@ -184,16 +195,15 @@ curl -X POST http://127.0.0.1:8000/api/v1/recordings/start \
 
 ### Docker environment variables
 
-| Variable | Default in compose | Description |
-|----------|-------------------|-------------|
-| `PORT` | `8000` | Host port mapped to the container |
-| `DATABASE_URL` | `sqlite:////app/data/jarvis.db` | SQLite path (default: `data/jarvis.db` locally) |
-| `AUTO_START_SERVICES` | `true` | Start screenpipe sync + OCR on boot |
-| `SCREENPIPE_CLI_COMMAND` | `npx -y screenpipe@latest record` | Screenpipe record command |
-| `SCREENPIPE_API_URL` | `http://host.docker.internal:3030` | Screenpipe REST API |
-| `SCREENPIPE_START_CLI` | `true` | Start `screenpipe record` inside container |
-| `SCREENPIPE_POLL_INTERVAL_SECONDS` | `2.0` | How often to check for new frames |
-| `OCR_POLL_INTERVAL_SECONDS` | `0.5` | OCR worker poll interval |
+| Variable | Server | Client | Description |
+|----------|--------|--------|-------------|
+| `APP_ROLE` | `server` | `client` | Which workers start |
+| `DATABASE_URL` | `jarvis.db` | `client-buffer.db` | Database path |
+| `JARVIS_SERVER_URL` | — | server URL | Where client uploads data |
+| `SYNC_API_KEY` | required | required | Shared auth for sync API |
+| `SCREENPIPE_ENABLED` | `false` | `true` | Screen capture |
+| `CHROMA_ENABLED` | `true` | `false` | Vector search on server |
+| `WHATSAPP_ENABLED` | `true` | `false` | WhatsApp on server only |
 
 ## Local setup
 
@@ -237,6 +247,7 @@ ffmpeg -version
 
 - `GET /health`
 - `GET /api/v1/services/status`
+- `POST /api/v1/sync/*` (server only — desktop upload endpoints)
 - `GET /api/v1/recordings`
 - `POST /api/v1/recordings`
 - `POST /api/v1/recordings/start`
@@ -245,17 +256,13 @@ ffmpeg -version
 - `PATCH /api/v1/recordings/{id}`
 - `DELETE /api/v1/recordings/{id}`
 
-## Live capture (server start)
+## Live capture (desktop client)
 
-When the server starts, **`screenpipe record`** runs and new frames (on screen change) are synced to:
+When the **desktop client** starts, **`screenpipe record`** runs and new frames (on screen change) are synced locally, then uploaded to the server.
 
-`media/recording_<id>/frames/frame_000001.jpg`
+`media/recording_<id>/frames/frame_000001.jpg` on the desktop. OCR text and activity chunks sync to the central server database.
 
-The paddle_ocr worker picks up frames with `ocr_status=queued`, runs PaddleOCR, sets `ocr_status=done`, and saves text to:
-
-`media/recording_<id>/ocr/frame_000001.txt`
-
-Check service health:
+Check desktop client health:
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/services/status

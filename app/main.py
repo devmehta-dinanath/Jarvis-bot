@@ -46,13 +46,18 @@ from sqlalchemy.orm import Session
 from app import crud, models, schemas
 from app.bootstrap import bootstrap_database
 from app.config import (
+    APP_ROLE,
     AUTO_START_SERVICES,
-    MEDIA_ROOT, 
+    JARVIS_SERVER_URL,
+    MEDIA_ROOT,
     SCREENPIPE_API_URL,
     SCREENPIPE_CLI_COMMAND,
     SCREENPIPE_ENABLED,
     SCREENPIPE_START_CLI,
+    SYNC_ENABLED,
     WHATSAPP_ONLY_MODE,
+    is_client_role,
+    is_server_role,
 )
 from app.services.screenpipe.auth import get_api_token
 from app.services.screenpipe.client import get_health
@@ -64,6 +69,7 @@ from app.services.summary.routes import router as summary_router
 from app.services.whatsapp.routes import router as whatsapp_router
 from app.services.whatsapp.client import is_configured as wa_client_is_configured
 from app.services.vector.routes import router as vector_router
+from app.services.sync.routes import router as sync_router
 from app.services.vector.store import get_vector_stats
 from app.services.google_calendar.service import google_calendar_service
 from app.services.pipeline import process_recording_job
@@ -118,6 +124,8 @@ app.include_router(meetings_router)
 app.include_router(summary_router)
 app.include_router(whatsapp_router)
 app.include_router(vector_router)
+if is_server_role():
+    app.include_router(sync_router)
 
 
 @app.get("/health")
@@ -127,11 +135,12 @@ def health_check() -> dict[str, str]:
 
 @app.get("/api/v1/services/status")
 def services_status() -> dict:
-    capture_running = service_manager.screenpipe.is_running
-    ocr_running = service_manager.paddle_ocr.is_running
     hint = None
-    if WHATSAPP_ONLY_MODE:
-        hint = "WhatsApp-only mode — screenpipe/OCR/activity pipelines are off."
+    if is_server_role():
+        hint = (
+            "Server role — WhatsApp, summaries, and sync ingestion API are active. "
+            "Screen capture runs on desktop clients."
+        )
     elif not AUTO_START_SERVICES:
         hint = (
             "AUTO_START_SERVICES is false — no frames are captured. "
@@ -142,43 +151,61 @@ def services_status() -> dict:
             f"Waiting for Screenpipe CLI ({SCREENPIPE_CLI_COMMAND}). "
             f"API: {SCREENPIPE_API_URL}"
         )
-    elif capture_running and service_manager.screenpipe.recording_id:
+    elif service_manager.screenpipe.is_running and service_manager.screenpipe.recording_id:
         hint = (
             f"Event-driven frames from screenpipe record → "
             f"media/recording_{service_manager.screenpipe.recording_id}/frames/"
-        ) 
-    elif capture_running:
+        )
+    elif service_manager.screenpipe.is_running:
         hint = "Syncing frames from Screenpipe API; interact with your screen to trigger captures."
-    return { 
+    elif is_client_role():
+        hint = f"Client role — capturing locally and syncing to {JARVIS_SERVER_URL}"
+
+    capture_running = service_manager.screenpipe.is_running if is_client_role() else False
+    ocr_running = service_manager.paddle_ocr.is_running if is_client_role() else False
+
+    return {
+        "app_role": APP_ROLE,
+        "jarvis_server_url": JARVIS_SERVER_URL if is_client_role() else None,
+        "sync_enabled": SYNC_ENABLED if is_client_role() else None,
+        "sync_uploader_running": service_manager.sync_uploader.is_running
+        if is_client_role()
+        else None,
         "auto_start_services": AUTO_START_SERVICES,
         "whatsapp_only_mode": WHATSAPP_ONLY_MODE,
-        "screenpipe_enabled": SCREENPIPE_ENABLED,
-        "screenpipe_cli_command": SCREENPIPE_CLI_COMMAND,
-        "screenpipe_api_url": SCREENPIPE_API_URL,
-        "screenpipe_api_token_configured": get_api_token() is not None,
-        "screenpipe_start_cli": SCREENPIPE_START_CLI, 
-        "media_root": str(MEDIA_ROOT), 
+        "screenpipe_enabled": SCREENPIPE_ENABLED if is_client_role() else False,
+        "screenpipe_cli_command": SCREENPIPE_CLI_COMMAND if is_client_role() else None,
+        "screenpipe_api_url": SCREENPIPE_API_URL if is_client_role() else None,
+        "screenpipe_api_token_configured": get_api_token() is not None
+        if is_client_role()
+        else None,
+        "screenpipe_start_cli": SCREENPIPE_START_CLI if is_client_role() else False,
+        "media_root": str(MEDIA_ROOT),
         "manager_started": service_manager.is_started,
-        "screenpipe": { 
+        "screenpipe": {
             "running": capture_running,
-            "cli_running": service_manager.screenpipe.cli_running,
-            "live_recording_id": service_manager.screenpipe.recording_id,
-            "health": get_health(SCREENPIPE_API_URL),
+            "cli_running": service_manager.screenpipe.cli_running if is_client_role() else False,
+            "live_recording_id": service_manager.screenpipe.recording_id
+            if is_client_role()
+            else None,
+            "health": get_health(SCREENPIPE_API_URL) if is_client_role() else None,
         },
-        "paddle_ocr": { 
+        "paddle_ocr": {
             "running": ocr_running,
         },
         "activity": {
-            "running": service_manager.activity.is_running,
+            "running": service_manager.activity.is_running if is_client_role() else False,
         },
-        "summary": _summary_status(),
+        "summary": _summary_status() if is_server_role() else {"worker_running": False},
         "whatsapp": {
-            "running": service_manager.whatsapp.is_running,
-            "enabled": service_manager.whatsapp.is_enabled,
-            "configured": wa_client_is_configured(),
+            "running": service_manager.whatsapp.is_running if is_server_role() else False,
+            "enabled": service_manager.whatsapp.is_enabled if is_server_role() else False,
+            "configured": wa_client_is_configured() if is_server_role() else False,
         },
-        "google_calendar": google_calendar_service.auth_status().model_dump(),
-        "vector": get_vector_stats(),
+        "google_calendar": google_calendar_service.auth_status().model_dump()
+        if is_server_role()
+        else {"authorized": False},
+        "vector": get_vector_stats() if is_server_role() else {"enabled": False, "count": 0},
         "hint": hint,
     }
 
@@ -277,6 +304,14 @@ def start_recording_pipeline(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> models.Recording:
+    if is_server_role():
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "Batch recording pipeline runs on desktop clients only. "
+                "Use desktop-client-setup.sh on a machine with screen access."
+            ),
+        )
     if not payload.source_video_path and not payload.capture_command:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

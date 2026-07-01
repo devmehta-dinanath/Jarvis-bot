@@ -1,46 +1,7 @@
-# Docker-only stack: API + screenpipe record + paddle OCR (nothing required on the host except Docker).
-# Linux desktop: run `./scripts/docker-up.sh` (sets DISPLAY + PulseAudio for meeting audio).
-services:
-  jarvis-bot:
-    build: .
-    container_name: jarvis-bot-be
-    network_mode: host
-    env_file:
-      - .env
-    environment:
-      RUNNING_IN_DOCKER: "true"
-      DATABASE_URL: sqlite:////app/data/jarvis.db
-      AUTO_START_SERVICES: "true"
-      SCREENPIPE_ENABLED: "true"
-      SCREENPIPE_START_CLI: "true"
-      SCREENPIPE_API_URL: http://127.0.0.1:3030
-      SCREENPIPE_CLI_COMMAND: ${SCREENPIPE_CLI_COMMAND:-screenpipe record --audio-all}
-      # Get token: screenpipe auth token — or set in project .env
-      SCREENPIPE_API_TOKEN: ${SCREENPIPE_API_TOKEN:-}
-      SCREENPIPE_LOCAL_API_KEY: ${SCREENPIPE_LOCAL_API_KEY:-}
-      SCREENPIPE_POLL_INTERVAL_SECONDS: "2.0"
-      OCR_POLL_INTERVAL_SECONDS: "0.5"
-      DISPLAY: ${DISPLAY:-:0}
-      XAUTHORITY: /tmp/.Xauthority
-      # Host PulseAudio/PipeWire — required for meeting audio transcripts in Docker
-      HOST_UID: ${UID:-1000}
-      XDG_RUNTIME_DIR: /run/user/${UID:-1000}
-      PULSE_SERVER: unix:/run/user/${UID:-1000}/pulse/native
-    volumes:
-      - ./data:/app/data
-      - ./media:/app/media
-      - ${HOME}/.screenpipe:/root/.screenpipe
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # Prepared by scripts/docker-up.sh → data/.jarvis-xauthority (do not use nested ${} here)
-      - ./data/.jarvis-xauthority:/tmp/.Xauthority:ro
-      - /run/user/${UID:-1000}/pulse:/run/user/${UID:-1000}/pulse:rw
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/snd:/dev/snd
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 180s
+# Deprecated — use role-specific compose files instead:
+#   Server:  docker compose -f docker-compose.server.yml up -d
+#   Desktop: docker compose -f docker-compose.client.yml up -d
+#
+# Or run the setup scripts:
+#   ./scripts/server-deploy.sh
+#   ./scripts/desktop-client-setup.sh --server-url http://SERVER:8000

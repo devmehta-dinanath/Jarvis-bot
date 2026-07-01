@@ -1,0 +1,31 @@
+# Server stack: central DB, WhatsApp, Google Calendar, AI summaries, sync ingestion API.
+# Start: ./scripts/server-deploy.sh
+services:
+  jarvis-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: jarvis-bot-server
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: server
+      RUNNING_IN_DOCKER: "true"
+      DATABASE_URL: sqlite:////app/data/jarvis.db
+      SCREENPIPE_ENABLED: "false"
+      SCREENPIPE_START_CLI: "false"
+      CHROMA_ENABLED: "true"
+      SUMMARY_ENABLED: "true"
+      WHATSAPP_ENABLED: "true"
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

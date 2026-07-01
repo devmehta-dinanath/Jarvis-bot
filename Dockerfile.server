@@ -1,0 +1,42 @@
+# Lightweight server image — API, WhatsApp, Calendar, summaries (no Screenpipe/Paddle)
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+        python3.12 python3.12-venv python3.12-dev \
+    && python3.12 -m venv /opt/venv \
+    && ln -sf python3.12 /opt/venv/bin/python \
+    && ln -sf python3.12 /opt/venv/bin/python3 \
+    && /opt/venv/bin/python -m ensurepip --upgrade \
+    && /opt/venv/bin/python -m pip install --upgrade pip setuptools wheel \
+    && /opt/venv/bin/python -m pip install -r requirements.txt \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY app ./app
+COPY scripts/docker-server-entrypoint.sh /usr/local/bin/docker-server-entrypoint.sh
+
+RUN mkdir -p /app/data /app/media \
+    && chmod +x /usr/local/bin/docker-server-entrypoint.sh
+
+ENV RUNNING_IN_DOCKER=true \
+    APP_ROLE=server
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -f http://127.0.0.1:8000/health || exit 1
+
+ENTRYPOINT ["docker-server-entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
