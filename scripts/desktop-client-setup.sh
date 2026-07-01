@@ -328,6 +328,9 @@ setup_frontend_env() {
 
   ensure_env_file "$env_file" "$example_file" "frontend"
   env_file_set "$env_file" "JARVIS_API_URL" "$api_url"
+  if [ -n "$SERVER_URL" ]; then
+    env_file_set "$env_file" "JARVIS_SERVER_URL" "$SERVER_URL"
+  fi
   if is_placeholder_value "$(env_file_get "$env_file" APP_ENV)"; then
     env_file_set "$env_file" "APP_ENV" "development"
   fi
@@ -362,6 +365,10 @@ setup_backend_env() {
 
   ensure_env_file "$env_file" "$example_file" "backend"
   env_file_set "$env_file" "APP_ROLE" "client"
+  env_file_set "$env_file" "WHATSAPP_ONLY_MODE" "false"
+  env_file_set "$env_file" "WHATSAPP_ENABLED" "false"
+  env_file_set "$env_file" "SUMMARY_ENABLED" "false"
+  env_file_set "$env_file" "CHROMA_ENABLED" "false"
   env_file_set "$env_file" "SCREENPIPE_ENABLED" "true"
 
   if [ "$LOCAL_ONLY" = true ]; then
@@ -467,7 +474,8 @@ start_frontend() {
 
   export_host_env
   load_env_file "$FRONTEND_DIR/.env"
-  export JARVIS_API_URL="${JARVIS_API_URL:-http://127.0.0.1:8000}"
+    export JARVIS_API_URL="${JARVIS_API_URL:-http://127.0.0.1:8000}"
+    export JARVIS_SERVER_URL="${JARVIS_SERVER_URL:-${SERVER_URL:-http://127.0.0.1:8000}}"
 
   log_detail "DISPLAY=$DISPLAY"
   log_detail "JARVIS_API_URL=$JARVIS_API_URL"
@@ -591,6 +599,18 @@ prepare_x11() {
   xhost +local:docker 2>/dev/null || true
   pkill -f "screenpipe record" 2>/dev/null || true
   mkdir -p "$BACKEND_DIR/data" "$BACKEND_DIR/media" "${HOME}/.screenpipe"
+}
+
+stop_conflicting_containers() {
+  log_detail "Stopping old Jarvis containers that may hold port 8000 ..."
+  docker stop jarvis-bot-be jarvis-bot-server 2>/dev/null || true
+  docker rm jarvis-bot-be jarvis-bot-server 2>/dev/null || true
+  if [ -f "$BACKEND_DIR/docker-compose.client.yml" ]; then
+    (cd "$BACKEND_DIR" && docker compose -f docker-compose.client.yml down --remove-orphans 2>/dev/null || true)
+  fi
+  if [ -f "$BACKEND_DIR/docker-compose.server.yml" ]; then
+    (cd "$BACKEND_DIR" && docker compose -f docker-compose.server.yml down 2>/dev/null || true)
+  fi
 }
 
 ensure_client_docker_files() {
@@ -845,10 +865,11 @@ log_ok "X11 prepared (DISPLAY=$DISPLAY)"
 
 log_step "Build and start Docker container"
 ensure_client_docker_files
+stop_conflicting_containers
 export_host_env
 log_detail "HOST_UID=$HOST_UID DISPLAY=$DISPLAY"
-log_detail "Running: docker compose -f $BACKEND_DIR/docker-compose.client.yml up -d --build"
-(cd "$BACKEND_DIR" && docker compose -f docker-compose.client.yml up -d --build)
+log_detail "Running: docker compose -f $BACKEND_DIR/docker-compose.client.yml up -d --build --remove-orphans"
+(cd "$BACKEND_DIR" && docker compose -f docker-compose.client.yml up -d --build --remove-orphans)
 log_ok "Docker container started"
 log_detail "Recent container logs:"
 (cd "$BACKEND_DIR" && docker compose -f docker-compose.client.yml logs --tail=50) || true

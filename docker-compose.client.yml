@@ -11,6 +11,7 @@ services:
       - .env
     environment:
       APP_ROLE: client
+      WHATSAPP_ONLY_MODE: "false"
       RUNNING_IN_DOCKER: "true"
       DATABASE_URL: sqlite:////app/data/client-buffer.db
       CHROMA_ENABLED: "false"

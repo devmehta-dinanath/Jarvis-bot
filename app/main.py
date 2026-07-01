@@ -63,12 +63,7 @@ from app.services.screenpipe.auth import get_api_token
 from app.services.screenpipe.client import get_health
 from app.database import get_db
 from app.services import service_manager
-from app.services.google_calendar.routes import router as google_calendar_router
 from app.services.meetings.routes import router as meetings_router
-from app.services.summary.routes import router as summary_router
-from app.services.whatsapp.routes import router as whatsapp_router
-from app.services.whatsapp.client import is_configured as wa_client_is_configured
-from app.services.vector.routes import router as vector_router
 from app.services.vector.store import get_vector_stats
 from app.services.google_calendar.service import google_calendar_service
 from app.services.pipeline import process_recording_job
@@ -118,15 +113,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
-app.include_router(google_calendar_router)
 app.include_router(meetings_router)
-app.include_router(summary_router)
-app.include_router(whatsapp_router)
-app.include_router(vector_router)
 if is_server_role():
+    from app.services.google_calendar.routes import router as google_calendar_router
+    from app.services.summary.routes import router as summary_router
+    from app.services.vector.routes import router as vector_router
+    from app.services.whatsapp.client import is_configured as wa_client_is_configured
+    from app.services.whatsapp.routes import router as whatsapp_router
+
+    app.include_router(google_calendar_router)
+    app.include_router(summary_router)
+    app.include_router(whatsapp_router)
+    app.include_router(vector_router)
     from app.services.sync.routes import router as sync_router
 
     app.include_router(sync_router)
+else:
+    from app.services.whatsapp.client import is_configured as wa_client_is_configured
 
 
 @app.get("/health")

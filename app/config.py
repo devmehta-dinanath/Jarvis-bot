@@ -22,14 +22,22 @@ DEFAULT_CLIENT_DATABASE_URL = (
 )
 
 # --- Deployment role: server (central DB + integrations) vs client (capture + sync) ---
-_raw_role = os.getenv("APP_ROLE", "client").strip().lower()
+_explicit_role = os.getenv("APP_ROLE", "").strip().lower()
+_raw_role = _explicit_role or "client"
 if os.getenv("WHATSAPP_ONLY_MODE", "false").lower() in {"1", "true", "yes"}:
-    if _raw_role != "server":
-        logger.warning(
-            "WHATSAPP_ONLY_MODE is deprecated; use APP_ROLE=server instead"
-        )
-    _raw_role = "server"
+    logger.warning(
+        "WHATSAPP_ONLY_MODE is deprecated; use APP_ROLE=server instead"
+    )
+    # Never downgrade an explicit desktop client to server mode.
+    if _explicit_role != "client":
+        _raw_role = "server"
 APP_ROLE = _raw_role if _raw_role in {"server", "client"} else "client"
+
+_SERVER_FEATURE_DEFAULT = "true" if APP_ROLE == "server" else "false"
+
+
+def _env_bool(name: str, default: str) -> bool:
+    return os.getenv(name, default).lower() in {"1", "true", "yes"}
 
 JARVIS_SERVER_URL = os.getenv("JARVIS_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
 SYNC_API_KEY = os.getenv("SYNC_API_KEY", "").strip() or None
@@ -132,7 +140,7 @@ ACTIVITY_POLL_INTERVAL_SECONDS = float(os.getenv("ACTIVITY_POLL_INTERVAL_SECONDS
 ACTIVITY_CHUNK_GAP_SECONDS = float(os.getenv("ACTIVITY_CHUNK_GAP_SECONDS", "120"))
 
 # --- ChromaDB vector store ---
-CHROMA_ENABLED = os.getenv("CHROMA_ENABLED", "true").lower() in {"1", "true", "yes"}
+CHROMA_ENABLED = _env_bool("CHROMA_ENABLED", _SERVER_FEATURE_DEFAULT)
 CHROMA_PATH = Path(os.getenv("CHROMA_PATH", str(DATA_DIR / "chroma")))
 CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "activity_chunks")
 CHROMA_LOG_EMBEDDINGS = os.getenv("CHROMA_LOG_EMBEDDINGS", "true").lower() in {"1", "true", "yes"}
@@ -173,7 +181,7 @@ CALENDAR_DEFAULT_TIMEZONE = os.getenv("CALENDAR_DEFAULT_TIMEZONE", "UTC")
 # --- OpenAI daily insights (OCR activity → today summary + tomorrow predictions) ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip() or None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-SUMMARY_ENABLED = os.getenv("SUMMARY_ENABLED", "true").lower() in {"1", "true", "yes"}
+SUMMARY_ENABLED = _env_bool("SUMMARY_ENABLED", _SERVER_FEATURE_DEFAULT)
 SUMMARY_POLL_INTERVAL_SECONDS = float(os.getenv("SUMMARY_POLL_INTERVAL_SECONDS", "60"))
 SUMMARY_MAX_CHUNK_PREVIEW_CHARS = int(os.getenv("SUMMARY_MAX_CHUNK_PREVIEW_CHARS", "0"))
 SUMMARY_MAX_INPUT_CHARS = int(os.getenv("SUMMARY_MAX_INPUT_CHARS", "8000"))
@@ -209,8 +217,8 @@ GOOGLE_CALENDAR_SCOPES = [
     if scope.strip()
 ]
 
-# --- WhatsApp Cloud API pipeline (webhook → AI classify → suggestions) ---
-WHATSAPP_ENABLED = os.getenv("WHATSAPP_ENABLED", "true").lower() in {"1", "true", "yes"}
+# --- WhatsApp Cloud API pipeline (server only — webhook → AI classify → suggestions) ---
+WHATSAPP_ENABLED = _env_bool("WHATSAPP_ENABLED", _SERVER_FEATURE_DEFAULT)
 WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
 WHATSAPP_API_BASE = os.getenv("WHATSAPP_API_BASE", "https://graph.facebook.com").rstrip("/")
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip() or None
