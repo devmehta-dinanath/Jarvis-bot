@@ -2,9 +2,24 @@ export const DISPLAY_TIMEZONE = "Asia/Kolkata";
 
 const LOCALE = "en-IN";
 
+function hasExplicitTimezone(value) {
+  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value.trim());
+}
+
 function toDate(value) {
   if (value instanceof Date) {
     return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const normalized = trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T");
+    const parsed = new Date(
+      hasExplicitTimezone(normalized) ? normalized : `${normalized}Z`
+    );
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -20,6 +35,58 @@ export function formatDateTime(value, options = {}) {
     timeZone: DISPLAY_TIMEZONE,
     ...options
   });
+}
+
+export function toISODateKey(value) {
+  const date = toDate(value);
+  if (!date) {
+    return null;
+  }
+
+  return date.toLocaleDateString("en-CA", {
+    timeZone: DISPLAY_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+}
+
+export function formatShortDate(value) {
+  const date = toDate(value);
+  if (!date) {
+    return "";
+  }
+
+  return formatDateTime(date, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+}
+
+export function formatRelativeDayLabel(isoDateKey) {
+  if (!isoDateKey) {
+    return "Select a day";
+  }
+
+  const todayKey = toISODateKey(new Date());
+  if (isoDateKey === todayKey) {
+    return "Today";
+  }
+
+  const today = new Date(`${todayKey}T12:00:00`);
+  const target = new Date(`${isoDateKey}T12:00:00`);
+  const diffDays = Math.round((today - target) / 86400000);
+
+  if (diffDays === 1) {
+    return "Yesterday";
+  }
+  if (diffDays > 1 && diffDays < 7) {
+    return `${diffDays} days ago`;
+  }
+
+  return formatShortDate(target);
 }
 
 export function getGreeting(name = "there") {

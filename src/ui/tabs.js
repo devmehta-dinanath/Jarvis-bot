@@ -1,5 +1,5 @@
+import { createDailyInsightsPage } from "../pages/daily-insights-page.js";
 import { createMeetingPage } from "../pages/meeting-page.js";
-import { createPlaceholderPage } from "../pages/placeholder-page.js";
 import { createSummaryPage } from "../pages/summary-page.js";
 import { createCommandBar } from "./components/command-bar.js";
 
@@ -17,11 +17,7 @@ const MENU_ITEMS = [
   {
     id: "summary",
     label: "Summary",
-    renderPanel: () =>
-      createPlaceholderPage(
-        "Summary",
-        "Daily activity insights and summaries will appear here."
-      )
+    renderPanel: createDailyInsightsPage
   }
 ];
 
@@ -128,6 +124,10 @@ export function createTabSystem() {
   header.append(brand, tabs);
   body.appendChild(panelHost);
   panel.append(header, body, createCommandBar());
+
+  if (window.location.hash.replace(/^#/, "").startsWith("summary/")) {
+    activateTab(buttons, panels, "panel-summary");
+  }
 
   return panel;
 }

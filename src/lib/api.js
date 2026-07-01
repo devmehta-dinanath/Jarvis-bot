@@ -91,3 +91,39 @@ export function getTodayCalendarEvents() {
 export function getCalendarStatus() {
   return fetchJson("/api/v1/calendar/status", {}, SERVER_API);
 }
+
+export function getLatestDailySummary() {
+  return fetchJson("/api/v1/summaries/latest?period_type=daily", {}, SERVER_API);
+}
+
+export function listDailySummaries({ limit = 120, offset = 0 } = {}) {
+  const params = new URLSearchParams({
+    period_type: "daily",
+    limit: String(limit),
+    offset: String(offset)
+  });
+  return fetchJson(`/api/v1/summaries?${params.toString()}`, {}, SERVER_API);
+}
+
+export function getDailySummaryForDate(isoDateKey) {
+  return fetchJson(`/api/v1/summaries/day/${isoDateKey}?period_type=daily`, {}, SERVER_API);
+}
+
+export function getSummaryStats() {
+  return fetchJson("/api/v1/summaries/stats", {}, SERVER_API);
+}
+
+export function getPendingSummaries() {
+  return fetchJson("/api/v1/summaries/pending", {}, SERVER_API);
+}
+
+export function generateDailySummaryForDate(isoDateKey) {
+  const params = new URLSearchParams({ day: isoDateKey });
+  return fetchJson(`/api/v1/summaries/generate?${params.toString()}`, {
+    method: "POST"
+  }, SERVER_API);
+}
+
+export function catchUpPendingSummaries() {
+  return fetchJson("/api/v1/summaries/catch-up", { method: "POST" }, SERVER_API);
+}
