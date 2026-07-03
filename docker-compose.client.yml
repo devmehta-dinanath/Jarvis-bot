@@ -24,9 +24,8 @@ services:
       SCREENPIPE_CLI_COMMAND: screenpipe record
       SCREENPIPE_API_TOKEN: ${SCREENPIPE_API_TOKEN:-}
       SCREENPIPE_LOCAL_API_KEY: ${SCREENPIPE_LOCAL_API_KEY:-}
-      JARVIS_SERVER_URL: ${JARVIS_SERVER_URL:-http://127.0.0.1:8000}
-      SYNC_API_KEY: ${SYNC_API_KEY:-}
-      SYNC_ENABLED: ${SYNC_ENABLED:-true}
+      # JARVIS_SERVER_URL / SYNC_* come from env_file (.env) only — do not set
+      # SYNC_API_KEY here; ${SYNC_API_KEY:-} expands to "" and overrides env_file.
       DISPLAY: ${DISPLAY:-:0}
       XAUTHORITY: /tmp/.Xauthority
       HOST_UID: ${HOST_UID:-1000}

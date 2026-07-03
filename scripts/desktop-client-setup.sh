@@ -263,12 +263,10 @@ clone_branch() {
 
   if [ -d "$dest/.git" ]; then
     if repo_has_expected_remote "$dest"; then
-      log_detail "Repo exists with expected remote — skipping clone/update"
-      log_repo_info "$dest" "$(basename "$dest")" || true
-      return 0
+      log_detail "Repo exists — pulling latest for branch '$branch' ..."
+    else
+      log_detail "Repo exists with different remote — fetching latest for branch '$branch' ..."
     fi
-
-    log_detail "Repo exists — fetching latest for branch '$branch' ..."
     git -C "$dest" fetch origin "$branch" 2>&1 | while IFS= read -r line; do log_detail "$line"; done || true
     git -C "$dest" checkout "$branch" 2>&1 | while IFS= read -r line; do log_detail "$line"; done
     if git -C "$dest" pull --ff-only origin "$branch" 2>&1 | while IFS= read -r line; do log_detail "$line"; done; then
@@ -309,17 +307,20 @@ clone_repos_if_needed() {
   fi
 
   if [ "$backend_ready" = true ] && [ "$frontend_ready" = true ]; then
-    log_ok "Install dir already has repos with expected remote — skipping clone"
+    log_detail "Repos already present — pulling latest ..."
+    clone_branch "$BACKEND_BRANCH" "$BACKEND_DIR"
     log_repo_info "$BACKEND_DIR" "backend" || true
     if [ "$frontend_needed" = true ]; then
+      clone_branch "$FRONTEND_BRANCH" "$FRONTEND_DIR"
       log_repo_info "$FRONTEND_DIR" "frontend" || true
     fi
     return 0
   fi
 
   if [ "$backend_ready" = true ]; then
-    log_detail "Backend already cloned — fetching frontend only if needed ..."
-    log_repo_info "$BACKEND_DIR" "backend" || true  
+    log_detail "Backend already present — updating backend and frontend ..."
+    clone_branch "$BACKEND_BRANCH" "$BACKEND_DIR"
+    log_repo_info "$BACKEND_DIR" "backend" || true
     clone_branch "$FRONTEND_BRANCH" "$FRONTEND_DIR"
     log_repo_info "$FRONTEND_DIR" "frontend"
     return 0
