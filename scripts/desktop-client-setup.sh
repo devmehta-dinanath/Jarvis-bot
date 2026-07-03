@@ -205,6 +205,27 @@ resolve_dirs() {
   log_detail "Frontend: $FRONTEND_DIR"
 }
 
+normalize_git_url() {
+  local url="${1%/}"
+  url="${url%.git}"
+  url="$(printf '%s' "$url" | sed -E \
+    -e 's#^git@([^:]+):#https://\1/#' \
+    -e 's#^ssh://git@##' \
+    -e 's#^https?://##')"
+  printf '%s' "$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')"
+}
+
+repo_has_expected_remote() {
+  local dest="$1"
+  local remote expected
+
+  [ -d "$dest/.git" ] || return 1
+  remote="$(git -C "$dest" remote get-url origin 2>/dev/null || true)"
+  [ -n "$remote" ] || return 1
+  expected="$(normalize_git_url "$CLONE_URL")"
+  [ "$(normalize_git_url "$remote")" = "$expected" ]
+}
+
 log_repo_info() {
   local dest="$1" label="$2"
 
@@ -239,6 +260,12 @@ clone_branch() {
   local dest="$2"
 
   if [ -d "$dest/.git" ]; then
+    if repo_has_expected_remote "$dest"; then
+      log_detail "Repo exists with expected remote — skipping clone/update"
+      log_repo_info "$dest" "$(basename "$dest")" || true
+      return 0
+    fi
+
     log_detail "Repo exists — fetching latest for branch '$branch' ..."
     git -C "$dest" fetch origin "$branch" 2>&1 | while IFS= read -r line; do log_detail "$line"; done || true
     git -C "$dest" checkout "$branch" 2>&1 | while IFS= read -r line; do log_detail "$line"; done
@@ -265,25 +292,32 @@ clone_branch() {
 }
 
 clone_repos_if_needed() {
-  local has_backend=false
-  if [ -f "$BACKEND_DIR/docker-compose.client.yml" ] || [ -f "$BACKEND_DIR/app/main.py" ]; then
-    has_backend=true
+  local backend_ready=false frontend_ready=false frontend_needed=true
+
+  if [ "$START_FRONTEND" = false ] || [ "$CLONE_ONLY" = true ]; then
+    frontend_needed=false
   fi
 
-  if [ "$has_backend" = true ] && [ -f "$FRONTEND_DIR/package.json" ]; then
-    log_detail "Backend + frontend already present — skipping clone"
+  if repo_has_expected_remote "$BACKEND_DIR"; then
+    backend_ready=true
+  fi
+
+  if [ "$frontend_needed" = false ] || repo_has_expected_remote "$FRONTEND_DIR"; then
+    frontend_ready=true
+  fi
+
+  if [ "$backend_ready" = true ] && [ "$frontend_ready" = true ]; then
+    log_ok "Install dir already has repos with expected remote — skipping clone"
     log_repo_info "$BACKEND_DIR" "backend" || true
-    if [ -f "$FRONTEND_DIR/package.json" ]; then
+    if [ "$frontend_needed" = true ]; then
       log_repo_info "$FRONTEND_DIR" "frontend" || true
-    else
-      warn "Frontend not found at $FRONTEND_DIR"
     fi
     return 0
   fi
 
-  if [ -f "$BACKEND_DIR/docker-compose.client.yml" ]; then
-    log_detail "Backend present, cloning frontend only ..."
-    log_repo_info "$BACKEND_DIR" "backend" || true
+  if [ "$backend_ready" = true ]; then
+    log_detail "Backend already cloned — fetching frontend only if needed ..."
+    log_repo_info "$BACKEND_DIR" "backend" || true  
     clone_branch "$FRONTEND_BRANCH" "$FRONTEND_DIR"
     log_repo_info "$FRONTEND_DIR" "frontend"
     return 0
@@ -294,9 +328,11 @@ clone_repos_if_needed() {
   clone_branch "$BACKEND_BRANCH" "$BACKEND_DIR"
   log_repo_info "$BACKEND_DIR" "backend"
 
-  log_detail "Cloning frontend branch '$FRONTEND_BRANCH' ..."
-  clone_branch "$FRONTEND_BRANCH" "$FRONTEND_DIR"
-  log_repo_info "$FRONTEND_DIR" "frontend"
+  if [ "$frontend_needed" = true ]; then
+    log_detail "Cloning frontend branch '$FRONTEND_BRANCH' ..."
+    clone_branch "$FRONTEND_BRANCH" "$FRONTEND_DIR"
+    log_repo_info "$FRONTEND_DIR" "frontend"
+  fi
 }
 
 install_frontend_deps() {
