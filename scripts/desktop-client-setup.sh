@@ -69,7 +69,7 @@ ensure_env_file() {
 is_placeholder_value() {
   local value="${1:-}"
   case "$value" in
-    ""|*change-me*|*YOUR_SERVER_IP*|*your-token-here*|*example.internal*)
+    ""|*change-me*|*YOUR_SERVER_IP*|*your-token*|*example.internal*|*placeholder*)
       return 0
       ;;
   esac
@@ -411,6 +411,9 @@ setup_backend_env() {
   env_file_set "$env_file" "SCREENPIPE_ENABLED" "true"
   env_file_set "$env_file" "SCREENPIPE_CLI_COMMAND" "screenpipe record"
   env_file_set "$env_file" "MEETING_AUDIO_SYNC_ENABLED" "true"
+  if is_placeholder_value "$(env_file_get "$env_file" SCREENPIPE_API_TOKEN)"; then
+    sed -i '/^SCREENPIPE_API_TOKEN=/d' "$env_file" 2>/dev/null || true
+  fi
 
   if [ "$LOCAL_ONLY" = true ]; then
     SERVER_URL="${SERVER_URL:-http://127.0.0.1:8000}"
@@ -467,11 +470,11 @@ check_backend_screenpipe_env() {
   local env_file="$BACKEND_DIR/.env"
   local token
   token="$(env_file_get "$env_file" SCREENPIPE_API_TOKEN)"
-  if is_placeholder_value "$token"; then
-    warn "SCREENPIPE_API_TOKEN not set — capture may fail until token is fetched"
-    return 1
+  if [ -n "$token" ] && ! is_placeholder_value "$token"; then
+    log_ok "Backend .env OK (SCREENPIPE_API_TOKEN=set)"
+    return 0
   fi
-  log_ok "Backend .env OK (SCREENPIPE_API_TOKEN=set)"
+  log_ok "SCREENPIPE_API_TOKEN not in .env — will be auto-fetched on container start"
   return 0
 }
 

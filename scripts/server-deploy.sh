@@ -9,6 +9,47 @@ INSTALL_DIR="${JARVIS_INSTALL_DIR:-$REPO_DIR}"
 
 log() { echo "[server-deploy] $*"; }
 die() { echo "[server-deploy] ERROR: $*" >&2; exit 1; }
+warn() { echo "[server-deploy] WARN: $*" >&2; }
+
+env_file_get() {
+  local file="$1" key="$2"
+  grep -E "^${key}=" "$file" 2>/dev/null | tail -1 | cut -d= -f2- \
+    | sed 's/^["'\'' ]*//;s/["'\'' ]*$//'
+}
+
+is_placeholder_value() {
+  local value="${1:-}"
+  case "$value" in
+    ""|*your-*|*change-me*|*YOUR_*|*placeholder*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+check_whatsapp_env() {
+  local env_file=".env"
+  local enabled phone_id token verify_token
+  enabled="$(env_file_get "$env_file" WHATSAPP_ENABLED)"
+  case "$enabled" in
+    0|false|no) return 0 ;;
+  esac
+
+  phone_id="$(env_file_get "$env_file" WHATSAPP_PHONE_NUMBER_ID)"
+  token="$(env_file_get "$env_file" WHATSAPP_ACCESS_TOKEN)"
+  verify_token="$(env_file_get "$env_file" WHATSAPP_VERIFY_TOKEN)"
+
+  if is_placeholder_value "$phone_id"; then
+    die "WHATSAPP_PHONE_NUMBER_ID is required on server (Meta → WhatsApp → API Setup → Phone number ID)"
+  fi
+  if is_placeholder_value "$token"; then
+    die "WHATSAPP_ACCESS_TOKEN is required on server (Meta long-lived token)"
+  fi
+  if is_placeholder_value "$verify_token"; then
+    die "WHATSAPP_VERIFY_TOKEN is required on server (must match Meta webhook config)"
+  fi
+  log "WhatsApp env OK (phone_number_id set)"
+}
 
 ensure_linux() {
   [ "$(uname -s)" = "Linux" ] || die "Linux is required for server deployment"
@@ -53,8 +94,9 @@ wait_for_health() {
 
 doctor() {
   docker info >/dev/null 2>&1 || die "Docker daemon is not running"
-  [ -f .env ] || die ".env missing — create it on the server before running this script"
+  [ -f .env ] || die ".env missing — create it on the server: cp .env.server.example .env"
   mkdir -p data media
+  check_whatsapp_env
   log "Doctor OK"
 }
 

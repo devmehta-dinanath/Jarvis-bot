@@ -22,8 +22,8 @@ services:
       SCREENPIPE_API_URL: http://127.0.0.1:3030
       # Official default: audio capture is ON with `screenpipe record` (no extra flags).
       SCREENPIPE_CLI_COMMAND: screenpipe record
-      SCREENPIPE_API_TOKEN: ${SCREENPIPE_API_TOKEN:-}
-      SCREENPIPE_LOCAL_API_KEY: ${SCREENPIPE_LOCAL_API_KEY:-}
+      # SCREENPIPE_API_TOKEN — auto-fetched in docker-entrypoint.sh if unset; do not
+      # override here or ${SCREENPIPE_API_TOKEN:-} can blank env_file values.
       # JARVIS_SERVER_URL / SYNC_* come from env_file (.env) only — do not set
       # SYNC_API_KEY here; ${SYNC_API_KEY:-} expands to "" and overrides env_file.
       DISPLAY: ${DISPLAY:-:0}
