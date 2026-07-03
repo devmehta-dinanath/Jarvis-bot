@@ -147,6 +147,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+SYNC_KEY="${SYNC_KEY:-${SYNC_API_KEY:-}}"
+
 detect_os() {
   case "$(uname -s)" in
     Linux) OS="linux" ;;
@@ -426,8 +428,10 @@ setup_backend_env() {
   if [ -n "$SYNC_KEY" ]; then
     env_file_set "$env_file" "SYNC_API_KEY" "$SYNC_KEY"
   elif is_placeholder_value "$(env_file_get "$env_file" SYNC_API_KEY)"; then
-    read -r -p "Enter SYNC_API_KEY (from server .env): " SYNC_KEY
-    [ -n "$SYNC_KEY" ] || die "SYNC_API_KEY is required"
+    if [ -t 0 ]; then
+      read -r -p "Enter SYNC_API_KEY (from server .env): " SYNC_KEY
+    fi
+    [ -n "$SYNC_KEY" ] || die "SYNC_API_KEY is required — pass --sync-key KEY or export SYNC_API_KEY"
     env_file_set "$env_file" "SYNC_API_KEY" "$SYNC_KEY"
   fi
 

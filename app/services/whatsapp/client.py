@@ -6,13 +6,13 @@ from typing import Any
 import httpx
 
 from app.config import (
-    WHATSAPP_ACCESS_TOKEN,
     WHATSAPP_API_BASE,
     WHATSAPP_API_VERSION,
     WHATSAPP_APP_SECRET,
     WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE,
 )
+from app.services.whatsapp.auth import get_access_token, refresh_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class WhatsAppApiError(Exception):
 
 
 def is_configured() -> bool:
-    return bool(WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID)
+    return bool(get_access_token() and WHATSAPP_PHONE_NUMBER_ID)
 
 
 def _messages_url() -> str:
@@ -34,13 +34,14 @@ def _messages_url() -> str:
     )
 
 
-def _post(payload: dict[str, Any]) -> dict[str, Any]:
+def _post(payload: dict[str, Any], *, allow_token_retry: bool = True) -> dict[str, Any]:
     if not is_configured():
         raise WhatsAppApiError(
             "WhatsApp not configured — set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID"
         )
+    token = get_access_token()
     headers = {
-        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
     try:
@@ -53,6 +54,9 @@ def _post(payload: dict[str, Any]) -> dict[str, Any]:
     except httpx.HTTPError as exc:
         logger.error("[WHATSAPP] Graph API request failed: %s", exc)
         raise WhatsAppApiError(str(exc)) from exc
+
+    if response.status_code in {401, 403} and allow_token_retry and refresh_if_needed(force=True):
+        return _post(payload, allow_token_retry=False)
 
     if response.status_code >= 400:
         logger.error(

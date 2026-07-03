@@ -7,6 +7,7 @@ from app.services.paddle_ocr.service import PaddleOcrService
 from app.services.screenpipe.service import ScreenpipeService
 from app.services.summary.service import SummaryService
 from app.services.sync.service import SyncUploaderService
+from app.services.whatsapp.auth import start_refresh_worker, stop_refresh_worker
 from app.services.whatsapp.service import WhatsAppService
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class ServiceManager:
             return
 
         if is_server_role():
+            start_refresh_worker()
             self.summary.start()
             self.whatsapp.start()
             logger.info(
@@ -69,6 +71,7 @@ class ServiceManager:
         if is_server_role():
             self.summary.stop()
             self.whatsapp.stop()
+            stop_refresh_worker()
         elif is_client_role():
             self.sync_uploader.stop()
             self.meeting_transcripts.stop()

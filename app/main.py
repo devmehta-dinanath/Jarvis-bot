@@ -117,6 +117,7 @@ if is_server_role():
     from app.services.google_calendar.routes import router as google_calendar_router
     from app.services.summary.routes import router as summary_router
     from app.services.vector.routes import router as vector_router
+    from app.services.whatsapp.auth import token_status as wa_token_status
     from app.services.whatsapp.client import is_configured as wa_client_is_configured
     from app.services.whatsapp.routes import router as whatsapp_router
 
@@ -204,6 +205,7 @@ def services_status() -> dict:
             "running": service_manager.whatsapp.is_running if is_server_role() else False,
             "enabled": service_manager.whatsapp.is_enabled if is_server_role() else False,
             "configured": wa_client_is_configured() if is_server_role() else False,
+            **(wa_token_status() if is_server_role() else {}),
         },
         "google_calendar": google_calendar_service.auth_status().model_dump()
         if is_server_role()

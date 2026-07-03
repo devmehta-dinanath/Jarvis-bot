@@ -38,25 +38,6 @@ clone_repo_if_needed() {
   git clone "$CLONE_URL" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
 }
-                                                          
-prompt_env() {
-  if [ ! -f .env ]; then
-    cp .env.server.example .env
-    log "Created .env from .env.server.example"
-  fi
-  if grep -q 'change-me-to-a-long-random-string' .env 2>/dev/null; then
-    KEY="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-    sed -i "s|^SYNC_API_KEY=.*|SYNC_API_KEY=${KEY}|" .env
-    log "Generated SYNC_API_KEY — share this with desktop clients"
-    echo "  SYNC_API_KEY=${KEY}"
-  fi
-  if grep -q 'YOUR_SERVER_IP' .env 2>/dev/null; then
-    HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    if [ -n "$HOST_IP" ]; then
-      sed -i "s|http://YOUR_SERVER_IP:8000|http://${HOST_IP}:8000|g" .env
-    fi
-  fi
-}
 
 wait_for_health() {
   local tries=30
@@ -72,7 +53,7 @@ wait_for_health() {
 
 doctor() {
   docker info >/dev/null 2>&1 || die "Docker daemon is not running"
-  [ -f .env ] || die ".env missing"
+  [ -f .env ] || die ".env missing — create it on the server before running this script"
   mkdir -p data media
   log "Doctor OK"
 }
@@ -100,7 +81,6 @@ ensure_linux
 ensure_docker
 clone_repo_if_needed
 cd "$INSTALL_DIR"
-prompt_env
 doctor
 
 log "Building and starting server container..."
