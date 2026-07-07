@@ -48,7 +48,7 @@ jobs:
         run: |
           npm install --no-save ${{ matrix.screenpipe_pkg }}
           if [ "${{ matrix.runtime_target }}" = "darwin" ]; then
-            npm install --no-save @screenpipe/cli-darwin-x64
+            npm install --no-save --force @screenpipe/cli-darwin-x64 || echo "x64 install skipped (arm64 runner)"
           fi
 
       - name: Detect bundled Screenpipe binary
