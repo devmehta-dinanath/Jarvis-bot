@@ -14,8 +14,7 @@
   },
   "devDependencies": {
     "electron": "^37.0.0",
-    "electron-builder": "^26.15.3",
-    "screenpipe": "latest"
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.jarvis.desktop",

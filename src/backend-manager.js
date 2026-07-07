@@ -1,10 +1,12 @@
-const { app } = require("electron");
+const { app, dialog } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
 const DEFAULT_SERVER_URL = process.env.JARVIS_SERVER_URL || "https://jarvis-api.lilium.co.in";
-const DEFAULT_SYNC_API_KEY = process.env.SYNC_API_KEY || "";
+const DEFAULT_SYNC_API_KEY =
+  process.env.SYNC_API_KEY ||
+  "b5967ac012fe968bc12b70f31d7d17be1d5912f9fb9e76bf97819ff0c8d6366b";
 const BACKEND_WAIT_MS = 60_000;
 const HEALTH_URL = "http://127.0.0.1:8000/health";
 
@@ -56,7 +58,11 @@ function resolveBinaryPath(kind) {
   const candidates =
     kind === "backend"
       ? [path.join(platformDir, `backend${ext}`), path.join(commonDir, `backend${ext}`)]
-      : [path.join(platformDir, `screenpipe${ext}`), path.join(commonDir, `screenpipe${ext}`)];
+      : [
+          path.join(platformDir, `screenpipe${ext}`),
+          path.join(platformDir, "screenpipe-lib", `screenpipe${ext}`),
+          path.join(commonDir, `screenpipe${ext}`)
+        ];
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -64,6 +70,20 @@ function resolveBinaryPath(kind) {
     }
   }
   return null;
+}
+
+function resolveScreenpipeCwd(screenpipeBin) {
+  const libDir = path.join(path.dirname(screenpipeBin), "screenpipe-lib");
+  if (fs.existsSync(libDir)) {
+    return libDir;
+  }
+  return path.dirname(screenpipeBin);
+}
+
+function clientDataDir() {
+  const dir = path.join(app.getPath("userData"), "data");
+  ensureDir(dir);
+  return dir;
 }
 
 function appendLog(fileName, message) {
@@ -106,7 +126,12 @@ function waitForBackendHealth(timeoutMs = BACKEND_WAIT_MS) {
 
 function buildBackendEnv() {
   const env = { ...process.env };
+  const dataDir = clientDataDir();
+  const dbPath = path.join(dataDir, "client-buffer.db").replace(/\\/g, "/");
+
   env.APP_ROLE = env.APP_ROLE || "client";
+  env.RUNNING_IN_DOCKER = "false";
+  env.AUTO_START_SERVICES = "true";
   env.WHATSAPP_ENABLED = "false";
   env.SUMMARY_ENABLED = "false";
   env.CHROMA_ENABLED = "false";
@@ -114,6 +139,8 @@ function buildBackendEnv() {
   env.SCREENPIPE_START_CLI = "false";
   env.SCREENPIPE_API_URL = env.SCREENPIPE_API_URL || "http://127.0.0.1:3030";
   env.JARVIS_SERVER_URL = env.JARVIS_SERVER_URL || DEFAULT_SERVER_URL;
+  env.SYNC_ENABLED = env.SYNC_ENABLED || "true";
+  env.DATABASE_URL = env.DATABASE_URL || `sqlite:///${dbPath}`;
   if (DEFAULT_SYNC_API_KEY && !env.SYNC_API_KEY) {
     env.SYNC_API_KEY = DEFAULT_SYNC_API_KEY;
   }
@@ -131,7 +158,10 @@ function startScreenpipe() {
   }
   const env = { ...process.env };
   const args = ["record"];
-  screenpipeProcess = spawnManagedProcess(screenpipeBin, args, { env });
+  screenpipeProcess = spawnManagedProcess(screenpipeBin, args, {
+    env,
+    cwd: resolveScreenpipeCwd(screenpipeBin)
+  });
   screenpipeProcess.stdout?.on("data", (chunk) =>
     appendLog("screenpipe.log", chunk.toString().trimEnd())
   );
@@ -169,12 +199,36 @@ function startBackend() {
   });
 }
 
+function showRuntimeError(message) {
+  appendLog("runtime.log", `[runtime] error: ${message}`);
+  dialog.showErrorBox(
+    "Jarvis could not start",
+    `${message}\n\nLogs: ${logsDir()}`
+  );
+}
+
 async function startRuntime() {
   // In dev mode, preserve existing flow unless explicitly requested.
   if (!app.isPackaged && process.env.JARVIS_LAUNCH_RUNTIME !== "1") {
     return;
   }
   appendLog("runtime.log", "[runtime] starting managed runtime processes");
+
+  const backendBin = resolveBinaryPath("backend");
+  const screenpipeBin = resolveBinaryPath("screenpipe");
+  if (!backendBin) {
+    showRuntimeError(
+      "The local backend is missing from this installer. Re-download the latest Windows build from GitHub Actions (jarvis-windows-installers)."
+    );
+    throw new Error("backend binary missing");
+  }
+  if (!screenpipeBin) {
+    showRuntimeError(
+      "Screenpipe is missing from this installer. Re-download the latest Windows build from GitHub Actions (jarvis-windows-installers)."
+    );
+    throw new Error("screenpipe binary missing");
+  }
+
   startScreenpipe();
   startBackend();
   await waitForBackendHealth();
