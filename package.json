@@ -67,7 +67,17 @@
           ]
         }
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Jarvis needs camera access for meeting features.",
+        "NSMicrophoneUsageDescription": "Jarvis records audio for meeting transcription.",
+        "NSScreenCaptureDescription": "Jarvis captures your screen to build searchable memory."
+      }
     },
     "win": {
       "target": [
@@ -89,6 +99,8 @@
         }
       ],
       "category": "Utility"
-    }
+    },
+    "afterSign": null,
+    "afterAllArtifactBuild": null
   }
 }

@@ -54,6 +54,8 @@ jobs:
       - name: Detect bundled Screenpipe binary
         shell: bash
         run: |
+          echo "=== Listing screenpipe npm package contents ==="
+          node -e "const fs=require('fs');const pkg='${{ matrix.screenpipe_pkg }}';const candidates=[pkg,'@'+pkg.replace('@','').replace('/','/')].map(p=>'node_modules/'+p+'/bin');const dir=candidates.find(d=>fs.existsSync(d));if(dir){console.log('Found:',dir);fs.readdirSync(dir).forEach(f=>console.log('  ',f));}else{console.log('Not found in:',candidates);}"
           SCREENPIPE_DIR="$(node -e "
             const fs=require('fs');
             const path=require('path');
@@ -156,8 +158,34 @@ jobs:
           REQUIRE_RUNTIME_BINARIES: "1"
         run: npm run stage:runtime
 
+      - name: Verify staged binaries
+        shell: bash
+        run: |
+          echo "=== Staged resources for ${{ matrix.runtime_target }} ==="
+          if [ "${{ matrix.runtime_target }}" = "windows" ]; then
+            ls -la resources/win/ || echo "win folder missing"
+            ls -la resources/win/screenpipe-lib/ || echo "screenpipe-lib folder missing"
+            echo "=== Checking Windows DLLs ==="
+            ls resources/win/screenpipe-lib/ | grep -i "\.dll" || echo "No DLLs found"
+          elif [ "${{ matrix.runtime_target }}" = "darwin" ]; then
+            ls -la resources/mac/ || echo "mac folder missing"
+            ls -la resources/mac/screenpipe-lib/ || echo "screenpipe-lib folder missing"
+            echo "=== Testing screenpipe on macOS ==="
+            xattr -cr resources/mac/screenpipe-lib/ 2>/dev/null || true
+            chmod +x resources/mac/screenpipe-lib/screenpipe 2>/dev/null || true
+            resources/mac/screenpipe-lib/screenpipe --version 2>&1 || echo "screenpipe --version failed (needs signing for end-user use)"
+          else
+            ls -la resources/linux/ || echo "linux folder missing"
+            ls -la resources/linux/screenpipe-lib/ || echo "screenpipe-lib folder missing"
+            echo "=== Testing Linux screenpipe ==="
+            chmod +x resources/linux/screenpipe-lib/screenpipe 2>/dev/null || true
+            resources/linux/screenpipe-lib/screenpipe --version 2>&1 || echo "screenpipe --version failed"
+          fi
+
       - name: Build installer
         run: npm run ${{ matrix.build_script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
