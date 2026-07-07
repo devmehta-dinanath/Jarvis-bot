@@ -8,13 +8,15 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
-DATA_DIR = BASE_DIR / "data"
+_default_data_dir = BASE_DIR / "data"
+_default_media_root = BASE_DIR / "media"
+DATA_DIR = Path(os.getenv("JARVIS_DATA_DIR", str(_default_data_dir)))
+MEDIA_ROOT = Path(os.getenv("JARVIS_MEDIA_ROOT", str(_default_media_root)))
 JARVIS_DATABASE_FILENAME = "jarvis.db"
 CLIENT_BUFFER_DATABASE_FILENAME = "client-buffer.db"
 DATABASE_PATH = DATA_DIR / JARVIS_DATABASE_FILENAME
 CLIENT_BUFFER_DATABASE_PATH = DATA_DIR / CLIENT_BUFFER_DATABASE_FILENAME
 LEGACY_DATABASE_PATH = DATA_DIR / "screenpipe.db"
-MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_DATABASE_URL = f"sqlite:///{DATABASE_PATH.resolve().as_posix()}"
 DEFAULT_CLIENT_DATABASE_URL = (
