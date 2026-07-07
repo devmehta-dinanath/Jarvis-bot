@@ -1,6 +1,7 @@
 const { app, BrowserWindow, screen, ipcMain, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
+const runtimeManager = require("./backend-manager");
 
 function loadDotEnv() {
   const envPath = path.join(__dirname, "..", ".env");
@@ -56,7 +57,7 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, "..", "index.html"));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   ipcMain.handle("open-external", (_event, url) => {
     if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
       return false;
@@ -64,6 +65,12 @@ app.whenReady().then(() => {
 
     return shell.openExternal(url);
   });
+
+  try {
+    await runtimeManager.startRuntime();
+  } catch (error) {
+    console.error("[runtime] failed to start managed runtime:", error);
+  }
 
   createWindow();
 
@@ -76,6 +83,11 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
+    runtimeManager.stopRuntime();
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  runtimeManager.stopRuntime();
 });

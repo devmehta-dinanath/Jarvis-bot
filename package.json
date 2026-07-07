@@ -6,9 +6,91 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron . --no-sandbox",
-    "dev": "electron . --no-sandbox"
+    "dev": "electron . --no-sandbox",
+    "stage:runtime": "node scripts/stage-runtime-binaries.js",
+    "build:linux": "electron-builder --linux AppImage --publish never",
+    "build:mac": "electron-builder --mac dmg --publish never",
+    "build:win": "electron-builder --win nsis --publish never"
   },
   "devDependencies": {
-    "electron": "^37.0.0"
+    "electron": "^37.0.0",
+    "electron-builder": "^26.15.3",
+    "screenpipe": "latest"
+  },
+  "build": {
+    "appId": "com.jarvis.desktop",
+    "productName": "Jarvis",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "index.html",
+      "src/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/common",
+        "to": "resources/common",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/mac",
+        "to": "resources/mac",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/win",
+        "to": "resources/win",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/linux",
+        "to": "resources/linux",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility"
+    }
   }
 }

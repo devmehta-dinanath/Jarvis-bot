@@ -1,0 +1,92 @@
+name: Build Desktop Client
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [frontend]
+  pull_request:
+    branches: [frontend]
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }} installer
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            runtime_target: darwin
+            build_script: build:mac
+          - name: Windows
+            os: windows-latest
+            runtime_target: windows
+            build_script: build:win
+          - name: Linux
+            os: ubuntu-latest
+            runtime_target: linux
+            build_script: build:linux
+    steps:
+      - name: Checkout frontend
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Detect bundled Screenpipe binary
+        shell: bash
+        run: |
+          SCREENPIPE_BIN="$(node -e "const fs=require('fs');const path=require('path');const c=['node_modules/screenpipe/bin/screenpipe','node_modules/screenpipe/bin/screenpipe.exe','node_modules/screenpipe/dist/bin/screenpipe','node_modules/screenpipe/dist/bin/screenpipe.exe'];const f=c.find(x=>fs.existsSync(x));if(!f){process.exit(1)};process.stdout.write(path.resolve(f));")"
+          echo "JARVIS_SCREENPIPE_BIN_SRC=${SCREENPIPE_BIN}" >> "$GITHUB_ENV"
+
+      - name: Checkout backend
+        uses: actions/checkout@v4
+        with:
+          repository: devmehta-dinanath/Jarvis-bot
+          ref: backend
+          path: backend-src
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend build dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r backend-src/requirements.txt
+
+      - name: Build backend executable
+        shell: bash
+        run: |
+          cd backend-src
+          pyinstaller backend.spec --noconfirm --clean
+          if [ -f "dist/backend.exe" ]; then
+            echo "JARVIS_BACKEND_BIN_SRC=$(pwd)/dist/backend.exe" >> "$GITHUB_ENV"
+          else
+            echo "JARVIS_BACKEND_BIN_SRC=$(pwd)/dist/backend" >> "$GITHUB_ENV"
+          fi
+
+      - name: Stage runtime binaries
+        env:
+          RUNTIME_TARGET: ${{ matrix.runtime_target }}
+        run: npm run stage:runtime
+
+      - name: Build installer
+        run: npm run ${{ matrix.build_script }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-${{ matrix.runtime_target }}-installers
+          path: release/*
+          if-no-files-found: error
