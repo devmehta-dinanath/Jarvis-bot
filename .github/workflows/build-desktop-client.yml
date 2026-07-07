@@ -43,63 +43,70 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Install Screenpipe CLI binary
+      - name: Install and detect Screenpipe CLI binary
         shell: bash
         run: |
-          npm install --no-save ${{ matrix.screenpipe_pkg }}
+          set -euo pipefail
+          PRIMARY_PKG="${{ matrix.screenpipe_pkg }}"
+          echo "=== Installing ${PRIMARY_PKG} ==="
+          npm install --no-save --force "${PRIMARY_PKG}"
+
           if [ "${{ matrix.runtime_target }}" = "darwin" ]; then
-            npm install --no-save --force @screenpipe/cli-darwin-x64 || echo "x64 install skipped (arm64 runner)"
+            echo "=== Installing @screenpipe/cli-darwin-x64 (Intel Mac support) ==="
+            npm install --no-save --force @screenpipe/cli-darwin-x64 || echo "x64 package install skipped"
           fi
 
-      - name: Detect bundled Screenpipe binary
-        shell: bash
-        run: |
-          echo "=== Listing screenpipe npm package contents ==="
-          node -e "const fs=require('fs');const pkg='${{ matrix.screenpipe_pkg }}';const candidates=[pkg,'@'+pkg.replace('@','').replace('/','/')].map(p=>'node_modules/'+p+'/bin');const dir=candidates.find(d=>fs.existsSync(d));if(dir){console.log('Found:',dir);fs.readdirSync(dir).forEach(f=>console.log('  ',f));}else{console.log('Not found in:',candidates);}"
-          SCREENPIPE_DIR="$(node -e "
-            const fs=require('fs');
-            const path=require('path');
-            const pkg='${{ matrix.screenpipe_pkg }}';
-            const roots=[
-              path.join('node_modules', pkg, 'bin'),
-              path.join('node_modules', pkg.replace('@','').replace('/','+'), 'bin')
-            ];
-            const dir=roots.find(d=>fs.existsSync(d));
-            if(!dir){process.exit(1)}
-            process.stdout.write(path.resolve(dir));
-          ")"
+          find_screenpipe_bin_dir() {
+            local pkg_name="$1"
+            local bin_name="screenpipe"
+            if [ "${{ matrix.runtime_target }}" = "windows" ]; then
+              bin_name="screenpipe.exe"
+            fi
+            local bin_path=""
+            bin_path="$(find "node_modules/${pkg_name}" -type f -name "${bin_name}" 2>/dev/null | head -1 || true)"
+            if [ -z "${bin_path}" ]; then
+              bin_path="$(find node_modules -type f -path "*/${pkg_name}/bin/${bin_name}" 2>/dev/null | head -1 || true)"
+            fi
+            if [ -z "${bin_path}" ]; then
+              bin_path="$(find node_modules -type f -name "${bin_name}" 2>/dev/null | grep -F "${pkg_name}" | head -1 || true)"
+            fi
+            if [ -n "${bin_path}" ]; then
+              dirname "${bin_path}"
+              return 0
+            fi
+            return 1
+          }
+
+          echo "=== Searching for screenpipe binaries ==="
+          find node_modules -maxdepth 4 -type d -name bin 2>/dev/null | while read -r d; do
+            echo "  bin dir: ${d}"
+            ls -la "${d}" 2>/dev/null || true
+          done
+
+          SCREENPIPE_DIR="$(find_screenpipe_bin_dir "${PRIMARY_PKG}")" || {
+            echo "ERROR: Could not find screenpipe binary for ${PRIMARY_PKG}"
+            find node_modules -type f \( -name screenpipe -o -name screenpipe.exe \) 2>/dev/null || true
+            exit 1
+          }
+
           echo "JARVIS_SCREENPIPE_BIN_DIR_SRC=${SCREENPIPE_DIR}" >> "$GITHUB_ENV"
           if [ "${{ matrix.runtime_target }}" = "windows" ]; then
             echo "JARVIS_SCREENPIPE_BIN_SRC=${SCREENPIPE_DIR}/screenpipe.exe" >> "$GITHUB_ENV"
           else
             echo "JARVIS_SCREENPIPE_BIN_SRC=${SCREENPIPE_DIR}/screenpipe" >> "$GITHUB_ENV"
           fi
+          echo "Primary screenpipe dir: ${SCREENPIPE_DIR}"
+
           if [ "${{ matrix.runtime_target }}" = "darwin" ]; then
-            ARM64_DIR="$(node -e "
-              const fs=require('fs');
-              const path=require('path');
-              const roots=[
-                path.join('node_modules', '@screenpipe/cli-darwin-arm64', 'bin'),
-                path.join('node_modules', 'screenpipe+cli-darwin-arm64', 'bin')
-              ];
-              const dir=roots.find(d=>fs.existsSync(d));
-              if(dir){process.stdout.write(path.resolve(dir))}
-            ")"
+            ARM64_DIR="$(find_screenpipe_bin_dir "@screenpipe/cli-darwin-arm64" || true)"
+            X64_DIR="$(find_screenpipe_bin_dir "@screenpipe/cli-darwin-x64" || true)"
             if [ -n "${ARM64_DIR}" ]; then
               echo "JARVIS_SCREENPIPE_ARM64_DIR_SRC=${ARM64_DIR}" >> "$GITHUB_ENV"
+              echo "ARM64 screenpipe dir: ${ARM64_DIR}"
             fi
-            X64_DIR="$(node -e "
-              const fs=require('fs');
-              const path=require('path');
-              const roots=[
-                path.join('node_modules', '@screenpipe/cli-darwin-x64', 'bin'),
-                path.join('node_modules', 'screenpipe+cli-darwin-x64', 'bin')
-              ];
-              const dir=roots.find(d=>fs.existsSync(d));
-              if(dir){process.stdout.write(path.resolve(dir))}
-            ")"
             if [ -n "${X64_DIR}" ]; then
               echo "JARVIS_SCREENPIPE_X64_DIR_SRC=${X64_DIR}" >> "$GITHUB_ENV"
+              echo "x64 screenpipe dir: ${X64_DIR}"
             fi
           fi
 
