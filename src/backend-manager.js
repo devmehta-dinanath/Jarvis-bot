@@ -7,8 +7,10 @@ const DEFAULT_SERVER_URL = process.env.JARVIS_SERVER_URL || "https://jarvis-api.
 const DEFAULT_SYNC_API_KEY =
   process.env.SYNC_API_KEY ||
   "b5967ac012fe968bc12b70f31d7d17be1d5912f9fb9e76bf97819ff0c8d6366b";
-const BACKEND_WAIT_MS = 60_000;
+const BACKEND_WAIT_MS = 120_000;
+const SCREENPIPE_WAIT_MS = 90_000;
 const HEALTH_URL = "http://127.0.0.1:8000/health";
+const SCREENPIPE_HEALTH_URL = "http://127.0.0.1:3030/health";
 
 let backendProcess = null;
 let screenpipeProcess = null;
@@ -19,6 +21,18 @@ function ensureDir(dirPath) {
 
 function logsDir() {
   const dir = path.join(app.getPath("userData"), "logs");
+  ensureDir(dir);
+  return dir;
+}
+
+function clientDataDir() {
+  const dir = path.join(app.getPath("userData"), "data");
+  ensureDir(dir);
+  return dir;
+}
+
+function clientMediaDir() {
+  const dir = path.join(app.getPath("userData"), "media");
   ensureDir(dir);
   return dir;
 }
@@ -43,6 +57,21 @@ function platformResourceSubdir() {
   return "common";
 }
 
+function binaryName(baseName) {
+  return process.platform === "win32" ? `${baseName}.exe` : baseName;
+}
+
+function screenpipeLibCandidates(platformDir, commonDir) {
+  const name = binaryName("screenpipe");
+  return [
+    path.join(platformDir, "screenpipe-lib", name),
+    path.join(platformDir, `screenpipe-lib-${process.arch}`, name),
+    path.join(platformDir, name),
+    path.join(commonDir, "screenpipe-lib", name),
+    path.join(commonDir, name)
+  ];
+}
+
 function resolveBinaryPath(kind) {
   const envPath =
     kind === "backend" ? process.env.JARVIS_BACKEND_BIN : process.env.JARVIS_SCREENPIPE_BIN;
@@ -53,16 +82,14 @@ function resolveBinaryPath(kind) {
   const root = runtimeResourceRoot();
   const platformDir = path.join(root, platformResourceSubdir());
   const commonDir = path.join(root, "common");
-  const ext = process.platform === "win32" ? ".exe" : "";
 
   const candidates =
     kind === "backend"
-      ? [path.join(platformDir, `backend${ext}`), path.join(commonDir, `backend${ext}`)]
-      : [
-          path.join(platformDir, `screenpipe${ext}`),
-          path.join(platformDir, "screenpipe-lib", `screenpipe${ext}`),
-          path.join(commonDir, `screenpipe${ext}`)
-        ];
+      ? [
+          path.join(platformDir, binaryName("backend")),
+          path.join(commonDir, binaryName("backend"))
+        ]
+      : screenpipeLibCandidates(platformDir, commonDir);
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -72,18 +99,12 @@ function resolveBinaryPath(kind) {
   return null;
 }
 
-function resolveScreenpipeCwd(screenpipeBin) {
-  const libDir = path.join(path.dirname(screenpipeBin), "screenpipe-lib");
-  if (fs.existsSync(libDir)) {
-    return libDir;
+function sqliteDatabaseUrl(dbPath) {
+  const normalized = dbPath.replace(/\\/g, "/");
+  if (normalized.startsWith("/")) {
+    return `sqlite://${normalized}`;
   }
-  return path.dirname(screenpipeBin);
-}
-
-function clientDataDir() {
-  const dir = path.join(app.getPath("userData"), "data");
-  ensureDir(dir);
-  return dir;
+  return `sqlite:///${normalized}`;
 }
 
 function appendLog(fileName, message) {
@@ -91,21 +112,25 @@ function appendLog(fileName, message) {
   fs.appendFileSync(filePath, `${new Date().toISOString()} ${message}\n`);
 }
 
-function spawnManagedProcess(command, args, options = {}) {
+function spawnManagedProcess(name, command, args, options = {}) {
+  appendLog("runtime.log", `[runtime] spawning ${name}: ${command} ${args.join(" ")}`);
   const processRef = spawn(command, args, {
     shell: false,
     windowsHide: true,
     ...options
   });
+  processRef.on("error", (error) => {
+    appendLog("runtime.log", `[runtime] ${name} spawn error: ${error.message}`);
+  });
   return processRef;
 }
 
-function waitForBackendHealth(timeoutMs = BACKEND_WAIT_MS) {
+function waitForUrl(url, timeoutMs, label) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
     const check = async () => {
       try {
-        const response = await fetch(HEALTH_URL);
+        const response = await fetch(url);
         if (response.ok) {
           resolve(true);
           return;
@@ -115,7 +140,7 @@ function waitForBackendHealth(timeoutMs = BACKEND_WAIT_MS) {
       }
 
       if (Date.now() - startedAt >= timeoutMs) {
-        reject(new Error(`Backend did not become healthy at ${HEALTH_URL} within ${timeoutMs}ms`));
+        reject(new Error(`${label} did not become healthy at ${url} within ${timeoutMs}ms`));
         return;
       }
       setTimeout(check, 1500);
@@ -124,10 +149,21 @@ function waitForBackendHealth(timeoutMs = BACKEND_WAIT_MS) {
   });
 }
 
+function buildScreenpipeEnv(screenpipeCwd) {
+  const env = { ...process.env };
+  if (process.platform === "linux") {
+    env.LD_LIBRARY_PATH = `${screenpipeCwd}${path.delimiter}${env.LD_LIBRARY_PATH || ""}`;
+  } else {
+    env.PATH = `${screenpipeCwd}${path.delimiter}${env.PATH || ""}`;
+  }
+  return env;
+}
+
 function buildBackendEnv() {
   const env = { ...process.env };
   const dataDir = clientDataDir();
-  const dbPath = path.join(dataDir, "client-buffer.db").replace(/\\/g, "/");
+  const mediaDir = clientMediaDir();
+  const dbPath = path.join(dataDir, "client-buffer.db");
 
   env.APP_ROLE = env.APP_ROLE || "client";
   env.RUNNING_IN_DOCKER = "false";
@@ -140,7 +176,9 @@ function buildBackendEnv() {
   env.SCREENPIPE_API_URL = env.SCREENPIPE_API_URL || "http://127.0.0.1:3030";
   env.JARVIS_SERVER_URL = env.JARVIS_SERVER_URL || DEFAULT_SERVER_URL;
   env.SYNC_ENABLED = env.SYNC_ENABLED || "true";
-  env.DATABASE_URL = env.DATABASE_URL || `sqlite:///${dbPath}`;
+  env.DATABASE_URL = env.DATABASE_URL || sqliteDatabaseUrl(dbPath);
+  env.JARVIS_DATA_DIR = dataDir;
+  env.JARVIS_MEDIA_ROOT = mediaDir;
   if (DEFAULT_SYNC_API_KEY && !env.SYNC_API_KEY) {
     env.SYNC_API_KEY = DEFAULT_SYNC_API_KEY;
   }
@@ -156,11 +194,11 @@ function startScreenpipe() {
     appendLog("runtime.log", "[runtime] screenpipe binary missing, skipping launch");
     return;
   }
-  const env = { ...process.env };
-  const args = ["record"];
-  screenpipeProcess = spawnManagedProcess(screenpipeBin, args, {
-    env,
-    cwd: resolveScreenpipeCwd(screenpipeBin)
+
+  const screenpipeCwd = path.dirname(screenpipeBin);
+  screenpipeProcess = spawnManagedProcess("screenpipe", screenpipeBin, ["record"], {
+    env: buildScreenpipeEnv(screenpipeCwd),
+    cwd: screenpipeCwd
   });
   screenpipeProcess.stdout?.on("data", (chunk) =>
     appendLog("screenpipe.log", chunk.toString().trimEnd())
@@ -168,8 +206,8 @@ function startScreenpipe() {
   screenpipeProcess.stderr?.on("data", (chunk) =>
     appendLog("screenpipe.log", chunk.toString().trimEnd())
   );
-  screenpipeProcess.on("exit", (code) => {
-    appendLog("runtime.log", `[runtime] screenpipe exited code=${code}`);
+  screenpipeProcess.on("exit", (code, signal) => {
+    appendLog("runtime.log", `[runtime] screenpipe exited code=${code} signal=${signal || ""}`);
     screenpipeProcess = null;
   });
 }
@@ -186,53 +224,85 @@ function startBackend() {
   }
 
   const env = buildBackendEnv();
-  backendProcess = spawnManagedProcess(backendBin, [], { env });
+  const cwd = clientDataDir();
+  backendProcess = spawnManagedProcess("backend", backendBin, [], { env, cwd });
   backendProcess.stdout?.on("data", (chunk) =>
     appendLog("backend.log", chunk.toString().trimEnd())
   );
   backendProcess.stderr?.on("data", (chunk) =>
     appendLog("backend.log", chunk.toString().trimEnd())
   );
-  backendProcess.on("exit", (code) => {
-    appendLog("runtime.log", `[runtime] backend exited code=${code}`);
+  backendProcess.on("exit", (code, signal) => {
+    appendLog("runtime.log", `[runtime] backend exited code=${code} signal=${signal || ""}`);
     backendProcess = null;
   });
 }
 
 function showRuntimeError(message) {
   appendLog("runtime.log", `[runtime] error: ${message}`);
-  dialog.showErrorBox(
-    "Jarvis could not start",
-    `${message}\n\nLogs: ${logsDir()}`
-  );
+  dialog.showErrorBox("Jarvis could not start", `${message}\n\nLogs: ${logsDir()}`);
+}
+
+function logRuntimeInventory() {
+  const root = runtimeResourceRoot();
+  const platformDir = path.join(root, platformResourceSubdir());
+  appendLog("runtime.log", `[runtime] platform=${process.platform} arch=${process.arch}`);
+  appendLog("runtime.log", `[runtime] resourceRoot=${root}`);
+  appendLog("runtime.log", `[runtime] platformDir=${platformDir}`);
+  if (fs.existsSync(platformDir)) {
+    appendLog("runtime.log", `[runtime] platform files: ${fs.readdirSync(platformDir).join(", ")}`);
+  } else {
+    appendLog("runtime.log", "[runtime] platformDir missing");
+  }
 }
 
 async function startRuntime() {
-  // In dev mode, preserve existing flow unless explicitly requested.
   if (!app.isPackaged && process.env.JARVIS_LAUNCH_RUNTIME !== "1") {
     return;
   }
+
   appendLog("runtime.log", "[runtime] starting managed runtime processes");
+  logRuntimeInventory();
 
   const backendBin = resolveBinaryPath("backend");
   const screenpipeBin = resolveBinaryPath("screenpipe");
   if (!backendBin) {
     showRuntimeError(
-      "The local backend is missing from this installer. Re-download the latest Windows build from GitHub Actions (jarvis-windows-installers)."
+      "The local backend is missing from this installer. Download a fresh build from GitHub Actions after the latest CI run passes."
     );
     throw new Error("backend binary missing");
   }
   if (!screenpipeBin) {
     showRuntimeError(
-      "Screenpipe is missing from this installer. Re-download the latest Windows build from GitHub Actions (jarvis-windows-installers)."
+      "Screenpipe is missing from this installer. Download a fresh build from GitHub Actions after the latest CI run passes."
     );
     throw new Error("screenpipe binary missing");
   }
 
+  appendLog("runtime.log", `[runtime] backendBin=${backendBin}`);
+  appendLog("runtime.log", `[runtime] screenpipeBin=${screenpipeBin}`);
+
   startScreenpipe();
+  try {
+    await waitForUrl(SCREENPIPE_HEALTH_URL, SCREENPIPE_WAIT_MS, "Screenpipe");
+    appendLog("runtime.log", "[runtime] screenpipe health check passed (port 3030)");
+  } catch (error) {
+    showRuntimeError(
+      `Screenpipe did not start on port 3030.\n\n${error.message}\n\nCheck screenpipe.log for details.`
+    );
+    throw error;
+  }
+
   startBackend();
-  await waitForBackendHealth();
-  appendLog("runtime.log", "[runtime] backend health check passed");
+  try {
+    await waitForUrl(HEALTH_URL, BACKEND_WAIT_MS, "Backend");
+    appendLog("runtime.log", "[runtime] backend health check passed (port 8000)");
+  } catch (error) {
+    showRuntimeError(
+      `Backend did not start on port 8000.\n\n${error.message}\n\nCheck backend.log for details.`
+    );
+    throw error;
+  }
 }
 
 function stopRuntime() {

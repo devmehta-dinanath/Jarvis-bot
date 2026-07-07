@@ -44,7 +44,12 @@ jobs:
         run: npm ci
 
       - name: Install Screenpipe CLI binary
-        run: npm install --no-save ${{ matrix.screenpipe_pkg }}
+        shell: bash
+        run: |
+          npm install --no-save ${{ matrix.screenpipe_pkg }}
+          if [ "${{ matrix.runtime_target }}" = "darwin" ]; then
+            npm install --no-save @screenpipe/cli-darwin-x64
+          fi
 
       - name: Detect bundled Screenpipe binary
         shell: bash
@@ -66,6 +71,34 @@ jobs:
             echo "JARVIS_SCREENPIPE_BIN_SRC=${SCREENPIPE_DIR}/screenpipe.exe" >> "$GITHUB_ENV"
           else
             echo "JARVIS_SCREENPIPE_BIN_SRC=${SCREENPIPE_DIR}/screenpipe" >> "$GITHUB_ENV"
+          fi
+          if [ "${{ matrix.runtime_target }}" = "darwin" ]; then
+            ARM64_DIR="$(node -e "
+              const fs=require('fs');
+              const path=require('path');
+              const roots=[
+                path.join('node_modules', '@screenpipe/cli-darwin-arm64', 'bin'),
+                path.join('node_modules', 'screenpipe+cli-darwin-arm64', 'bin')
+              ];
+              const dir=roots.find(d=>fs.existsSync(d));
+              if(dir){process.stdout.write(path.resolve(dir))}
+            ")"
+            if [ -n "${ARM64_DIR}" ]; then
+              echo "JARVIS_SCREENPIPE_ARM64_DIR_SRC=${ARM64_DIR}" >> "$GITHUB_ENV"
+            fi
+            X64_DIR="$(node -e "
+              const fs=require('fs');
+              const path=require('path');
+              const roots=[
+                path.join('node_modules', '@screenpipe/cli-darwin-x64', 'bin'),
+                path.join('node_modules', 'screenpipe+cli-darwin-x64', 'bin')
+              ];
+              const dir=roots.find(d=>fs.existsSync(d));
+              if(dir){process.stdout.write(path.resolve(dir))}
+            ")"
+            if [ -n "${X64_DIR}" ]; then
+              echo "JARVIS_SCREENPIPE_X64_DIR_SRC=${X64_DIR}" >> "$GITHUB_ENV"
+            fi
           fi
 
       - name: Checkout backend
