@@ -8,9 +8,10 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_REPO_URL="https://github.com/devmehta-dinanath/Jarvis-bot.git"
 BACKEND_BRANCH="backend"
 FRONTEND_BRANCH="frontend"
+DEFAULT_SERVER_URL="https://jarvis-api.lilium.co.in"
 
 CLONE_URL="${JARVIS_REPO_URL:-$DEFAULT_REPO_URL}"
-SERVER_URL=""
+SERVER_URL="$DEFAULT_SERVER_URL"
 SYNC_KEY=""
 INSTALL_DIR=""
 BACKEND_DIR=""
@@ -20,6 +21,15 @@ START_FRONTEND=true
 LOCAL_ONLY=false
 CLONE_ONLY=false
 GOOGLE_CREDS_SOURCE=""
+
+is_backend_source_dir() {
+  local dir="${1:-}"
+  [ -n "$dir" ] || return 1
+  [ -f "$dir/docker-compose.client.yml" ] || return 1
+  [ -f "$dir/Dockerfile.client" ] || return 1
+  [ -d "$dir/app" ] || return 1
+  return 0
+}
 
 log() { echo "[desktop-setup] $*"; }
 die() { echo "[desktop-setup] ERROR: $*" >&2; exit 1; }
@@ -43,7 +53,7 @@ log_ok() {
 env_file_get() {
   local file="$1" key="$2"
   grep -E "^${key}=" "$file" 2>/dev/null | tail -1 | cut -d= -f2- \
-    | sed 's/^["'\'' ]*//;s/["'\'' ]*$//'
+    | sed 's/^["'\'' ]*//;s/["'\'' ]*$//' || true
 }
 
 env_file_set() {
@@ -192,7 +202,7 @@ resolve_dirs() {
   log_detail "Branches:     $BACKEND_BRANCH (backend), $FRONTEND_BRANCH (frontend)"
 
   # Developer mode: script lives inside an existing backend checkout.
-  if [ "$explicit_install" = false ] && [ -f "$REPO_DIR/docker-compose.client.yml" ]; then
+  if [ "$explicit_install" = false ] && is_backend_source_dir "$REPO_DIR"; then
     BACKEND_DIR="$REPO_DIR"
     FRONTEND_DIR="$(dirname "$REPO_DIR")/jarvis-bot-fe"
     if [ ! -d "$FRONTEND_DIR" ]; then
@@ -626,6 +636,7 @@ prompt_server_url() {
     log_detail "Local mode — using SERVER_URL=$SERVER_URL (no central server required)"
     return 0
   fi
+  SERVER_URL="${SERVER_URL%/}"
   if [ -z "$SERVER_URL" ]; then
     read -r -p "Enter server URL (e.g. http://192.168.1.50:8000): " SERVER_URL
     SERVER_URL="${SERVER_URL%/}"
@@ -685,7 +696,9 @@ ensure_google_calendar_credentials() {
   local candidate=""
   if [ -n "$GOOGLE_CREDS_SOURCE" ] && [ -f "$GOOGLE_CREDS_SOURCE" ]; then
     candidate="$GOOGLE_CREDS_SOURCE"
-  elif [ -f "$REPO_DIR/data/google_calendar_credentials.json" ] && [ "$REPO_DIR" != "$BACKEND_DIR" ]; then
+  elif [ -f "$REPO_DIR/data/google_calendar_credentials.json" ] \
+    && [ "$REPO_DIR" != "$BACKEND_DIR" ] \
+    && is_backend_source_dir "$REPO_DIR"; then
     candidate="$REPO_DIR/data/google_calendar_credentials.json"
   elif [ -f "$HOME/.jarvis/google_calendar_credentials.json" ]; then
     candidate="$HOME/.jarvis/google_calendar_credentials.json"
@@ -747,7 +760,9 @@ ensure_client_docker_files() {
   fi
 
   local candidates=() src
-  candidates+=("$(cd "$SCRIPT_DIR/.." && pwd)")
+  if is_backend_source_dir "$REPO_DIR"; then
+    candidates+=("$REPO_DIR")
+  fi
   [ -n "${JARVIS_SOURCE_DIR:-}" ] && candidates+=("$JARVIS_SOURCE_DIR")
   candidates+=("$HOME/Projects/jarvis-bot-be" "$HOME/jarvis-bot-be")
 
