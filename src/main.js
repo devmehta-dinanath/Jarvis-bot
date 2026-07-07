@@ -2,6 +2,8 @@ const { app, BrowserWindow, screen, ipcMain, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const runtimeManager = require("./backend-manager");
+const DEFAULT_LOCAL_API_URL = "http://127.0.0.1:8000";
+const DEFAULT_SERVER_URL = "https://jarvis-api.lilium.co.in";
 
 function loadDotEnv() {
   const envPath = path.join(__dirname, "..", ".env");
@@ -22,7 +24,20 @@ function loadDotEnv() {
   }
 }
 
-loadDotEnv();
+if (!app.isPackaged) {
+  loadDotEnv();
+}
+
+function applyDefaultUrls() {
+  if (!process.env.JARVIS_API_URL) {
+    process.env.JARVIS_API_URL = DEFAULT_LOCAL_API_URL;
+  }
+  if (!process.env.JARVIS_SERVER_URL) {
+    process.env.JARVIS_SERVER_URL = DEFAULT_SERVER_URL;
+  }
+}
+
+applyDefaultUrls();
 
 function getRightPanelBounds() {
   const { workArea } = screen.getPrimaryDisplay();
