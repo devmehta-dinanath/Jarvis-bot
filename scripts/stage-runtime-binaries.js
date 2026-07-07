@@ -157,11 +157,25 @@ if (backendCopied) {
 }
 
 let screenpipeCopied = false;
-if (process.env.JARVIS_SCREENPIPE_BIN_DIR_SRC) {
-  screenpipeCopied = copyDirIfPresent(process.env.JARVIS_SCREENPIPE_BIN_DIR_SRC, screenpipeLibDir);
-} else if (process.env.JARVIS_SCREENPIPE_BIN_SRC) {
-  const screenpipeSrcDir = path.dirname(process.env.JARVIS_SCREENPIPE_BIN_SRC);
-  screenpipeCopied = copyDirIfPresent(screenpipeSrcDir, screenpipeLibDir);
+const screenpipeSrcCandidates = [
+  process.env.JARVIS_SCREENPIPE_BIN_DIR_SRC,
+  process.env.JARVIS_SCREENPIPE_ARM64_DIR_SRC,
+  process.env.JARVIS_SCREENPIPE_X64_DIR_SRC,
+  path.join(projectRoot, ".ci-screenpipe", "cli-win32-x64"),
+  path.join(projectRoot, ".ci-screenpipe", "cli-darwin-arm64"),
+  path.join(projectRoot, ".ci-screenpipe", "cli-darwin-x64"),
+  path.join(projectRoot, ".ci-screenpipe", "cli-linux-x64"),
+  process.env.JARVIS_SCREENPIPE_BIN_SRC
+    ? path.dirname(process.env.JARVIS_SCREENPIPE_BIN_SRC)
+    : null
+].filter(Boolean);
+
+for (const src of screenpipeSrcCandidates) {
+  if (copyDirIfPresent(src, screenpipeLibDir)) {
+    screenpipeCopied = true;
+    console.log(`[stage-runtime] screenpipe copied from ${src}`);
+    break;
+  }
 }
 
 if (folder === "mac") {

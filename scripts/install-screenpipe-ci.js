@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * CI helper: download @screenpipe/cli-* platform packages via npm pack (no EBADPLATFORM)
- * and write JARVIS_SCREENPIPE_* paths to GITHUB_ENV.
+ * CI helper: download @screenpipe/cli-* via npm pack + tar extract (cross-platform)
+ * and write JARVIS_SCREENPIPE_* paths to GITHUB_ENV using forward slashes.
  */
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const tar = require("tar");
 
 const projectRoot = path.join(__dirname, "..");
 const runtimeTarget = process.env.RUNTIME_TARGET || process.platform;
@@ -23,15 +24,21 @@ function log(msg) {
   console.log(`[install-screenpipe] ${msg}`);
 }
 
-function appendGithubEnv(key, value) {
-  if (!githubEnv) {
-    log(`(no GITHUB_ENV) ${key}=${value}`);
-    return;
-  }
-  fs.appendFileSync(githubEnv, `${key}=${value}\n`);
+/** GITHUB_ENV breaks on Windows backslashes (e.g. D:\a → bell char). Always use forward slashes. */
+function toEnvPath(value) {
+  return path.resolve(value).replace(/\\/g, "/");
 }
 
-function npmPackExtract(pkgName, destDir) {
+function appendGithubEnv(key, value) {
+  const line = `${key}=${toEnvPath(value)}`;
+  if (!githubEnv) {
+    log(`(no GITHUB_ENV) ${line}`);
+    return;
+  }
+  fs.appendFileSync(githubEnv, `${line}\n`);
+}
+
+async function npmPackExtract(pkgName, destDir) {
   const workDir = path.join(projectRoot, ".ci-tmp", pkgName.replace(/[@/]/g, "_"));
   fs.mkdirSync(workDir, { recursive: true });
 
@@ -48,7 +55,7 @@ function npmPackExtract(pkgName, destDir) {
   }
 
   fs.mkdirSync(destDir, { recursive: true });
-  execSync(`tar -xzf "${tgzPath}" -C "${workDir}"`, { stdio: "inherit" });
+  await tar.x({ file: tgzPath, cwd: workDir });
 
   const extractedBin = path.join(workDir, "package", "bin");
   if (!fs.existsSync(extractedBin)) {
@@ -63,7 +70,7 @@ function npmPackExtract(pkgName, destDir) {
       try {
         fs.chmodSync(dest, 0o755);
       } catch (_err) {
-        // Windows CI may not support chmod on all files.
+        // ignore on Windows
       }
     }
   }
@@ -85,7 +92,7 @@ function findBinDir(rootDir) {
   return null;
 }
 
-function main() {
+async function main() {
   const packages = PACKAGES[runtimeTarget];
   if (!packages) {
     throw new Error(`unsupported RUNTIME_TARGET: ${runtimeTarget}`);
@@ -100,7 +107,7 @@ function main() {
     const shortName = pkg.split("/").pop();
     const destDir = path.join(extractRoot, shortName);
     try {
-      extracted[shortName] = npmPackExtract(pkg, destDir);
+      extracted[shortName] = await npmPackExtract(pkg, destDir);
     } catch (err) {
       log(`WARN: failed to pack ${pkg}: ${err.message}`);
     }
@@ -136,13 +143,13 @@ function main() {
   }
 
   appendGithubEnv("JARVIS_SCREENPIPE_BIN_DIR_SRC", primaryDir);
-  appendGithubEnv(
-    "JARVIS_SCREENPIPE_BIN_SRC",
-    path.join(primaryDir, BIN_NAME)
-  );
+  appendGithubEnv("JARVIS_SCREENPIPE_BIN_SRC", path.join(primaryDir, BIN_NAME));
 
-  log(`primary=${primaryDir}`);
+  log(`primary=${toEnvPath(primaryDir)}`);
   log("done");
 }
 
-main();
+main().catch((err) => {
+  console.error(`[install-screenpipe] FATAL: ${err.message}`);
+  process.exit(1);
+});
