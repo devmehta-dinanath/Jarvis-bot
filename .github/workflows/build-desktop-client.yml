@@ -29,7 +29,7 @@ jobs:
             os: ubuntu-latest
             runtime_target: linux
             build_script: build:linux
-            screenpipe_pkg: "@screenpipe/cli-linux-x64-gnu"
+            screenpipe_pkg: "@screenpipe/cli-linux-x64"
     steps:
       - name: Checkout frontend
         uses: actions/checkout@v4
