@@ -23,22 +23,42 @@ function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function resolveExistingPath(candidate) {
+  if (!candidate) {
+    return null;
+  }
+  const resolved = path.resolve(candidate);
+  return fs.existsSync(resolved) ? resolved : null;
+}
+
+function firstExistingPath(candidates) {
+  for (const candidate of candidates) {
+    const resolved = resolveExistingPath(candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
 function copyIfPresent(srcPath, destPath) {
-  if (!srcPath || !fs.existsSync(srcPath)) {
+  const resolvedSrc = resolveExistingPath(srcPath);
+  if (!resolvedSrc) {
     return false;
   }
   ensureDir(path.dirname(destPath));
-  fs.copyFileSync(srcPath, destPath);
+  fs.copyFileSync(resolvedSrc, destPath);
   return true;
 }
 
 function copyDirIfPresent(srcDir, destDir) {
-  if (!srcDir || !fs.existsSync(srcDir)) {
+  const resolvedSrc = resolveExistingPath(srcDir);
+  if (!resolvedSrc || !fs.statSync(resolvedSrc).isDirectory()) {
     return false;
   }
   ensureDir(destDir);
-  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    const src = path.join(srcDir, entry.name);
+  for (const entry of fs.readdirSync(resolvedSrc, { withFileTypes: true })) {
+    const src = path.join(resolvedSrc, entry.name);
     const dest = path.join(destDir, entry.name);
     if (entry.isDirectory()) {
       copyDirIfPresent(src, dest);
@@ -68,7 +88,11 @@ const backendDest = path.join(platformRoot, `backend${isWindows ? ".exe" : ""}`)
 const screenpipeDest = path.join(platformRoot, `screenpipe${isWindows ? ".exe" : ""}`);
 const screenpipeLibDir = path.join(platformRoot, "screenpipe-lib");
 
-const backendCopied = copyIfPresent(process.env.JARVIS_BACKEND_BIN_SRC, backendDest);
+const backendSrc = firstExistingPath([
+  process.env.JARVIS_BACKEND_BIN_SRC,
+  path.join(projectRoot, "backend-src", "dist", isWindows ? "backend.exe" : "backend")
+]);
+const backendCopied = copyIfPresent(backendSrc, backendDest);
 
 let screenpipeCopied = false;
 if (process.env.JARVIS_SCREENPIPE_BIN_DIR_SRC) {
@@ -99,7 +123,7 @@ if (!screenpipeCopied) {
 }
 
 console.log(
-  `[stage-runtime] target=${target} folder=${folder} backendCopied=${backendCopied} screenpipeCopied=${screenpipeCopied}`
+  `[stage-runtime] target=${target} folder=${folder} backendSrc=${backendSrc || "missing"} backendCopied=${backendCopied} screenpipeCopied=${screenpipeCopied}`
 );
 
 if (process.env.REQUIRE_RUNTIME_BINARIES === "1" && (!backendCopied || !screenpipeCopied)) {

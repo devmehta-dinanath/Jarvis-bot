@@ -97,17 +97,27 @@ jobs:
         run: |
           cd backend-src
           pyinstaller backend-client.spec --noconfirm --clean
-          if [ -f "dist/backend.exe" ]; then
-            echo "JARVIS_BACKEND_BIN_SRC=$(pwd)/dist/backend.exe" >> "$GITHUB_ENV"
-          elif [ -f "dist/backend" ]; then
-            echo "JARVIS_BACKEND_BIN_SRC=$(pwd)/dist/backend" >> "$GITHUB_ENV"
-          else
-            echo "Backend binary was not produced."
-            ls -la dist || true
-            exit 1
-          fi
+          BACKEND_BIN="$(node -e "
+            const fs=require('fs');
+            const path=require('path');
+            const candidates=['dist/backend.exe','dist/backend'];
+            const found=candidates.find((file)=>fs.existsSync(file));
+            if(!found){
+              console.error('Backend binary was not produced.');
+              try {
+                console.error(fs.readdirSync('dist').join(', '));
+              } catch (err) {
+                console.error('dist/ is missing');
+              }
+              process.exit(1);
+            }
+            process.stdout.write(path.resolve(found));
+          ")"
+          echo "JARVIS_BACKEND_BIN_SRC=${BACKEND_BIN}" >> "$GITHUB_ENV"
+          echo "Built backend binary at ${BACKEND_BIN}"
 
       - name: Stage runtime binaries
+        shell: bash
         env:
           RUNTIME_TARGET: ${{ matrix.runtime_target }}
           REQUIRE_RUNTIME_BINARIES: "1"
