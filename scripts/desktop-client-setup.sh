@@ -19,6 +19,7 @@ OS=""
 START_FRONTEND=true
 LOCAL_ONLY=false
 CLONE_ONLY=false
+GOOGLE_CREDS_SOURCE=""
 
 log() { echo "[desktop-setup] $*"; }
 die() { echo "[desktop-setup] ERROR: $*" >&2; exit 1; }
@@ -108,6 +109,7 @@ Options:
   --clone GIT_URL     Repo to clone (default: $DEFAULT_REPO_URL)
   --install-dir DIR   Install root (default: OS-specific, see below)
   --sync-key KEY      SYNC_API_KEY from server .env
+  --google-creds PATH Path to Google OAuth credentials JSON (optional; enables calendar schedule)
   --no-frontend       Skip auto-starting the Electron UI
 
 Examples:
@@ -139,6 +141,7 @@ while [ $# -gt 0 ]; do
     --clone) CLONE_URL="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --sync-key) SYNC_KEY="$2"; shift 2 ;;
+    --google-creds) GOOGLE_CREDS_SOURCE="$2"; shift 2 ;;
     --no-frontend) START_FRONTEND=false; shift ;;
     --local-only) LOCAL_ONLY=true; shift ;;
     --clone-only) CLONE_ONLY=true; LOCAL_ONLY=true; START_FRONTEND=false; shift ;;
@@ -649,6 +652,57 @@ setup_env() {
   check_frontend_env
 }
 
+ensure_google_calendar_credentials() {
+  local env_file="$BACKEND_DIR/.env"
+  [ -f "$env_file" ] || return 0
+
+  local creds_path token_path
+  local resolved_creds_path resolved_token_path
+  creds_path="$(env_file_get "$env_file" GOOGLE_CALENDAR_CREDENTIALS_PATH)"
+  token_path="$(env_file_get "$env_file" GOOGLE_CALENDAR_TOKEN_PATH)"
+
+  [ -n "$creds_path" ] || creds_path="data/google_calendar_credentials.json"
+  [ -n "$token_path" ] || token_path="data/google_calendar_token.json"
+
+  if [[ "$creds_path" = /* ]]; then
+    resolved_creds_path="$creds_path"
+  else
+    resolved_creds_path="$BACKEND_DIR/$creds_path"
+  fi
+  if [[ "$token_path" = /* ]]; then
+    resolved_token_path="$token_path"
+  else
+    resolved_token_path="$BACKEND_DIR/$token_path"
+  fi
+
+  mkdir -p "$(dirname "$resolved_creds_path")" "$(dirname "$resolved_token_path")"
+
+  if [ -f "$resolved_creds_path" ]; then
+    log_ok "Google Calendar credentials found at $resolved_creds_path"
+    return 0
+  fi
+
+  local candidate=""
+  if [ -n "$GOOGLE_CREDS_SOURCE" ] && [ -f "$GOOGLE_CREDS_SOURCE" ]; then
+    candidate="$GOOGLE_CREDS_SOURCE"
+  elif [ -f "$REPO_DIR/data/google_calendar_credentials.json" ] && [ "$REPO_DIR" != "$BACKEND_DIR" ]; then
+    candidate="$REPO_DIR/data/google_calendar_credentials.json"
+  elif [ -f "$HOME/.jarvis/google_calendar_credentials.json" ]; then
+    candidate="$HOME/.jarvis/google_calendar_credentials.json"
+  fi
+
+  if [ -n "$candidate" ]; then
+    cp "$candidate" "$resolved_creds_path"
+    chmod 600 "$resolved_creds_path" 2>/dev/null || true
+    log_ok "Copied Google Calendar credentials to $resolved_creds_path"
+    return 0
+  fi
+
+  warn "Google Calendar credentials JSON is missing at $resolved_creds_path"
+  log_detail "Scheduling from WhatsApp needs this file."
+  log_detail "Pass --google-creds /absolute/path/to/credentials.json, then rerun this script."
+}
+
 export_host_env() {
   # UID is readonly in bash — use HOST_UID for Docker Compose interpolation.
   export HOST_UID="${HOST_UID:-$(id -u)}"
@@ -950,6 +1004,7 @@ if [ "$CLONE_ONLY" = true ]; then
   cd "$BACKEND_DIR"
   prompt_server_url
   setup_env
+  ensure_google_calendar_credentials
   print_clone_summary
   exit 0
 fi
@@ -964,6 +1019,7 @@ cd "$BACKEND_DIR"
 prompt_server_url
 check_server_reachable
 setup_env
+ensure_google_calendar_credentials
 
 log_step "Prepare display (X11) for Screenpipe"
 prepare_x11
