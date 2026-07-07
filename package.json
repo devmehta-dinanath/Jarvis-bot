@@ -8,6 +8,7 @@
     "start": "electron . --no-sandbox",
     "dev": "electron . --no-sandbox",
     "stage:runtime": "node scripts/stage-runtime-binaries.js",
+    "install:screenpipe": "node scripts/install-screenpipe-ci.js",
     "build:linux": "electron-builder --linux AppImage --publish never",
     "build:mac": "electron-builder --mac dmg --publish never",
     "build:win": "electron-builder --win nsis --publish never"

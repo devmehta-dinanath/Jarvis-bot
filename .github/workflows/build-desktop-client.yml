@@ -19,17 +19,14 @@ jobs:
             os: macos-latest
             runtime_target: darwin
             build_script: build:mac
-            screenpipe_pkg: "@screenpipe/cli-darwin-arm64"
           - name: Windows
             os: windows-latest
             runtime_target: windows
             build_script: build:win
-            screenpipe_pkg: "@screenpipe/cli-win32-x64"
           - name: Linux
             os: ubuntu-latest
             runtime_target: linux
             build_script: build:linux
-            screenpipe_pkg: "@screenpipe/cli-linux-x64"
     steps:
       - name: Checkout frontend
         uses: actions/checkout@v4
@@ -43,72 +40,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Install and detect Screenpipe CLI binary
+      - name: Install Screenpipe CLI binary
         shell: bash
-        run: |
-          set -euo pipefail
-          PRIMARY_PKG="${{ matrix.screenpipe_pkg }}"
-          echo "=== Installing ${PRIMARY_PKG} ==="
-          npm install --no-save --force "${PRIMARY_PKG}"
-
-          if [ "${{ matrix.runtime_target }}" = "darwin" ]; then
-            echo "=== Installing @screenpipe/cli-darwin-x64 (Intel Mac support) ==="
-            npm install --no-save --force @screenpipe/cli-darwin-x64 || echo "x64 package install skipped"
-          fi
-
-          find_screenpipe_bin_dir() {
-            local pkg_name="$1"
-            local bin_name="screenpipe"
-            if [ "${{ matrix.runtime_target }}" = "windows" ]; then
-              bin_name="screenpipe.exe"
-            fi
-            local bin_path=""
-            bin_path="$(find "node_modules/${pkg_name}" -type f -name "${bin_name}" 2>/dev/null | head -1 || true)"
-            if [ -z "${bin_path}" ]; then
-              bin_path="$(find node_modules -type f -path "*/${pkg_name}/bin/${bin_name}" 2>/dev/null | head -1 || true)"
-            fi
-            if [ -z "${bin_path}" ]; then
-              bin_path="$(find node_modules -type f -name "${bin_name}" 2>/dev/null | grep -F "${pkg_name}" | head -1 || true)"
-            fi
-            if [ -n "${bin_path}" ]; then
-              dirname "${bin_path}"
-              return 0
-            fi
-            return 1
-          }
-
-          echo "=== Searching for screenpipe binaries ==="
-          find node_modules -maxdepth 4 -type d -name bin 2>/dev/null | while read -r d; do
-            echo "  bin dir: ${d}"
-            ls -la "${d}" 2>/dev/null || true
-          done
-
-          SCREENPIPE_DIR="$(find_screenpipe_bin_dir "${PRIMARY_PKG}")" || {
-            echo "ERROR: Could not find screenpipe binary for ${PRIMARY_PKG}"
-            find node_modules -type f \( -name screenpipe -o -name screenpipe.exe \) 2>/dev/null || true
-            exit 1
-          }
-
-          echo "JARVIS_SCREENPIPE_BIN_DIR_SRC=${SCREENPIPE_DIR}" >> "$GITHUB_ENV"
-          if [ "${{ matrix.runtime_target }}" = "windows" ]; then
-            echo "JARVIS_SCREENPIPE_BIN_SRC=${SCREENPIPE_DIR}/screenpipe.exe" >> "$GITHUB_ENV"
-          else
-            echo "JARVIS_SCREENPIPE_BIN_SRC=${SCREENPIPE_DIR}/screenpipe" >> "$GITHUB_ENV"
-          fi
-          echo "Primary screenpipe dir: ${SCREENPIPE_DIR}"
-
-          if [ "${{ matrix.runtime_target }}" = "darwin" ]; then
-            ARM64_DIR="$(find_screenpipe_bin_dir "@screenpipe/cli-darwin-arm64" || true)"
-            X64_DIR="$(find_screenpipe_bin_dir "@screenpipe/cli-darwin-x64" || true)"
-            if [ -n "${ARM64_DIR}" ]; then
-              echo "JARVIS_SCREENPIPE_ARM64_DIR_SRC=${ARM64_DIR}" >> "$GITHUB_ENV"
-              echo "ARM64 screenpipe dir: ${ARM64_DIR}"
-            fi
-            if [ -n "${X64_DIR}" ]; then
-              echo "JARVIS_SCREENPIPE_X64_DIR_SRC=${X64_DIR}" >> "$GITHUB_ENV"
-              echo "x64 screenpipe dir: ${X64_DIR}"
-            fi
-          fi
+        env:
+          RUNTIME_TARGET: ${{ matrix.runtime_target }}
+        run: npm run install:screenpipe
 
       - name: Checkout backend
         uses: actions/checkout@v4
