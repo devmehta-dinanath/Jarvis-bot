@@ -84,6 +84,20 @@ function makeExecutable(filePath) {
   }
 }
 
+function clearQuarantineFlag(filePath) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  try {
+    const { execSync } = require("child_process");
+    execSync(`xattr -d com.apple.quarantine "${filePath}" 2>/dev/null || true`, {
+      stdio: "ignore"
+    });
+  } catch (error) {
+    console.warn(`[stage-runtime] failed to clear quarantine on ${filePath}: ${error.message}`);
+  }
+}
+
 function makeTreeExecutable(dirPath) {
   if (!dirPath || !fs.existsSync(dirPath)) {
     return;
@@ -94,6 +108,7 @@ function makeTreeExecutable(dirPath) {
       makeTreeExecutable(fullPath);
     } else {
       makeExecutable(fullPath);
+      clearQuarantineFlag(fullPath);
     }
   }
 }
@@ -138,6 +153,7 @@ const backendSrc = firstExistingPath([
 const backendCopied = copyIfPresent(backendSrc, backendDest);
 if (backendCopied) {
   makeExecutable(backendDest);
+  clearQuarantineFlag(backendDest);
 }
 
 let screenpipeCopied = false;
@@ -187,6 +203,15 @@ console.log(
   `[stage-runtime] target=${target} folder=${folder} backendSrc=${backendSrc || "missing"} backendCopied=${backendCopied} screenpipeCopied=${screenpipeCopied} screenpipeExe=${screenpipeCopied ? screenpipeExe : "missing"}`
 );
 
+// List what was staged for screenpipe (helps debug DLL issues)
+if (fs.existsSync(screenpipeLibDir)) {
+  const stagedFiles = fs.readdirSync(screenpipeLibDir);
+  console.log(`[stage-runtime] screenpipe-lib contents (${stagedFiles.length} files): ${stagedFiles.join(", ")}`);
+} else {
+  console.log("[stage-runtime] screenpipe-lib directory does not exist");
+}
+
 if (process.env.REQUIRE_RUNTIME_BINARIES === "1" && (!backendCopied || !screenpipeCopied)) {
+  console.error("[stage-runtime] ERROR: Required binaries missing, failing build");
   process.exit(1);
 }

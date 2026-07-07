@@ -151,12 +151,39 @@ function waitForUrl(url, timeoutMs, label) {
 
 function buildScreenpipeEnv(screenpipeCwd) {
   const env = { ...process.env };
+  
+  // Suppress CLI reminders about downloading the desktop app
+  env.SCREENPIPE_NO_REMINDERS = "1";
+  
+  // Ensure the screenpipe binary directory is in PATH/LD_LIBRARY_PATH for DLL/lib loading
   if (process.platform === "linux") {
     env.LD_LIBRARY_PATH = `${screenpipeCwd}${path.delimiter}${env.LD_LIBRARY_PATH || ""}`;
-  } else {
-    env.PATH = `${screenpipeCwd}${path.delimiter}${env.PATH || ""}`;
   }
+  
+  // Always add to PATH for Windows DLLs and macOS dylibs
+  env.PATH = `${screenpipeCwd}${path.delimiter}${env.PATH || ""}`;
+  
+  // On macOS, also set DYLD_LIBRARY_PATH
+  if (process.platform === "darwin") {
+    env.DYLD_LIBRARY_PATH = `${screenpipeCwd}${path.delimiter}${env.DYLD_LIBRARY_PATH || ""}`;
+  }
+  
   return env;
+}
+
+function clearMacOsQuarantine(binaryPath) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  try {
+    const { execSync } = require("child_process");
+    execSync(`xattr -d com.apple.quarantine "${binaryPath}" 2>/dev/null || true`, {
+      stdio: "ignore"
+    });
+    appendLog("runtime.log", `[runtime] cleared quarantine flag on ${binaryPath}`);
+  } catch (err) {
+    appendLog("runtime.log", `[runtime] failed to clear quarantine: ${err.message}`);
+  }
 }
 
 function buildBackendEnv() {
@@ -185,6 +212,12 @@ function buildBackendEnv() {
   return env;
 }
 
+function screenpipeDataDir() {
+  const dir = path.join(app.getPath("userData"), "screenpipe-data");
+  ensureDir(dir);
+  return dir;
+}
+
 function startScreenpipe() {
   if (screenpipeProcess) {
     return;
@@ -195,8 +228,34 @@ function startScreenpipe() {
     return;
   }
 
+  // On macOS, clear Gatekeeper quarantine flag before running
+  clearMacOsQuarantine(screenpipeBin);
+
   const screenpipeCwd = path.dirname(screenpipeBin);
-  screenpipeProcess = spawnManagedProcess("screenpipe", screenpipeBin, ["record"], {
+  const dataDir = screenpipeDataDir();
+  
+  appendLog("runtime.log", `[runtime] screenpipe binary=${screenpipeBin}`);
+  appendLog("runtime.log", `[runtime] screenpipe cwd=${screenpipeCwd}`);
+  appendLog("runtime.log", `[runtime] screenpipe dataDir=${dataDir}`);
+  
+  // List files in screenpipe directory to verify DLLs are present
+  try {
+    const files = fs.readdirSync(screenpipeCwd);
+    appendLog("runtime.log", `[runtime] screenpipe dir contents: ${files.join(", ")}`);
+  } catch (err) {
+    appendLog("runtime.log", `[runtime] failed to list screenpipe dir: ${err.message}`);
+  }
+
+  // Build args - screenpipe CLI uses "record" subcommand with options
+  const args = [
+    "record",
+    "--data-dir", dataDir,
+    "--port", "3030"
+  ];
+  
+  appendLog("runtime.log", `[runtime] screenpipe command: ${screenpipeBin} ${args.join(" ")}`);
+
+  screenpipeProcess = spawnManagedProcess("screenpipe", screenpipeBin, args, {
     env: buildScreenpipeEnv(screenpipeCwd),
     cwd: screenpipeCwd
   });
@@ -282,11 +341,18 @@ async function startRuntime() {
   appendLog("runtime.log", `[runtime] backendBin=${backendBin}`);
   appendLog("runtime.log", `[runtime] screenpipeBin=${screenpipeBin}`);
 
+  appendLog("runtime.log", "[runtime] launching screenpipe...");
   startScreenpipe();
+  
+  // Give screenpipe a moment to initialize before health check
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
   try {
+    appendLog("runtime.log", "[runtime] waiting for screenpipe health check...");
     await waitForUrl(SCREENPIPE_HEALTH_URL, SCREENPIPE_WAIT_MS, "Screenpipe");
     appendLog("runtime.log", "[runtime] screenpipe health check passed (port 3030)");
   } catch (error) {
+    appendLog("runtime.log", `[runtime] screenpipe health check failed: ${error.message}`);
     showRuntimeError(
       `Screenpipe did not start on port 3030.\n\n${error.message}\n\nCheck screenpipe.log for details.`
     );
