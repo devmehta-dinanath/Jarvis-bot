@@ -65,7 +65,14 @@ from app.database import get_db
 from app.services import service_manager
 from app.services.meetings.routes import router as meetings_router
 from app.services.vector.store import get_vector_stats
-from app.services.google_calendar.service import google_calendar_service
+
+
+def _google_calendar_status() -> dict:
+    if not is_server_role():
+        return {"authorized": False}
+    from app.services.google_calendar.service import google_calendar_service
+
+    return google_calendar_service.auth_status().model_dump()
 
 
 def _summary_status() -> dict:
@@ -207,9 +214,7 @@ def services_status() -> dict:
             "configured": wa_client_is_configured() if is_server_role() else False,
             **(wa_token_status() if is_server_role() else {}),
         },
-        "google_calendar": google_calendar_service.auth_status().model_dump()
-        if is_server_role()
-        else {"authorized": False},
+        "google_calendar": _google_calendar_status(),
         "vector": get_vector_stats() if is_server_role() else {"enabled": False, "count": 0},
         "hint": hint,
     }
