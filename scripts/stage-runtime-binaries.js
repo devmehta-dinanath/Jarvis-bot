@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { execSync } = require("child_process");
 
 const projectRoot = path.join(__dirname, "..");
 const resourcesRoot = path.join(projectRoot, "resources");
@@ -125,6 +127,67 @@ function screenpipeExeName(isWindows) {
   return isWindows ? "screenpipe.exe" : "screenpipe";
 }
 
+function ensureMacFfmpeg(libDir) {
+  if (!libDir || !fs.existsSync(libDir)) {
+    return false;
+  }
+
+  const dest = path.join(libDir, "ffmpeg");
+  if (fs.existsSync(dest)) {
+    makeExecutable(dest);
+    clearQuarantineFlag(dest);
+    return true;
+  }
+
+  const src = firstExistingPath([
+    process.env.JARVIS_FFMPEG_SRC,
+    "/opt/homebrew/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    path.join(os.homedir(), ".local", "bin", "ffmpeg")
+  ]);
+
+  if (src) {
+    fs.copyFileSync(src, dest);
+    makeExecutable(dest);
+    clearQuarantineFlag(dest);
+    console.log(`[stage-runtime] ffmpeg copied from ${src}`);
+    return true;
+  }
+
+  const zipUrl = "https://www.osxexperts.net/ffmpeg80arm.zip";
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-ffmpeg-"));
+  const zipPath = path.join(tmpDir, "ffmpeg.zip");
+
+  try {
+    console.log(`[stage-runtime] downloading ffmpeg from ${zipUrl}`);
+    execSync(`curl -fsSL "${zipUrl}" -o "${zipPath}"`, { stdio: "inherit" });
+    execSync(`unzip -oq "${zipPath}" -d "${tmpDir}"`, { stdio: "inherit" });
+
+    const extracted = firstExistingPath([
+      path.join(tmpDir, "ffmpeg"),
+      ...fs.readdirSync(tmpDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.includes("ffmpeg"))
+        .map((entry) => path.join(tmpDir, entry.name))
+    ]);
+
+    if (!extracted) {
+      console.warn("[stage-runtime] ffmpeg download succeeded but binary not found in archive");
+      return false;
+    }
+
+    fs.copyFileSync(extracted, dest);
+    makeExecutable(dest);
+    clearQuarantineFlag(dest);
+    console.log(`[stage-runtime] ffmpeg downloaded and staged to ${dest}`);
+    return true;
+  } catch (error) {
+    console.warn(`[stage-runtime] failed to download ffmpeg: ${error.message}`);
+    return false;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 const folder = platformFolder(target);
 const platformRoot = path.join(resourcesRoot, folder);
 const commonRoot = path.join(resourcesRoot, "common");
@@ -198,6 +261,10 @@ if (screenpipeCopied) {
   makeTreeExecutable(screenpipeLibDir);
 }
 screenpipeCopied = hasScreenpipeBinary();
+
+if (folder === "mac" && screenpipeCopied) {
+  ensureMacFfmpeg(screenpipeLibDir);
+}
 
 if (!backendCopied) {
   writePlaceholderIfMissing(

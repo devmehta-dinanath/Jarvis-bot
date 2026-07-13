@@ -8,7 +8,9 @@ const DEFAULT_SYNC_API_KEY =
   process.env.SYNC_API_KEY ||
   "b5967ac012fe968bc12b70f31d7d17be1d5912f9fb9e76bf97819ff0c8d6366b";
 const BACKEND_WAIT_MS = 120_000;
-const SCREENPIPE_WAIT_MS = 90_000;
+// macOS first launch downloads ffmpeg + ML models; 90s is too short for packaged builds.
+const SCREENPIPE_WAIT_MS =
+  process.platform === "darwin" ? 240_000 : 120_000;
 const HEALTH_URL = "http://127.0.0.1:8000/health";
 const SCREENPIPE_HEALTH_URL = "http://127.0.0.1:3030/health";
 
@@ -102,7 +104,8 @@ function resolveBinaryPath(kind) {
 function sqliteDatabaseUrl(dbPath) {
   const normalized = dbPath.replace(/\\/g, "/");
   if (normalized.startsWith("/")) {
-    return `sqlite://${normalized}`;
+    // SQLAlchemy absolute SQLite paths need four slashes: sqlite:////absolute/path
+    return `sqlite:///${normalized}`;
   }
   return `sqlite:///${normalized}`;
 }
@@ -125,13 +128,13 @@ function spawnManagedProcess(name, command, args, options = {}) {
   return processRef;
 }
 
-function waitForUrl(url, timeoutMs, label) {
+function waitForUrl(url, timeoutMs, label, { acceptAnyHttpStatus = false } = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
     const check = async () => {
       try {
         const response = await fetch(url);
-        if (response.ok) {
+        if (response.ok || acceptAnyHttpStatus) {
           resolve(true);
           return;
         }
@@ -149,25 +152,77 @@ function waitForUrl(url, timeoutMs, label) {
   });
 }
 
+function ensureScreenpipeCacheDirs() {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  const home = app.getPath("home");
+  ensureDir(path.join(home, "Library", "Caches", "screenpipe", "models"));
+}
+
+function ensureBundledFfmpeg(screenpipeCwd) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const bundledFfmpeg = path.join(screenpipeCwd, "ffmpeg");
+  if (fs.existsSync(bundledFfmpeg)) {
+    return;
+  }
+
+  const candidates = [
+    process.env.JARVIS_FFMPEG_SRC,
+    "/opt/homebrew/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    path.join(app.getPath("home"), ".local", "bin", "ffmpeg")
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (!candidate || !fs.existsSync(candidate)) {
+      continue;
+    }
+    try {
+      fs.copyFileSync(candidate, bundledFfmpeg);
+      fs.chmodSync(bundledFfmpeg, 0o755);
+      clearMacOsQuarantine(bundledFfmpeg);
+      appendLog("runtime.log", `[runtime] bundled ffmpeg from ${candidate}`);
+      return;
+    } catch (error) {
+      appendLog("runtime.log", `[runtime] failed to bundle ffmpeg from ${candidate}: ${error.message}`);
+    }
+  }
+
+  appendLog(
+    "runtime.log",
+    "[runtime] ffmpeg not bundled; screenpipe may download it on first launch (slow)"
+  );
+}
+
 function buildScreenpipeEnv(screenpipeCwd) {
   const env = { ...process.env };
-  
+
   // Suppress CLI reminders about downloading the desktop app
   env.SCREENPIPE_NO_REMINDERS = "1";
-  
+
+  const pathEntries = [
+    screenpipeCwd,
+    path.join(app.getPath("home"), ".local", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin"
+  ];
+
   // Ensure the screenpipe binary directory is in PATH/LD_LIBRARY_PATH for DLL/lib loading
   if (process.platform === "linux") {
     env.LD_LIBRARY_PATH = `${screenpipeCwd}${path.delimiter}${env.LD_LIBRARY_PATH || ""}`;
   }
-  
-  // Always add to PATH for Windows DLLs and macOS dylibs
-  env.PATH = `${screenpipeCwd}${path.delimiter}${env.PATH || ""}`;
-  
+
+  env.PATH = [...pathEntries, env.PATH || ""].join(path.delimiter);
+
   // On macOS, also set DYLD_LIBRARY_PATH
   if (process.platform === "darwin") {
     env.DYLD_LIBRARY_PATH = `${screenpipeCwd}${path.delimiter}${env.DYLD_LIBRARY_PATH || ""}`;
   }
-  
+
   return env;
 }
 
@@ -203,7 +258,10 @@ function buildBackendEnv() {
   env.SCREENPIPE_API_URL = env.SCREENPIPE_API_URL || "http://127.0.0.1:3030";
   env.JARVIS_SERVER_URL = env.JARVIS_SERVER_URL || DEFAULT_SERVER_URL;
   env.SYNC_ENABLED = env.SYNC_ENABLED || "true";
-  env.DATABASE_URL = env.DATABASE_URL || sqliteDatabaseUrl(dbPath);
+  // Packaged client must use the app data dir — ignore inherited dev DATABASE_URL.
+  env.DATABASE_URL = app.isPackaged
+    ? sqliteDatabaseUrl(dbPath)
+    : env.DATABASE_URL || sqliteDatabaseUrl(dbPath);
   env.JARVIS_DATA_DIR = dataDir;
   env.JARVIS_MEDIA_ROOT = mediaDir;
   if (DEFAULT_SYNC_API_KEY && !env.SYNC_API_KEY) {
@@ -230,8 +288,10 @@ function startScreenpipe() {
 
   // On macOS, clear Gatekeeper quarantine flag before running
   clearMacOsQuarantine(screenpipeBin);
+  ensureScreenpipeCacheDirs();
 
   const screenpipeCwd = path.dirname(screenpipeBin);
+  ensureBundledFfmpeg(screenpipeCwd);
   const dataDir = screenpipeDataDir();
   
   appendLog("runtime.log", `[runtime] screenpipe binary=${screenpipeBin}`);
@@ -344,12 +404,15 @@ async function startRuntime() {
   appendLog("runtime.log", "[runtime] launching screenpipe...");
   startScreenpipe();
   
-  // Give screenpipe a moment to initialize before health check
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  // First macOS launch may download ffmpeg + models — allow extra startup time.
+  const warmupMs = process.platform === "darwin" ? 5000 : 2000;
+  await new Promise(resolve => setTimeout(resolve, warmupMs));
   
   try {
-    appendLog("runtime.log", "[runtime] waiting for screenpipe health check...");
-    await waitForUrl(SCREENPIPE_HEALTH_URL, SCREENPIPE_WAIT_MS, "Screenpipe");
+    appendLog("runtime.log", `[runtime] waiting for screenpipe health check (timeout ${SCREENPIPE_WAIT_MS}ms)...`);
+    await waitForUrl(SCREENPIPE_HEALTH_URL, SCREENPIPE_WAIT_MS, "Screenpipe", {
+      acceptAnyHttpStatus: true
+    });
     appendLog("runtime.log", "[runtime] screenpipe health check passed (port 3030)");
   } catch (error) {
     appendLog("runtime.log", `[runtime] screenpipe health check failed: ${error.message}`);
