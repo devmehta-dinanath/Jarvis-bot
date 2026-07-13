@@ -1,0 +1,68 @@
+# macOS all-in-one: native Screenpipe on host + server + client in Docker.
+# Start: ./scripts/jarvis-up.sh
+services:
+  jarvis-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: jarvis-bot-server
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: server
+      RUNNING_IN_DOCKER: "true"
+      DATABASE_URL: sqlite:////app/data/jarvis.db
+      SCREENPIPE_ENABLED: "false"
+      SCREENPIPE_START_CLI: "false"
+      CHROMA_ENABLED: "true"
+      SUMMARY_ENABLED: "true"
+      WHATSAPP_ENABLED: "true"
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  jarvis-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client-mac
+    container_name: jarvis-bot-client-mac
+    ports:
+      - "${CLIENT_PORT:-8002}:8000"
+    env_file:
+      - .env
+    environment:
+      APP_ROLE: client
+      RUNNING_IN_DOCKER: "true"
+      DATABASE_URL: sqlite:////app/data/client-buffer.db
+      SCREENPIPE_ENABLED: "true"
+      SCREENPIPE_START_CLI: "false"
+      SCREENPIPE_API_URL: http://host.docker.internal:3030
+      JARVIS_SERVER_URL: https://jarvis-api.lilium.co.in
+      CHROMA_ENABLED: "false"
+      SUMMARY_ENABLED: "false"
+      WHATSAPP_ENABLED: "false"
+      SYNC_ENABLED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+    depends_on:
+      jarvis-server:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s

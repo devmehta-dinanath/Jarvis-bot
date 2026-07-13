@@ -5,10 +5,7 @@ from app.services.activity.service import ActivityClassificationService
 from app.services.meetings.sync_worker import MeetingTranscriptSyncService
 from app.services.paddle_ocr.service import PaddleOcrService
 from app.services.screenpipe.service import ScreenpipeService
-from app.services.summary.service import SummaryService
 from app.services.sync.service import SyncUploaderService
-from app.services.whatsapp.auth import start_refresh_worker, stop_refresh_worker
-from app.services.whatsapp.service import WhatsAppService
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +18,26 @@ class ServiceManager:
         self.paddle_ocr = PaddleOcrService()
         self.activity = ActivityClassificationService()
         self.meeting_transcripts = MeetingTranscriptSyncService()
-        self.summary = SummaryService()
-        self.whatsapp = WhatsAppService()
         self.sync_uploader = SyncUploaderService()
+        self._summary = None
+        self._whatsapp = None
         self._started = False
+
+    @property
+    def summary(self):
+        if self._summary is None:
+            from app.services.summary.service import SummaryService
+
+            self._summary = SummaryService()
+        return self._summary
+
+    @property
+    def whatsapp(self):
+        if self._whatsapp is None:
+            from app.services.whatsapp.service import WhatsAppService
+
+            self._whatsapp = WhatsAppService()
+        return self._whatsapp
 
     @property
     def is_started(self) -> bool:
@@ -39,6 +52,8 @@ class ServiceManager:
             return
 
         if is_server_role():
+            from app.services.whatsapp.auth import start_refresh_worker
+
             start_refresh_worker()
             self.summary.start()
             self.whatsapp.start()
@@ -71,6 +86,8 @@ class ServiceManager:
         if is_server_role():
             self.summary.stop()
             self.whatsapp.stop()
+            from app.services.whatsapp.auth import stop_refresh_worker
+
             stop_refresh_worker()
         elif is_client_role():
             self.sync_uploader.stop()

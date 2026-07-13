@@ -1,26 +1,32 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec for the desktop client (APP_ROLE=client).
 
+import os
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+spec_dir = os.path.dirname(os.path.abspath(SPEC))
+
 hiddenimports = []
+hiddenimports += collect_submodules("app")
 hiddenimports += collect_submodules("paddleocr")
 hiddenimports += collect_submodules("paddle")
 hiddenimports += collect_submodules("uvicorn")
+hiddenimports += collect_submodules("googleapiclient")
 
 datas = []
 datas += collect_data_files("paddleocr")
 
 a = Analysis(
     ["app/desktop_entrypoint.py"],
-    pathex=[],
+    pathex=[spec_dir],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["chromadb", "openai", "googleapiclient", "google.auth"],
+    excludes=["chromadb", "openai"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
