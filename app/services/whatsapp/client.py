@@ -6,10 +6,12 @@ from typing import Any
 import httpx
 
 from app.config import (
+    WAHA_HMAC_KEY,
     WHATSAPP_API_BASE,
     WHATSAPP_API_VERSION,
     WHATSAPP_APP_SECRET,
     WHATSAPP_PHONE_NUMBER_ID,
+    WHATSAPP_PROVIDER,
     WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE,
 )
 from app.services.whatsapp.auth import get_access_token, refresh_if_needed
@@ -20,10 +22,18 @@ _REQUEST_TIMEOUT_SECONDS = 15.0
 
 
 class WhatsAppApiError(Exception):
-    """Outbound WhatsApp Cloud API call failed."""
+    """Outbound WhatsApp API call failed."""
+
+
+def uses_waha() -> bool:
+    return WHATSAPP_PROVIDER == "waha"
 
 
 def is_configured() -> bool:
+    if uses_waha():
+        from app.services.whatsapp import waha_client
+
+        return waha_client.is_configured()
     return bool(get_access_token() and WHATSAPP_PHONE_NUMBER_ID)
 
 
@@ -77,6 +87,15 @@ def _extract_message_id(result: dict[str, Any]) -> str | None:
 
 def send_text(to: str, body: str) -> tuple[str | None, dict[str, Any]]:
     """Send a free-form text message. Returns (wa_message_id, raw_response)."""
+    if uses_waha():
+        from app.services.whatsapp import waha_client
+        from app.services.whatsapp.waha_client import WahaApiError
+
+        try:
+            return waha_client.send_text(to, body)
+        except WahaApiError as exc:
+            raise WhatsAppApiError(str(exc)) from exc
+
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -95,7 +114,21 @@ def send_template(
     language: str | None = None,
     components: list[dict[str, Any]] | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Send a pre-approved template message. Returns (wa_message_id, raw_response)."""
+    """Send a template (Meta) or plain-text fallback (WAHA)."""
+    if uses_waha():
+        from app.services.whatsapp import waha_client
+        from app.services.whatsapp.waha_client import WahaApiError
+
+        try:
+            return waha_client.send_template(
+                to,
+                template_name,
+                language=language,
+                components=components,
+            )
+        except WahaApiError as exc:
+            raise WhatsAppApiError(str(exc)) from exc
+
     template: dict[str, Any] = {
         "name": template_name,
         "language": {"code": language or WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE},
@@ -114,11 +147,10 @@ def send_template(
 
 
 def verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
-    """Verify Meta's X-Hub-Signature-256 header against the app secret.
+    """Verify inbound webhook authenticity for the active provider."""
+    if uses_waha():
+        return _verify_waha_signature(raw_body, signature_header)
 
-    If no app secret is configured we skip verification (returns True) so the
-    pipeline still works in local/testing setups.
-    """
     if not WHATSAPP_APP_SECRET:
         logger.warning(
             "[WHATSAPP] WHATSAPP_APP_SECRET not set — skipping webhook signature verification"
@@ -132,4 +164,21 @@ def verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
         hashlib.sha256,
     ).hexdigest()
     provided = signature_header.split("=", 1)[1]
+    return hmac.compare_digest(expected, provided)
+
+
+def _verify_waha_signature(raw_body: bytes, signature_header: str | None) -> bool:
+    """Optional WAHA HMAC. If WAHA_HMAC_KEY is unset, accept all payloads."""
+    if not WAHA_HMAC_KEY:
+        return True
+    if not signature_header:
+        return False
+    provided = signature_header
+    if provided.startswith("sha512="):
+        provided = provided.split("=", 1)[1]
+    expected = hmac.new(
+        WAHA_HMAC_KEY.encode("utf-8"),
+        raw_body,
+        hashlib.sha512,
+    ).hexdigest()
     return hmac.compare_digest(expected, provided)

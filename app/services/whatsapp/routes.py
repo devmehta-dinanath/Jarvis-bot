@@ -7,7 +7,7 @@ from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import WHATSAPP_VERIFY_TOKEN
+from app.config import WHATSAPP_PROVIDER, WHATSAPP_VERIFY_TOKEN
 from app.database import get_db
 from app.services import service_manager
 from app.services.whatsapp import actions
@@ -60,7 +60,12 @@ def verify_webhook(
 @router.post("/webhook")
 async def receive_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
     raw_body = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256")
+    # Meta uses X-Hub-Signature-256; WAHA may send X-Webhook-Hmac / similar.
+    signature = (
+        request.headers.get("X-Hub-Signature-256")
+        or request.headers.get("X-Webhook-Hmac")
+        or request.headers.get("X-Waha-Hmac")
+    )
     if not wa_client.verify_signature(raw_body, signature):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -75,7 +80,18 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)) -> di
             detail="Invalid JSON payload",
         )
 
-    logger.info("[WHATSAPP] Webhook received object=%s entries=%s", payload.get("object"), len(payload.get("entry", []) or []))
+    if WHATSAPP_PROVIDER == "waha" or wa_webhook.is_waha_payload(payload):
+        logger.info(
+            "[WHATSAPP] WAHA webhook event=%s session=%s",
+            payload.get("event"),
+            payload.get("session"),
+        )
+    else:
+        logger.info(
+            "[WHATSAPP] Webhook received object=%s entries=%s",
+            payload.get("object"),
+            len(payload.get("entry", []) or []),
+        )
 
     try:
         stored = wa_webhook.process_webhook_payload(db, payload)

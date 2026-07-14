@@ -221,7 +221,12 @@ GOOGLE_CALENDAR_SCOPES = [
     if scope.strip()
 ]
 
-# --- WhatsApp Cloud API pipeline (server only — webhook → AI classify → suggestions) ---
+# --- WhatsApp pipeline (server only — webhook → AI classify → suggestions) ---
+# Provider: "waha" (unofficial / WAHA) or "meta" (official Cloud API).
+WHATSAPP_PROVIDER = os.getenv("WHATSAPP_PROVIDER", "waha").strip().lower() or "waha"
+if WHATSAPP_PROVIDER not in {"waha", "meta"}:
+    WHATSAPP_PROVIDER = "waha"
+
 WHATSAPP_ENABLED = _env_bool("WHATSAPP_ENABLED", _SERVER_FEATURE_DEFAULT)
 WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
 WHATSAPP_API_BASE = os.getenv("WHATSAPP_API_BASE", "https://graph.facebook.com").rstrip("/")
@@ -230,6 +235,13 @@ WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip() or None
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip() or None
 WHATSAPP_APP_ID = os.getenv("WHATSAPP_APP_ID", "").strip() or None
 WHATSAPP_APP_SECRET = os.getenv("WHATSAPP_APP_SECRET", "").strip() or None
+
+# WAHA (https://waha.devlike.pro) — used when WHATSAPP_PROVIDER=waha
+WAHA_BASE_URL = os.getenv("WAHA_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
+WAHA_API_KEY = os.getenv("WAHA_API_KEY", "").strip() or None
+WAHA_SESSION = os.getenv("WAHA_SESSION", "default").strip() or "default"
+# Optional HMAC key configured on the WAHA session webhook; leave empty to skip verify.
+WAHA_HMAC_KEY = os.getenv("WAHA_HMAC_KEY", "").strip() or None
 WHATSAPP_TOKEN_PATH = Path(
     os.getenv("WHATSAPP_TOKEN_PATH", str(DATA_DIR / "whatsapp_access_token.json"))
 )
