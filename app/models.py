@@ -278,7 +278,7 @@ class WhatsAppContact(Base):
     __tablename__ = "whatsapp_contacts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    wa_id: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    wa_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
     profile_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # "personal" | "work" | None — set explicitly or auto-inferred from Life Lane messages.
     contact_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)

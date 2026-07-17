@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from app.config import WHATSAPP_PROVIDER
 from app.services.whatsapp import repository as repo
-from app.services.whatsapp.waha_client import normalize_contact_id
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +197,103 @@ def _waha_msg_type(body: dict[str, Any]) -> str:
         return "media"
     if body.get("vCards"):
         return "contacts"
+    # NOWEB nested message types
+    nested = body.get("message")
+    if isinstance(nested, dict):
+        if nested.get("imageMessage"):
+            return "image"
+        if nested.get("audioMessage") or nested.get("pttMessage"):
+            return "audio"
+        if nested.get("videoMessage"):
+            return "video"
+        if nested.get("documentMessage"):
+            return "document"
     return "text"
 
 
 def _waha_is_group(chat_id: str | None) -> bool:
     return bool(chat_id and str(chat_id).endswith("@g.us"))
+
+
+def _waha_extract_text(body: dict[str, Any], msg_type: str) -> str | None:
+    """Pull text from WEBJS/NOWEB payload shapes."""
+    direct = body.get("body")
+    if isinstance(direct, str) and direct.strip():
+        return direct
+    text_obj = body.get("text")
+    if isinstance(text_obj, str) and text_obj.strip():
+        return text_obj
+    if isinstance(text_obj, dict):
+        nested_body = text_obj.get("body")
+        if isinstance(nested_body, str) and nested_body.strip():
+            return nested_body
+    caption = body.get("caption")
+    if isinstance(caption, str) and caption.strip():
+        return caption
+
+    nested = body.get("message")
+    if isinstance(nested, dict):
+        conv = nested.get("conversation")
+        if isinstance(conv, str) and conv.strip():
+            return conv
+        ext = nested.get("extendedTextMessage")
+        if isinstance(ext, dict):
+            ext_text = ext.get("text")
+            if isinstance(ext_text, str) and ext_text.strip():
+                return ext_text
+        for media_key in ("imageMessage", "videoMessage", "documentMessage"):
+            media = nested.get(media_key)
+            if isinstance(media, dict) and isinstance(media.get("caption"), str):
+                cap = media["caption"].strip()
+                if cap:
+                    return cap
+
+    if msg_type != "text":
+        media = body.get("media") or {}
+        if isinstance(media, dict):
+            return media.get("filename") or media.get("url")
+    return None
+
+
+def _waha_profile_name(body: dict[str, Any]) -> str | None:
+    for key in ("pushName", "notifyName", "senderName", "name"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    data = body.get("_data")
+    if isinstance(data, dict):
+        for key in ("notifyName", "pushName", "verifiedBizName"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        # Contact update style: notify on nested objects
+        for key in ("notify", "verifiedName"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _waha_peer_chat_id(body: dict[str, Any]) -> str | None:
+    """Resolve the contact/chat JID for inbox storage."""
+    from_me = bool(body.get("fromMe"))
+    chat_id = body.get("chatId")
+    if from_me:
+        peer = body.get("to") or chat_id or body.get("from")
+    else:
+        # Prefer chatId for 1:1; for groups from is group and participant is sender.
+        peer = body.get("from") or chat_id
+        if peer and str(peer).endswith("@g.us"):
+            # Store group as contact key; participant is the member who spoke.
+            return str(peer)
+        participant = body.get("participant") or body.get("author")
+        if participant and not (peer and str(peer).endswith("@g.us")):
+            # Some engines put sender only in participant with chatId=@lid/@c.us
+            if not peer:
+                peer = participant
+    if peer:
+        return str(peer)
+    return None
 
 
 def _store_waha_message(
@@ -212,42 +303,44 @@ def _store_waha_message(
     *,
     event: str,
 ):
+    from app.services.whatsapp.waha_client import resolve_contact_wa_id
+
     from_me = bool(body.get("fromMe"))
     # Avoid duplicating outbound messages we already persisted after sendText.
     if from_me and str(body.get("source") or "").lower() == "api":
         return None
 
     wa_message_id = body.get("id") or body.get("messageId")
+    if isinstance(wa_message_id, dict):
+        wa_message_id = (
+            wa_message_id.get("_serialized")
+            or wa_message_id.get("id")
+            or wa_message_id.get("messageId")
+        )
     if wa_message_id and repo.message_exists(db, str(wa_message_id)):
         return None
 
-    # Peer chat id for inbox contact
-    if from_me:
-        peer = body.get("to") or body.get("from")
-    else:
-        peer = body.get("from")
+    peer = _waha_peer_chat_id(body)
     if not peer:
-        logger.warning("[WAHA] message missing from/to: event=%s", event)
+        logger.warning("[WAHA] message missing from/to/chatId: event=%s keys=%s", event, list(body.keys())[:20])
         return None
 
-    wa_id = normalize_contact_id(str(peer))
-    notify_name = (
-        (body.get("_data") or {}).get("notifyName")
-        if isinstance(body.get("_data"), dict)
-        else None
-    )
-    profile_name = body.get("pushName") or notify_name
+    wa_id = resolve_contact_wa_id(str(peer), body)
+    profile_name = _waha_profile_name(body)
     contact = repo.upsert_contact(db, wa_id=wa_id, profile_name=profile_name)
 
     msg_type = _waha_msg_type(body)
-    text_body = body.get("body")
-    if isinstance(text_body, str):
-        text_value = text_body
-    else:
-        text_value = None
-    if not text_value and msg_type != "text":
-        media = body.get("media") or {}
-        text_value = media.get("filename") or media.get("url")
+    text_value = _waha_extract_text(body, msg_type)
+
+    logger.info(
+        "[WAHA] Storing event=%s peer=%s wa_id=%s type=%s from_me=%s body_len=%s",
+        event,
+        peer,
+        wa_id,
+        msg_type,
+        from_me,
+        len(text_value or ""),
+    )
 
     return repo.insert_message(
         db,
