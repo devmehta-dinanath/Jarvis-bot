@@ -125,6 +125,23 @@ def _voice_note_chip_label(contact_name: str | None) -> str:
     return f"Voice note received from {who} — reply when you have listened."
 
 
+_MEDIA_TYPE_LABELS = {
+    "image": "a photo",
+    "video": "a video",
+    "document": "a document",
+    "sticker": "a sticker",
+    "contacts": "a contact card",
+    "location": "a location",
+    "media": "a file",
+}
+
+
+def _media_chip_label(contact_name: str | None, msg_type: str) -> str:
+    who = contact_name or "this contact"
+    what = _MEDIA_TYPE_LABELS.get(msg_type, "a file")
+    return f"{who} sent {what} with no caption — open WhatsApp to view it."
+
+
 def _eod_remind_at() -> datetime:
     """Next occurrence of the configured end-of-day hour in the server's local time."""
     from zoneinfo import ZoneInfo
@@ -189,6 +206,8 @@ def _draft_reply_with_budget(
     complaint: bool = False,
     anger_level: str | None = None,
     message=None,
+    instructions: list[str] | None = None,
+    corrections: list[dict] | None = None,
 ) -> str:
     if WHATSAPP_AI_DRAFTS_ENABLED:
         try:
@@ -197,6 +216,8 @@ def _draft_reply_with_budget(
                     history,
                     body,
                     anger_level,
+                    instructions=instructions,
+                    corrections=corrections,
                     **_draft_lang_kwargs(result=result, message=message),
                 )
             return classifier.draft_reply(
@@ -204,6 +225,8 @@ def _draft_reply_with_budget(
                 body,
                 category,
                 context_hint=context_hint,
+                instructions=instructions,
+                corrections=corrections,
                 **_draft_lang_kwargs(result=result, message=message),
             )
         except WhatsAppAIError:
@@ -316,9 +339,24 @@ class WhatsAppService:
         """Flag a single voice note immediately (Phase 1 — no transcription)."""
         self._handle_voice_note(db, message)
 
+    def handle_media_message_now(self, db, message) -> None:
+        """Flag a caption-less media message (photo/video/document/sticker/...)
+
+        so it shows up as a chip instead of being silently dropped just
+        because there's no text body for the classifier to run on.
+        """
+        self._handle_media_message(db, message)
+
     def _classify_one(self, db, message) -> None:
         db.refresh(message)
         if message.classified_at is not None:
+            return
+
+        if message.contact is not None and message.contact.is_excluded:
+            message.classified_at = datetime.utcnow()
+            message.is_important = False
+            message.category = "excluded"
+            db.commit()
             return
 
         body = (message.body or "").strip()
@@ -341,6 +379,11 @@ class WhatsAppService:
         prior_count = repo.contact_prior_message_count(
             db, message.contact_id, exclude_message_id=message.id
         )
+        contact_name = message.contact.profile_name if message.contact is not None else None
+        is_known_sender = contact_name is not None
+        instructions = [
+            i.text for i in repo.list_instructions(db, active_only=True)
+        ]
 
         if wa_fallback.is_likely_spam(body, has_prior_history=prior_count > 0):
             result = classifier._silent_filter_result("spam")
@@ -356,6 +399,9 @@ class WhatsAppService:
                     is_forwarded=is_forwarded,
                     user_names=WHATSAPP_USER_NAMES,
                     corrections=corrections or None,
+                    instructions=instructions or None,
+                    contact_name=contact_name,
+                    is_known_sender=is_known_sender,
                 )
             except WhatsAppAIError as exc:
                 logger.warning(
@@ -402,11 +448,10 @@ class WhatsAppService:
             repo.mark_contact_personal(db, message.contact_id)
 
         confidence = result.get("confidence")
-        below_threshold = (
-            confidence is not None
-            and confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
-            and category not in classifier.ALWAYS_IMPORTANT
-        )
+        # Fail closed: an unparseable/missing confidence score is treated as "not confident"
+        # rather than bypassing the gate — no category (including payment/complaint) is exempt
+        # from the threshold, since a wrong suggestion is worse than a missed one.
+        below_threshold = confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
 
         if category in classifier.FILTER_LABELS or category == "group":
             logger.info(
@@ -415,16 +460,21 @@ class WhatsAppService:
         elif below_threshold:
             logger.info(
                 "[WHATSAPP] Message %s below confidence threshold "
-                "(category=%s confidence=%s < %s) — no chip shown",
+                "(category=%s confidence=%s < %s) — showing message, no AI draft",
                 message.id,
                 category,
                 confidence,
                 WHATSAPP_CHIP_CONFIDENCE_MIN,
             )
+            self._create_unconfident_suggestion(db, message, category, priority, confidence, lane)
         elif result["is_important"]:
-            self._create_suggestion(db, message, history, body, result, priority)
+            self._create_suggestion(
+                db, message, history, body, result, priority, instructions, corrections
+            )
         elif category == "greeting":
-            self._create_greeting_suggestion(db, message, history, body)
+            self._create_greeting_suggestion(
+                db, message, history, body, instructions, corrections
+            )
 
         db.commit()
         logger.info(
@@ -449,7 +499,17 @@ class WhatsAppService:
             return "high"
         return "normal"
 
-    def _create_suggestion(self, db, message, history, body, result, priority) -> None:
+    def _create_suggestion(
+        self,
+        db,
+        message,
+        history,
+        body,
+        result,
+        priority,
+        instructions: list[str] | None = None,
+        corrections: list[dict] | None = None,
+    ) -> None:
         if repo.suggestion_exists_for_message(db, message.id):
             return
 
@@ -460,15 +520,21 @@ class WhatsAppService:
         confidence: int | None = result.get("confidence")
 
         if category == "payment":
-            self._create_payment_suggestion(db, message, history, body, result, priority, confidence, lane)
+            self._create_payment_suggestion(
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+            )
             return
 
         if category == "lead":
-            self._create_lead_suggestion(db, message, history, body, result, priority, confidence, lane)
+            self._create_lead_suggestion(
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+            )
             return
 
         if category == "document":
-            self._create_document_suggestion(db, message, history, body, result, priority, confidence, lane)
+            self._create_document_suggestion(
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+            )
             return
 
         if category == "personal_date":
@@ -484,11 +550,15 @@ class WhatsAppService:
             return
 
         if category == "complaint":
-            self._create_complaint_suggestion(db, message, history, body, result, priority, confidence, lane)
+            self._create_complaint_suggestion(
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+            )
             return
 
         if category == "shipment":
-            self._create_shipment_suggestion(db, message, history, body, result, priority, confidence, lane)
+            self._create_shipment_suggestion(
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+            )
             return
 
         if category == "meeting":
@@ -502,6 +572,8 @@ class WhatsAppService:
                 body,
                 category,
                 result=result,
+                instructions=instructions,
+                corrections=corrections,
             )
             meeting = wa_calendar.enrich_meeting_details(meeting)
             confirmed = bool(meeting.get("confirmed"))
@@ -537,7 +609,9 @@ class WhatsAppService:
                     )
             return
 
-        draft = _draft_reply_with_budget(history, body, category, result=result)
+        draft = _draft_reply_with_budget(
+            history, body, category, result=result, instructions=instructions, corrections=corrections
+        )
 
         details = None
         if category == "follow_up":
@@ -573,6 +647,8 @@ class WhatsAppService:
     def _create_payment_suggestion(
         self, db, message, history, body, result, priority,
         confidence: int | None = None, lane: str = "work",
+        instructions: list[str] | None = None,
+        corrections: list[dict] | None = None,
     ) -> None:
         payment_status = result.get("payment_status") or "overdue"
         hint = classifier.payment_reply_hint(payment_status)
@@ -583,6 +659,8 @@ class WhatsAppService:
             context_hint=hint,
             result=result,
             payment_status=payment_status,
+            instructions=instructions,
+            corrections=corrections,
         )
 
         details = {
@@ -612,8 +690,12 @@ class WhatsAppService:
     def _create_lead_suggestion(
         self, db, message, history, body, result, priority,
         confidence: int | None = None, lane: str = "work",
+        instructions: list[str] | None = None,
+        corrections: list[dict] | None = None,
     ) -> None:
-        draft = _draft_reply_with_budget(history, body, "lead", result=result)
+        draft = _draft_reply_with_budget(
+            history, body, "lead", result=result, instructions=instructions, corrections=corrections
+        )
 
         reference = message.timestamp or datetime.utcnow()
         follow_up_due_at = reference + timedelta(hours=WHATSAPP_LEAD_FOLLOWUP_HOURS)
@@ -638,6 +720,8 @@ class WhatsAppService:
     def _create_document_suggestion(
         self, db, message, history, body, result, priority,
         confidence: int | None = None, lane: str = "work",
+        instructions: list[str] | None = None,
+        corrections: list[dict] | None = None,
     ) -> None:
         document_type = result.get("document_type")
         previous = repo.previous_document_sent(
@@ -650,7 +734,9 @@ class WhatsAppService:
         if previous is not None:
             previously_sent_on = _short_date(previous.resolved_at or previous.created_at)
 
-        draft = _draft_reply_with_budget(history, body, "document", result=result)
+        draft = _draft_reply_with_budget(
+            history, body, "document", result=result, instructions=instructions, corrections=corrections
+        )
 
         details = {
             "document_type": document_type,
@@ -675,6 +761,8 @@ class WhatsAppService:
     def _create_complaint_suggestion(
         self, db, message, history, body, result, priority,
         confidence: int | None = None, lane: str = "work",
+        instructions: list[str] | None = None,
+        corrections: list[dict] | None = None,
     ) -> None:
         anger_level = result.get("anger_level") or "high"
         draft = _draft_reply_with_budget(
@@ -684,6 +772,8 @@ class WhatsAppService:
             result=result,
             complaint=True,
             anger_level=anger_level,
+            instructions=instructions,
+            corrections=corrections,
         )
 
         details = {
@@ -712,6 +802,8 @@ class WhatsAppService:
     def _create_shipment_suggestion(
         self, db, message, history, body, result, priority,
         confidence: int | None = None, lane: str = "work",
+        instructions: list[str] | None = None,
+        corrections: list[dict] | None = None,
     ) -> None:
         shipment_status = result.get("shipment_status") or "good"
         is_delay = shipment_status == "delayed"
@@ -723,6 +815,8 @@ class WhatsAppService:
             context_hint=hint,
             result=result,
             shipment_status=shipment_status,
+            instructions=instructions,
+            corrections=corrections,
         )
 
         details = {
@@ -751,7 +845,15 @@ class WhatsAppService:
             message.id,
         )
 
-    def _create_greeting_suggestion(self, db, message, history, body) -> None:
+    def _create_greeting_suggestion(
+        self,
+        db,
+        message,
+        history,
+        body,
+        instructions: list[str] | None = None,
+        corrections: list[dict] | None = None,
+    ) -> None:
         if repo.suggestion_exists_for_message(db, message.id):
             return
         if repo.pending_nudge_exists(db, message.contact_id):
@@ -762,6 +864,8 @@ class WhatsAppService:
             body,
             "greeting",
             message=message,
+            instructions=instructions,
+            corrections=corrections,
         )
 
         details = {
@@ -780,6 +884,30 @@ class WhatsAppService:
             details=details,
         )
 
+    def _create_unconfident_suggestion(
+        self, db, message, category: str, priority: str, confidence: int | None, lane: str
+    ) -> None:
+        """AI could not classify/draft this with enough confidence to trust — surface the raw
+        message so the user knows it needs a look, but never auto-generate a reply for it.
+        No draft_text is set; the UI shows the message with no send/edit action."""
+        if repo.suggestion_exists_for_message(db, message.id):
+            return
+        repo.create_suggestion(
+            db,
+            contact_id=message.contact_id,
+            message_id=message.id,
+            kind="nudge",
+            category=category,
+            priority=priority,
+            lane=lane,
+            confidence=confidence,
+            draft_text=None,
+            details={
+                "chip_label": "Low confidence — AI did not draft a reply, please respond manually.",
+                "low_confidence": True,
+            },
+        )
+
     def _handle_voice_note(self, db, message) -> None:
         db.refresh(message)
         if message.classified_at is not None:
@@ -788,6 +916,13 @@ class WhatsAppService:
         from app import models as _models
         contact = db.get(_models.WhatsAppContact, message.contact_id)
         contact_name = contact.profile_name if contact else None
+
+        if contact is not None and contact.is_excluded:
+            message.classified_at = datetime.utcnow()
+            message.is_important = False
+            message.category = "excluded"
+            db.commit()
+            return
 
         message.classified_at = datetime.utcnow()
         message.is_important = False
@@ -818,6 +953,51 @@ class WhatsAppService:
         db.commit()
         logger.info("[WHATSAPP] Voice note flagged for contact %s (message=%s)",
                     message.contact_id, message.id)
+
+    def _handle_media_message(self, db, message) -> None:
+        db.refresh(message)
+        if message.classified_at is not None:
+            return
+
+        from app import models as _models
+        contact = db.get(_models.WhatsAppContact, message.contact_id)
+        contact_name = contact.profile_name if contact else None
+
+        if contact is not None and contact.is_excluded:
+            message.classified_at = datetime.utcnow()
+            message.is_important = False
+            message.category = "excluded"
+            db.commit()
+            return
+
+        message.classified_at = datetime.utcnow()
+        message.is_important = False
+        message.category = "media"
+        message.priority = "low"
+
+        if not repo.suggestion_exists_for_message(db, message.id):
+            media_lane = (
+                "life" if contact and getattr(contact, "contact_type", None) == "personal"
+                else "work"
+            )
+            repo.create_suggestion(
+                db,
+                contact_id=message.contact_id,
+                message_id=message.id,
+                kind="nudge",
+                category="media",
+                priority="low",
+                lane=media_lane,
+                draft_text=None,
+                details={
+                    "chip_label": _media_chip_label(contact_name, message.msg_type),
+                    "msg_type": message.msg_type,
+                },
+            )
+
+        db.commit()
+        logger.info("[WHATSAPP] Caption-less media flagged for contact %s (message=%s type=%s)",
+                    message.contact_id, message.id, message.msg_type)
 
     def _create_personal_date_suggestion(
         self, db, message, history, body, priority,

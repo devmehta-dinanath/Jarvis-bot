@@ -36,8 +36,9 @@ def inbox_status(db: Session) -> dict:
 
 
 def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> dict:
-    """Re-open recent suggestions that were dismissed or marked done without a sent reply.
+    """Recover actionable cards that were marked done without a sent reply.
 
+    Intentionally does **not** reopen ``dismissed`` suggestions — Dismiss must stick.
     Also re-classifies important inbound messages that never received a suggestion.
     """
     from app.services import service_manager
@@ -74,8 +75,12 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
         if suggestion is not None:
             if suggestion.status == "pending":
                 continue
+            # User explicitly dismissed — keep it gone from the inbox.
+            if suggestion.status == "dismissed":
+                continue
             if suggestion.sent_message_id is not None:
                 continue
+            # Only reopen "done" / other non-pending states that never sent a reply.
             suggestion.status = "pending"
             suggestion.resolved_at = None
             reopened += 1

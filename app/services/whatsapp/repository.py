@@ -15,18 +15,30 @@ def upsert_contact(
     *,
     wa_id: str,
     profile_name: str | None = None,
+    is_group: bool = False,
 ) -> models.WhatsAppContact:
+    # The wa_id suffix is unambiguous ground truth for group/newsletter JIDs —
+    # never rely solely on a message-level heuristic that may have missed it
+    # (or on a stale is_group=0 backfilled before this column existed).
+    if wa_id.endswith("@g.us") or wa_id.endswith("@newsletter"):
+        is_group = True
+
     contact = (
         db.query(models.WhatsAppContact)
         .filter(models.WhatsAppContact.wa_id == wa_id)
         .one_or_none()
     )
     if contact is None:
-        contact = models.WhatsAppContact(wa_id=wa_id, profile_name=profile_name)
+        contact = models.WhatsAppContact(
+            wa_id=wa_id, profile_name=profile_name, is_group=is_group
+        )
         db.add(contact)
         db.flush()
-    elif profile_name and contact.profile_name != profile_name:
-        contact.profile_name = profile_name
+    else:
+        if profile_name and contact.profile_name != profile_name:
+            contact.profile_name = profile_name
+        if is_group and not contact.is_group:
+            contact.is_group = True
     return contact
 
 
@@ -36,6 +48,64 @@ def get_contact_by_wa_id(db: Session, wa_id: str) -> models.WhatsAppContact | No
         .filter(models.WhatsAppContact.wa_id == wa_id)
         .one_or_none()
     )
+
+
+def dismiss_pending_for_contact(db: Session, contact_id: int) -> int:
+    now = datetime.utcnow()
+    return (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.contact_id == contact_id,
+            models.WhatsAppSuggestion.status == "pending",
+        )
+        .update({"status": "dismissed", "resolved_at": now}, synchronize_session=False)
+    )
+
+
+def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -> int:
+    """Auto-clear pending suggestions the user has already moved past by replying.
+
+    Only suggestions tied to a message strictly before `cutoff` are cleared — chips
+    for messages that arrived *after* the one just replied to are left pending, since
+    the user hasn't seen/handled those yet.
+    """
+    now = datetime.utcnow()
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.contact_id == contact_id,
+            models.WhatsAppSuggestion.status == "pending",
+        )
+        .all()
+    )
+    updated = 0
+    for suggestion in pending:
+        ts = None
+        if suggestion.message_id is not None:
+            message = db.get(models.WhatsAppMessage, suggestion.message_id)
+            if message is not None:
+                ts = message.timestamp
+        if ts is None:
+            ts = suggestion.created_at
+        if ts is not None and ts < cutoff:
+            suggestion.status = "dismissed"
+            suggestion.resolved_at = now
+            updated += 1
+    return updated
+
+
+def set_contact_excluded(
+    db: Session, wa_id: str, excluded: bool
+) -> models.WhatsAppContact | None:
+    """Toggle "Stop reading" for a contact/group. Excluding also clears its pending chips."""
+    contact = get_contact_by_wa_id(db, wa_id)
+    if contact is None:
+        return None
+    contact.is_excluded = excluded
+    if excluded:
+        dismiss_pending_for_contact(db, contact.id)
+    db.flush()
+    return contact
 
 
 def message_exists(db: Session, wa_message_id: str) -> bool:
@@ -129,17 +199,21 @@ def mark_contact_personal(db: Session, contact_id: int) -> None:
 
 
 def pending_life_nudge_exists(db: Session, contact_id: int) -> bool:
-    """Whether a silence nudge is already pending for this personal contact."""
-    return (
-        db.query(models.WhatsAppSuggestion.id)
-        .filter(
-            models.WhatsAppSuggestion.contact_id == contact_id,
-            models.WhatsAppSuggestion.kind == "life_nudge",
-            models.WhatsAppSuggestion.status == "pending",
-        )
-        .first()
-        is not None
+    """Whether a silence nudge has already been raised for this contact's current
+    silence period (pending or dismissed) — dismissing must stop the nudge from
+    being immediately recreated on the next poll. A new nudge becomes possible
+    again once the contact sends a fresh inbound message.
+    """
+    contact = db.get(models.WhatsAppContact, contact_id)
+    query = db.query(models.WhatsAppSuggestion.id).filter(
+        models.WhatsAppSuggestion.contact_id == contact_id,
+        models.WhatsAppSuggestion.kind == "life_nudge",
     )
+    if contact is not None and contact.last_inbound_at is not None:
+        query = query.filter(
+            models.WhatsAppSuggestion.created_at >= contact.last_inbound_at
+        )
+    return query.first() is not None
 
 
 def personal_contacts_awaiting_reply(
@@ -317,6 +391,7 @@ def record_feedback(
     message_snippet: str | None,
     contact_id: int | None = None,
     message_id: int | None = None,
+    correct_response: str | None = None,
 ) -> models.WhatsAppFeedback:
     """Persist a user correction. Called by the feedback API endpoint."""
     feedback = models.WhatsAppFeedback(
@@ -327,10 +402,54 @@ def record_feedback(
         original_category=original_category,
         original_confidence=original_confidence,
         message_snippet=(message_snippet or "")[:300] or None,
+        correct_response=(correct_response or "").strip()[:1000] or None,
     )
     db.add(feedback)
     db.flush()
     return feedback
+
+
+def list_instructions(
+    db: Session, *, active_only: bool = False
+) -> list[models.UserInstruction]:
+    query = db.query(models.UserInstruction)
+    if active_only:
+        query = query.filter(models.UserInstruction.is_active.is_(True))
+    return query.order_by(models.UserInstruction.created_at.asc()).all()
+
+
+def create_instruction(db: Session, text: str) -> models.UserInstruction:
+    instruction = models.UserInstruction(text=text.strip())
+    db.add(instruction)
+    db.flush()
+    return instruction
+
+
+def update_instruction(
+    db: Session,
+    instruction_id: int,
+    *,
+    text: str | None = None,
+    is_active: bool | None = None,
+) -> models.UserInstruction | None:
+    instruction = db.get(models.UserInstruction, instruction_id)
+    if instruction is None:
+        return None
+    if text is not None:
+        instruction.text = text.strip()
+    if is_active is not None:
+        instruction.is_active = is_active
+    instruction.updated_at = datetime.utcnow()
+    db.flush()
+    return instruction
+
+
+def delete_instruction(db: Session, instruction_id: int) -> bool:
+    instruction = db.get(models.UserInstruction, instruction_id)
+    if instruction is None:
+        return False
+    db.delete(instruction)
+    return True
 
 
 def load_corrections_for_prompt(
@@ -350,6 +469,7 @@ def load_corrections_for_prompt(
             "original_category": r.original_category,
             "original_confidence": r.original_confidence,
             "message_snippet": r.message_snippet,
+            "correct_response": r.correct_response,
         }
         for r in rows
     ]
@@ -423,6 +543,20 @@ def list_suggestions(
 
 def get_suggestion(db: Session, suggestion_id: int) -> models.WhatsAppSuggestion | None:
     return db.get(models.WhatsAppSuggestion, suggestion_id)
+
+
+def dismiss_all_pending(db: Session) -> int:
+    now = datetime.utcnow()
+    updated = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(models.WhatsAppSuggestion.status == "pending")
+        .update(
+            {"status": "dismissed", "resolved_at": now},
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return updated
 
 
 def within_customer_window(contact: models.WhatsAppContact, *, now: datetime | None = None) -> bool:

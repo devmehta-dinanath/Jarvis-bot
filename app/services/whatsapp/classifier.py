@@ -50,7 +50,7 @@ REPLY_CATEGORIES = (
 LIFE_LANE_CATEGORIES = ("personal_date", "personal_task", "family_plan")
 WORK_LANE_CATEGORIES = tuple(c for c in CATEGORIES if c not in LIFE_LANE_CATEGORIES)
 ALWAYS_IMPORTANT = ("payment", "complaint")
-FILTER_LABELS = ("forwarded", "spam")
+FILTER_LABELS = ("forwarded", "spam", "instruction_skip")
 PRIORITIES = ("low", "normal", "medium", "high", "very_high", "critical")
 _CATEGORY_PRIORITY = {
     "payment": "critical",
@@ -236,6 +236,7 @@ def _corrections_block(corrections: list[dict]) -> str:
     Each correction dict is expected to have:
       - original_category (str)
       - message_snippet (str | None)
+      - correct_response (str | None)
     """
     if not corrections:
         return ""
@@ -248,6 +249,7 @@ def _corrections_block(corrections: list[dict]) -> str:
         if len(snippet) > 120:
             snippet = snippet[:120].rstrip() + "..."
         cat = c.get("original_category") or "unknown"
+        correct_response = (c.get("correct_response") or "").strip()
         if snippet:
             lines.append(
                 f"{i}. Message: \"{snippet}\" → was wrongly classified as \"{cat}\". "
@@ -258,9 +260,82 @@ def _corrections_block(corrections: list[dict]) -> str:
                 f"{i}. A message was wrongly classified as \"{cat}\". "
                 f"Be extra careful before assigning \"{cat}\"."
             )
+        if correct_response:
+            lines.append(f"   The user said the correct reply should have been: \"{correct_response}\"")
     lines.append(
         "\nThese corrections take priority over all other rules. "
         "If in doubt — lower your confidence score rather than guessing."
+    )
+    return "\n".join(lines)
+
+
+def _reply_corrections_block(corrections: list[dict] | None) -> str:
+    """Corrections that carry an explicit corrected reply — fed into the DRAFTING prompts
+    (separate from classification) so the wording/approach of a past mistake is never
+    repeated, not just its category."""
+    if not corrections:
+        return ""
+    usable = [c for c in corrections if (c.get("correct_response") or "").strip()]
+    if not usable:
+        return ""
+    lines = [
+        "\n\nREPLY CORRECTION MEMORY — the user previously marked a reply as WRONG and told us "
+        "what it should have said instead. Match that style/content for similar messages; do not "
+        "repeat the wrong approach:\n"
+    ]
+    for i, c in enumerate(usable, 1):
+        snippet = (c.get("message_snippet") or "").strip()
+        if len(snippet) > 120:
+            snippet = snippet[:120].rstrip() + "..."
+        correct_response = c["correct_response"].strip()
+        if snippet:
+            lines.append(f"{i}. For a message like \"{snippet}\", the correct reply was: \"{correct_response}\"")
+        else:
+            lines.append(f"{i}. The correct reply in a similar past case was: \"{correct_response}\"")
+    lines.append("\nThese take priority over the default tone guidance above.")
+    return "\n".join(lines)
+
+
+def _user_instructions_block(
+    instructions: list[str] | None,
+    *,
+    contact_name: str | None = None,
+    is_group: bool = False,
+    is_known_sender: bool = True,
+) -> str:
+    """Standing rules the user configured in Settings — see UserInstruction. These take
+    priority over every other rule in this prompt and stay in effect until the user edits
+    or deletes them."""
+    if not instructions:
+        return ""
+    lines = [
+        "\n\nUSER INSTRUCTIONS — the user set these standing rules in Settings. They OVERRIDE "
+        "all other guidance in this prompt and must be followed exactly, every time, until the "
+        "user changes them:\n"
+    ]
+    for i, text in enumerate(instructions, 1):
+        lines.append(f"{i}. {text.strip()}")
+
+    context_bits = []
+    if contact_name:
+        context_bits.append(f"This conversation's saved name is \"{contact_name}\".")
+    if is_group:
+        context_bits.append("This message is from a GROUP chat.")
+    else:
+        context_bits.append("This message is a direct (1:1) chat, not a group.")
+    context_bits.append(
+        "This sender IS a saved contact." if is_known_sender
+        else "This sender is NOT a saved contact (an unknown number)."
+    )
+    lines.append("\nContext for applying the instructions above: " + " ".join(context_bits))
+    lines.append(
+        "\nIf any instruction above means this message/conversation should not be read, "
+        "surfaced, or actioned at all (e.g. 'ignore this group', 'do not read group messages', "
+        "'never suggest replies to unknown numbers'), set is_important=false, category='greeting', "
+        "and set \"instruction_skip\": true in your JSON response so it is fully suppressed. "
+        "Otherwise set \"instruction_skip\": false. Instructions about tone or wording (e.g. "
+        "'always reply formally') do not require instruction_skip — they are applied when the "
+        "reply is drafted."
     )
     return "\n".join(lines)
 
@@ -402,6 +477,9 @@ def classify_message(
     is_forwarded: bool = False,
     user_names: list[str] | None = None,
     corrections: list[dict] | None = None,
+    instructions: list[str] | None = None,
+    contact_name: str | None = None,
+    is_known_sender: bool = True,
 ) -> dict[str, Any]:
     if is_group:
         system = _group_system(user_names)
@@ -412,6 +490,13 @@ def classify_message(
 
     if corrections:
         system = system + _corrections_block(corrections)
+    if instructions:
+        system = system + _user_instructions_block(
+            instructions,
+            contact_name=contact_name,
+            is_group=is_group,
+            is_known_sender=is_known_sender,
+        )
 
     context_tags: list[str] = []
     if is_group:
@@ -430,6 +515,9 @@ def classify_message(
 
     detected_language = (data.get("language") or "").strip() or None
     category = str(data.get("category") or "greeting").strip().lower()
+
+    if instructions and bool(data.get("instruction_skip", False)):
+        category = "instruction_skip"
 
     if category in FILTER_LABELS:
         return _silent_filter_result(category, detected_language)
@@ -502,6 +590,17 @@ def classify_message(
     }
 
 
+def _tone_instructions_block(instructions: list[str] | None) -> str:
+    """Standing user rules that affect how a reply is worded (e.g. 'always reply formally')."""
+    if not instructions:
+        return ""
+    lines = ["\n\nUSER INSTRUCTIONS — standing rules set by the user in Settings. Follow them "
+             "exactly, even if they conflict with the default tone above:\n"]
+    for i, text in enumerate(instructions, 1):
+        lines.append(f"{i}. {text.strip()}")
+    return "\n".join(lines)
+
+
 def draft_reply(
     history: list[dict[str, str]],
     message: str,
@@ -510,6 +609,8 @@ def draft_reply(
     context_hint: str | None = None,
     language: str | None = None,
     translation: str | None = None,
+    instructions: list[str] | None = None,
+    corrections: list[dict] | None = None,
 ) -> str:
     category_hint = context_hint or {
         "budget": "The client is asking about budget/pricing. Acknowledge and indicate next step.",
@@ -547,7 +648,12 @@ def draft_reply(
         f"Context: {category_hint}\n\n"
         "Write the reply text in English:"
     )
-    return _chat(_REPLY_SYSTEM, user_content, max_tokens=160, json_mode=False).strip()
+    system = (
+        _REPLY_SYSTEM
+        + _tone_instructions_block(instructions)
+        + _reply_corrections_block(corrections)
+    )
+    return _chat(system, user_content, max_tokens=160, json_mode=False).strip()
 
 
 def draft_complaint_reply(
@@ -557,6 +663,8 @@ def draft_complaint_reply(
     *,
     language: str | None = None,
     translation: str | None = None,
+    instructions: list[str] | None = None,
+    corrections: list[dict] | None = None,
 ) -> str:
     """Draft an empathetic reply to an unhappy client (acknowledge first, then resolve)."""
     tone = {
@@ -573,7 +681,12 @@ def draft_complaint_reply(
         f"Tone guidance: {tone}\n\n"
         "Write the empathetic reply text in English (acknowledge the problem first, then a next step):"
     )
-    return _chat(_COMPLAINT_SYSTEM, user_content, max_tokens=180, json_mode=False).strip()
+    system = (
+        _COMPLAINT_SYSTEM
+        + _tone_instructions_block(instructions)
+        + _reply_corrections_block(corrections)
+    )
+    return _chat(system, user_content, max_tokens=180, json_mode=False).strip()
 
 
 _PERSONAL_DATE_SYSTEM = (

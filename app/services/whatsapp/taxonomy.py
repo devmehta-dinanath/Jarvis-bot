@@ -35,7 +35,7 @@ WORK_CATEGORIES = (
 
 LIFE_CATEGORIES = ("personal_date", "personal_task", "family_plan")
 
-NUDGE_CATEGORIES = ("greeting", "voice_note")
+NUDGE_CATEGORIES = ("greeting", "voice_note", "media")
 
 SYSTEM_CATEGORIES = ("personal_silence", "group")
 
@@ -73,7 +73,7 @@ UI_SECTIONS: tuple[dict[str, Any], ...] = (
         "id": "nudges",
         "title": "Casual & voice",
         "accent": "success",
-        "categories": ("greeting", "voice_note"),
+        "categories": ("greeting", "voice_note", "media"),
     },
     {
         "id": "life",
@@ -223,6 +223,12 @@ _CATEGORY_META: dict[str, dict[str, Any]] = {
         "label": "Voice note",
         "lane": "work",
         "chip_label": "Voice note — listen before replying",
+        "demo_messages": [],
+    },
+    "media": {
+        "label": "Media",
+        "lane": "work",
+        "chip_label": "Media message — open WhatsApp to view it",
         "demo_messages": [],
     },
     "personal_silence": {

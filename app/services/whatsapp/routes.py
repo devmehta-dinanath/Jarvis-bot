@@ -7,7 +7,7 @@ from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 
 from app import models
-from app.config import WHATSAPP_VERIFY_TOKEN
+from app.config import WHATSAPP_PROVIDER, WHATSAPP_VERIFY_TOKEN
 from app.database import get_db
 from app.services import service_manager
 from app.services.whatsapp import actions
@@ -19,12 +19,18 @@ from app.services.whatsapp import webhook as wa_webhook
 from app.services.whatsapp.actions import WhatsAppActionError
 from app.services.whatsapp.schemas import (
     AddToCalendarRequest,
+    CreateInstructionRequest,
+    DismissAllResponse,
     FeedbackRequest,
     FeedbackResponse,
     InboxStatusResponse,
     RefreshPendingResponse,
     SendMessageRequest,
     SendReplyRequest,
+    SetContactExcludedRequest,
+    UpdateInstructionRequest,
+    UserInstructionListResponse,
+    UserInstructionResponse,
     WhatsAppTaxonomyResponse,
     WhatsAppContactListResponse,
     WhatsAppContactResponse,
@@ -60,7 +66,12 @@ def verify_webhook(
 @router.post("/webhook")
 async def receive_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
     raw_body = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256")
+    # Meta uses X-Hub-Signature-256; WAHA may send X-Webhook-Hmac / similar.
+    signature = (
+        request.headers.get("X-Hub-Signature-256")
+        or request.headers.get("X-Webhook-Hmac")
+        or request.headers.get("X-Waha-Hmac")
+    )
     if not wa_client.verify_signature(raw_body, signature):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -75,7 +86,18 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)) -> di
             detail="Invalid JSON payload",
         )
 
-    logger.info("[WHATSAPP] Webhook received object=%s entries=%s", payload.get("object"), len(payload.get("entry", []) or []))
+    if WHATSAPP_PROVIDER == "waha" or wa_webhook.is_waha_payload(payload):
+        logger.info(
+            "[WHATSAPP] WAHA webhook event=%s session=%s",
+            payload.get("event"),
+            payload.get("session"),
+        )
+    else:
+        logger.info(
+            "[WHATSAPP] Webhook received object=%s entries=%s",
+            payload.get("object"),
+            len(payload.get("entry", []) or []),
+        )
 
     try:
         stored = wa_webhook.process_webhook_payload(db, payload)
@@ -85,6 +107,55 @@ async def receive_webhook(request: Request, db: Session = Depends(get_db)) -> di
         return {"received": True, "stored": 0}
 
     return {"received": True, "stored": stored}
+
+@router.get("/instructions", response_model=UserInstructionListResponse)
+def list_instructions(db: Session = Depends(get_db)) -> UserInstructionListResponse:
+    """Standing plain-language rules configured in the settings panel — see
+    UserInstruction in models.py for how these are fed into the classifier/drafter."""
+    items = repo.list_instructions(db)
+    return UserInstructionListResponse(
+        items=[UserInstructionResponse.model_validate(i) for i in items]
+    )
+
+
+@router.post(
+    "/instructions",
+    response_model=UserInstructionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_instruction(
+    payload: CreateInstructionRequest,
+    db: Session = Depends(get_db),
+) -> UserInstructionResponse:
+    instruction = repo.create_instruction(db, payload.text)
+    db.commit()
+    db.refresh(instruction)
+    return UserInstructionResponse.model_validate(instruction)
+
+
+@router.patch("/instructions/{instruction_id}", response_model=UserInstructionResponse)
+def update_instruction(
+    instruction_id: int,
+    payload: UpdateInstructionRequest,
+    db: Session = Depends(get_db),
+) -> UserInstructionResponse:
+    instruction = repo.update_instruction(
+        db, instruction_id, text=payload.text, is_active=payload.is_active
+    )
+    if instruction is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instruction not found")
+    db.commit()
+    db.refresh(instruction)
+    return UserInstructionResponse.model_validate(instruction)
+
+
+@router.delete("/instructions/{instruction_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_instruction(instruction_id: int, db: Session = Depends(get_db)) -> None:
+    deleted = repo.delete_instruction(db, instruction_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instruction not found")
+    db.commit()
+
 
 @router.get("/contacts", response_model=WhatsAppContactListResponse)
 def list_contacts(
@@ -97,6 +168,21 @@ def list_contacts(
         items=[_contact_response(c) for c in items],
         total=total,
     )
+
+
+@router.patch("/contacts/{wa_id}/exclude", response_model=WhatsAppContactResponse)
+def set_contact_excluded(
+    wa_id: str,
+    payload: SetContactExcludedRequest,
+    db: Session = Depends(get_db),
+) -> WhatsAppContactResponse:
+    """"Stop reading this group" button and the settings-page toggle both call this."""
+    contact = repo.set_contact_excluded(db, wa_id, payload.excluded)
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    db.commit()
+    db.refresh(contact)
+    return _contact_response(contact)
 
 
 @router.get("/contacts/{wa_id}/messages", response_model=WhatsAppMessageListResponse)
@@ -256,6 +342,7 @@ def record_feedback(
         message_snippet=message_snippet,
         contact_id=suggestion.contact_id,
         message_id=suggestion.message_id,
+        correct_response=payload.correct_response,
     )
     db.commit()
     logger.info(
@@ -269,6 +356,12 @@ def record_feedback(
         feedback_id=feedback.id,
         feedback_type=feedback.feedback_type,
     )
+
+
+@router.post("/suggestions/dismiss-all", response_model=DismissAllResponse)
+def dismiss_all_suggestions(db: Session = Depends(get_db)) -> DismissAllResponse:
+    dismissed = repo.dismiss_all_pending(db)
+    return DismissAllResponse(dismissed=dismissed)
 
 
 @router.post("/suggestions/{suggestion_id}/dismiss", response_model=WhatsAppSuggestionResponse)
@@ -331,6 +424,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
 
     contact_name = None
     wa_id = None
+    is_group = False
     message_body = None
     message_summary = None
     message_translation = None
@@ -339,6 +433,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         if contact:
             contact_name = contact.profile_name
             wa_id = contact.wa_id
+            is_group = bool(contact.is_group)
         if suggestion.message_id:
             message = db.get(models.WhatsAppMessage, suggestion.message_id)
             if message:
@@ -363,6 +458,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         sent_message_id=suggestion.sent_message_id,
         contact_name=contact_name,
         wa_id=wa_id,
+        is_group=is_group,
         message_body=message_body,
         message_summary=message_summary,
         message_translation=message_translation,

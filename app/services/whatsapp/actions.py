@@ -117,6 +117,27 @@ def send_reply(
     suggestion.sent_message_id = message.id
     db.commit()
     db.refresh(suggestion)
+
+    # Replying means the conversation up to this point is handled — clear other
+    # pending chips for messages the user already saw. Anything newer stays.
+    replied_to_at = None
+    if suggestion.message_id is not None:
+        replied_message = db.get(models.WhatsAppMessage, suggestion.message_id)
+        if replied_message is not None:
+            replied_to_at = replied_message.timestamp
+    if replied_to_at is None:
+        replied_to_at = suggestion.created_at
+    cleared = repo.dismiss_pending_older_than(db, contact.id, replied_to_at)
+    if cleared:
+        db.commit()
+        logger.info(
+            "[WHATSAPP] Auto-dismissed %s older pending suggestion(s) for contact %s "
+            "after reply to suggestion %s",
+            cleared,
+            contact.id,
+            suggestion.id,
+        )
+
     return message
 
 
@@ -218,8 +239,20 @@ def add_to_calendar(
     details = _details_dict(suggestion)
     if details.get("calendar_event_id"):
         raise WhatsAppActionError("This meeting is already on the calendar")
+
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    contact_name = (contact.profile_name if contact else None) or (
+        contact.wa_id if contact else None
+    )
+
     event_title = title or details.get("title") or "Meeting with client"
+    if contact_name and contact_name.lower() not in event_title.lower():
+        event_title = f"{event_title} — {contact_name}"
+
     event_agenda = agenda or details.get("agenda")
+    if contact_name:
+        contact_line = f"With: {contact_name}"
+        event_agenda = f"{event_agenda}\n\n{contact_line}" if event_agenda else contact_line
 
     start_dt = _parse_iso(start) or _parse_iso(details.get("start"))
     if start_dt is None:

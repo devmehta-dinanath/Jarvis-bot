@@ -61,10 +61,19 @@ class WhatsAppContactResponse(BaseModel):
     id: int
     wa_id: str
     profile_name: str | None = None
+    is_group: bool = False
+    is_excluded: bool = False
     last_inbound_at: datetime | None = None
     last_message_at: datetime | None = None
     created_at: datetime
     within_customer_window: bool = False
+
+
+class SetContactExcludedRequest(BaseModel):
+    """Body for PATCH /contacts/{wa_id}/exclude — the settings toggle and the
+    "Stop reading this group" button both call this."""
+
+    excluded: bool
 
 
 class WhatsAppContactListResponse(BaseModel):
@@ -115,9 +124,10 @@ class WhatsAppSuggestionResponse(BaseModel):
     created_at: datetime
     resolved_at: datetime | None = None 
     sent_message_id: int | None = None  
-    contact_name: str | None = None 
+    contact_name: str | None = None
     wa_id: str | None = None
-    message_body: str | None = None 
+    is_group: bool = False
+    message_body: str | None = None
     message_summary: str | None = None 
     message_translation: str | None = None 
 
@@ -125,6 +135,10 @@ class WhatsAppSuggestionResponse(BaseModel):
 class WhatsAppSuggestionListResponse(BaseModel):
     items: list[WhatsAppSuggestionResponse] = Field(default_factory=list)
     total: int
+
+
+class DismissAllResponse(BaseModel):
+    dismissed: int
 
 
 class FeedbackRequest(BaseModel):
@@ -137,6 +151,10 @@ class FeedbackRequest(BaseModel):
             "helpful — chip was exactly right (positive signal); "
             "dismissed — chip ignored without acting on it (neutral)"
         ),
+    )
+    correct_response: str | None = Field(
+        default=None,
+        description="What the reply should have been — only meaningful when feedback_type='wrong'.",
     )
 
 
@@ -164,6 +182,29 @@ class RefreshPendingResponse(InboxStatusResponse):
     ok: bool
     reopened: int
     reclassified: int
+
+
+class UserInstructionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    text: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserInstructionListResponse(BaseModel):
+    items: list[UserInstructionResponse] = Field(default_factory=list)
+
+
+class CreateInstructionRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+
+
+class UpdateInstructionRequest(BaseModel):
+    text: str | None = Field(default=None, min_length=1, max_length=500)
+    is_active: bool | None = None
 
 
 class WhatsAppCategoryInfo(BaseModel):

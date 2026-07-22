@@ -278,10 +278,14 @@ class WhatsAppContact(Base):
     __tablename__ = "whatsapp_contacts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    wa_id: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    wa_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
     profile_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # "personal" | "work" | None — set explicitly or auto-inferred from Life Lane messages.
     contact_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    is_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # User opted out via "Stop reading this group" or the settings toggle — no message from
+    # this contact/group is sent to the classifier once set.
+    is_excluded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_inbound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_replied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -412,9 +416,36 @@ class WhatsAppFeedback(Base):
     original_confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # First 300 chars of the original message — stored so the LLM can learn from the exact text.
     message_snippet: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # What the user says the reply should have been — only set for feedback_type="wrong".
+    # Fed back into future classification AND drafting prompts so this exact mistake is
+    # never repeated for this user.
+    correct_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class UserInstruction(Base):
+    """A standing plain-language rule the user configured in Settings — e.g. 'Do not read
+    group messages' or 'Always reply formally to clients'. Fed into the WhatsApp classifier
+    and reply-drafter on every run so it is followed permanently until edited or deleted."""
+
+    __tablename__ = "user_instructions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
         nullable=False,
     )
 
