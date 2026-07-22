@@ -32,6 +32,13 @@ ACTIVITY_SUMMARY_COLUMNS: dict[str, str] = {
 WHATSAPP_CONTACT_COLUMNS: dict[str, str] = {
     "contact_type": "VARCHAR(20)",
     "last_replied_at": "DATETIME",
+    "is_group": "BOOLEAN NOT NULL DEFAULT 0",
+    "is_excluded": "BOOLEAN NOT NULL DEFAULT 0",
+}
+
+
+WHATSAPP_FEEDBACK_COLUMNS: dict[str, str] = {
+    "correct_response": "TEXT",
 }
 
 
@@ -90,7 +97,31 @@ def bootstrap_database() -> None:
     _ensure_columns("whatsapp_contacts", WHATSAPP_CONTACT_COLUMNS)
     _ensure_columns("whatsapp_messages", WHATSAPP_MESSAGE_COLUMNS)
     _ensure_columns("whatsapp_suggestions", WHATSAPP_SUGGESTION_COLUMNS)
+    _ensure_columns("whatsapp_feedback", WHATSAPP_FEEDBACK_COLUMNS)
+    _backfill_whatsapp_group_contacts()
     MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _backfill_whatsapp_group_contacts() -> None:
+    """One-time repair for contacts created before is_group tracking existed.
+
+    _ensure_columns adds `is_group` with DEFAULT 0, so any contact row that
+    predates the column (or whose group-detection missed on first message)
+    is stuck showing as a regular contact even though its wa_id is a group
+    or newsletter JID. The suffix is unambiguous ground truth, so reconcile
+    it here every startup (cheap no-op once rows are fixed).
+    """
+    inspector = inspect(engine)
+    if "whatsapp_contacts" not in inspector.get_table_names():
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE whatsapp_contacts SET is_group = 1 "
+                "WHERE is_group = 0 AND (wa_id LIKE '%@g.us' OR wa_id LIKE '%@newsletter')"
+            )
+        )
 
 
 def _ensure_columns(table: str, columns: dict[str, str]) -> None:

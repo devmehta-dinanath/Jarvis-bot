@@ -117,7 +117,10 @@ def _process_change_value(db: Session, value: dict[str, Any]) -> tuple[int, list
         if not wa_id:
             continue
         profile_name = contacts_meta.get(wa_id)
-        contact = repo.upsert_contact(db, wa_id=wa_id, profile_name=profile_name)
+        is_group = _is_group_message(message, value)
+        contact = repo.upsert_contact(
+            db, wa_id=wa_id, profile_name=profile_name, is_group=is_group
+        )
 
         msg_type = message.get("type", "text")
         body = _extract_text(message, msg_type)
@@ -131,7 +134,7 @@ def _process_change_value(db: Session, value: dict[str, Any]) -> tuple[int, list
             wa_message_id=wa_message_id,
             media_id=_extract_media_id(message, msg_type),
             raw_payload=message,
-            is_group=_is_group_message(message, value),
+            is_group=is_group,
             is_forwarded=_is_forwarded_message(message),
         )
         new_messages += 1
@@ -162,6 +165,17 @@ def _process_waha_payload(db: Session, payload: dict[str, Any]) -> int:
         db.refresh(stored)
         if stored.direction == "inbound":
             _classify_if_enabled(db, stored)
+        elif stored.direction == "outbound":
+            # Typed directly in WhatsApp (not sent through the app) — treat it as the
+            # user handling the conversation and clear older pending chips for this contact.
+            cleared = repo.dismiss_pending_older_than(db, stored.contact_id, stored.timestamp)
+            if cleared:
+                logger.info(
+                    "[WHATSAPP] Auto-dismissed %s older pending suggestion(s) for contact %s "
+                    "after outbound WhatsApp reply",
+                    cleared,
+                    stored.contact_id,
+                )
         db.commit()
         return 1 if stored.direction == "inbound" else 0
 
@@ -211,8 +225,27 @@ def _waha_msg_type(body: dict[str, Any]) -> str:
     return "text"
 
 
-def _waha_is_group(chat_id: str | None) -> bool:
-    return bool(chat_id and str(chat_id).endswith("@g.us"))
+def _waha_group_id(body: dict[str, Any]) -> str | None:
+    """Find whichever field actually carries the group JID.
+
+    WAHA engines are inconsistent about which of `from` / `chatId` / `to`
+    holds the group id vs. the individual sender, so check all three instead
+    of trusting one field — otherwise a group message can get filed under
+    the sender as if it were a 1:1 contact.
+    """
+    for key in ("from", "chatId", "to"):
+        value = body.get(key)
+        if value and str(value).endswith("@g.us"):
+            return str(value)
+    return None
+
+
+def _waha_is_group(body: dict[str, Any]) -> bool:
+    if _waha_group_id(body):
+        return True
+    # `participant` / `author` is only ever populated on group messages —
+    # a reliable signal even on engines that never surface an @g.us id.
+    return bool(body.get("participant") or body.get("author"))
 
 
 def _waha_extract_text(body: dict[str, Any], msg_type: str) -> str | None:
@@ -276,21 +309,22 @@ def _waha_profile_name(body: dict[str, Any]) -> str | None:
 
 def _waha_peer_chat_id(body: dict[str, Any]) -> str | None:
     """Resolve the contact/chat JID for inbox storage."""
+    group_id = _waha_group_id(body)
+    if group_id:
+        # Always key a group chat by its own JID, whichever field it came from —
+        # never file it under the individual participant who happened to send it.
+        return group_id
+
     from_me = bool(body.get("fromMe"))
     chat_id = body.get("chatId")
     if from_me:
         peer = body.get("to") or chat_id or body.get("from")
     else:
-        # Prefer chatId for 1:1; for groups from is group and participant is sender.
         peer = body.get("from") or chat_id
-        if peer and str(peer).endswith("@g.us"):
-            # Store group as contact key; participant is the member who spoke.
-            return str(peer)
         participant = body.get("participant") or body.get("author")
-        if participant and not (peer and str(peer).endswith("@g.us")):
-            # Some engines put sender only in participant with chatId=@lid/@c.us
-            if not peer:
-                peer = participant
+        # Some engines put the sender only in participant, with chatId=@lid/@c.us.
+        if participant and not peer:
+            peer = participant
     if peer:
         return str(peer)
     return None
@@ -327,7 +361,10 @@ def _store_waha_message(
 
     wa_id = resolve_contact_wa_id(str(peer), body)
     profile_name = _waha_profile_name(body)
-    contact = repo.upsert_contact(db, wa_id=wa_id, profile_name=profile_name)
+    is_group = _waha_is_group(body)
+    contact = repo.upsert_contact(
+        db, wa_id=wa_id, profile_name=profile_name, is_group=is_group
+    )
 
     msg_type = _waha_msg_type(body)
     text_value = _waha_extract_text(body, msg_type)
@@ -352,7 +389,7 @@ def _store_waha_message(
         wa_message_id=str(wa_message_id) if wa_message_id else None,
         media_id=(body.get("media") or {}).get("url") if isinstance(body.get("media"), dict) else None,
         raw_payload={"event": event, "session": envelope.get("session"), **body},
-        is_group=_waha_is_group(str(peer)),
+        is_group=is_group,
         is_forwarded=bool(body.get("isForwarded")),
         status="sent" if from_me else "received",
     )
@@ -382,6 +419,9 @@ def _apply_waha_ack(db: Session, body: dict[str, Any]) -> None:
     repo.update_message_status(db, str(wa_message_id), state)
 
 
+_MEDIA_MSG_TYPES = {"image", "video", "document", "sticker", "contacts", "location", "media"}
+
+
 def _classify_if_enabled(db: Session, message) -> None:
     try:
         from app.services import service_manager
@@ -394,9 +434,21 @@ def _classify_if_enabled(db: Session, message) -> None:
             service_manager.whatsapp.handle_voice_note_now(db, message)
             return
 
-        if message.msg_type != "text" or not (message.body or "").strip():
+        if not (message.body or "").strip():
+            # No text to classify. Previously this unconditionally dropped the
+            # message here — including captioned photos/videos/documents,
+            # which DO have a body (their caption) but were skipped purely
+            # because msg_type != "text", making them silently invisible in
+            # the inbox feed. Bodiless media (no caption) still can't be
+            # classified, but surface it as a lightweight chip instead of
+            # dropping it outright so it isn't invisible either.
+            if message.direction == "inbound" and message.msg_type in _MEDIA_MSG_TYPES:
+                service_manager.whatsapp.handle_media_message_now(db, message)
             return
 
+        # Any message with usable text — a plain text message or a captioned
+        # media message — goes through the normal classifier regardless of
+        # msg_type.
         service_manager.whatsapp.classify_message_now(db, message)
     except WhatsAppAIError as exc:
         logger.warning("[WHATSAPP] Immediate classification failed for %s: %s", message.id, exc)
