@@ -19,7 +19,7 @@ export const WORK_CATEGORIES = [
 
 export const LIFE_CATEGORIES = ["personal_date", "personal_task", "family_plan"];
 
-export const NUDGE_CATEGORIES = ["greeting", "voice_note"];
+export const NUDGE_CATEGORIES = ["greeting", "voice_note", "media"];
 
 export const LIFE_NUDGE_CATEGORIES = ["personal_silence"];
 
@@ -47,6 +47,7 @@ export const CATEGORY_LABELS = {
   family_plan: "Family plan",
   greeting: "Casual message",
   voice_note: "Voice note",
+  media: "Media",
   personal_silence: "Reply reminder"
 };
 
@@ -94,7 +95,7 @@ export const CATEGORY_SECTIONS = [
     id: "nudges",
     title: "Casual & voice",
     accent: "success",
-    categories: ["greeting", "voice_note"]
+    categories: ["greeting", "voice_note", "media"]
   },
   {
     id: "life",
@@ -138,14 +139,10 @@ export function canSchedule(suggestion) {
 }
 
 export function canSendReply(suggestion) {
-  const key = resolveCategory(suggestion);
-  if (key === "personal_silence" || key === "voice_note") {
-    return Boolean(suggestion.draft_text);
-  }
-  if (LIFE_CATEGORIES.includes(key) && !suggestion.draft_text) {
-    return false;
-  }
-  return true;
+  // No draft means the AI either can't send a reply for this category (voice note,
+  // media, reminders) or deliberately didn't draft one (low-confidence chip) — never
+  // fall back to a generic canned reply in either case.
+  return Boolean(suggestion.draft_text);
 }
 
 export function partitionSuggestions(suggestions) {

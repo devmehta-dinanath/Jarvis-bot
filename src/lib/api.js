@@ -37,6 +37,45 @@ export function getPendingSuggestions() {
   return fetchJson("/api/v1/whatsapp/suggestions?status=pending", {}, SERVER_API);
 }
 
+export function getWhatsAppContacts({ limit = 200, offset = 0 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return fetchJson(`/api/v1/whatsapp/contacts?${params.toString()}`, {}, SERVER_API);
+}
+
+export function setContactExcluded(waId, excluded) {
+  return fetchJson(`/api/v1/whatsapp/contacts/${encodeURIComponent(waId)}/exclude`, {
+    method: "PATCH",
+    body: JSON.stringify({ excluded })
+  }, SERVER_API);
+}
+
+export function getUserInstructions() {
+  return fetchJson("/api/v1/whatsapp/instructions", {}, SERVER_API);
+}
+
+export function createUserInstruction(text) {
+  return fetchJson("/api/v1/whatsapp/instructions", {
+    method: "POST",
+    body: JSON.stringify({ text })
+  }, SERVER_API);
+}
+
+export function updateUserInstruction(instructionId, { text, isActive } = {}) {
+  const body = {};
+  if (text !== undefined) body.text = text;
+  if (isActive !== undefined) body.is_active = isActive;
+  return fetchJson(`/api/v1/whatsapp/instructions/${encodeURIComponent(instructionId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body)
+  }, SERVER_API);
+}
+
+export function deleteUserInstruction(instructionId) {
+  return fetchJson(`/api/v1/whatsapp/instructions/${encodeURIComponent(instructionId)}`, {
+    method: "DELETE"
+  }, SERVER_API);
+}
+
 export function getInboxStatus() {
   return fetchJson("/api/v1/whatsapp/inbox/status", {}, SERVER_API);
 }
@@ -66,10 +105,23 @@ export function dismissSuggestion(suggestionId) {
   }, SERVER_API);
 }
 
+export function dismissAllSuggestions() {
+  return fetchJson("/api/v1/whatsapp/suggestions/dismiss-all", {
+    method: "POST"
+  }, SERVER_API);
+}
+
 export function sendSuggestionReply(suggestionId, { text, mode = "auto" } = {}) {
   return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/send-reply`, {
     method: "POST",
     body: JSON.stringify({ text, mode })
+  }, SERVER_API);
+}
+
+export function sendSuggestionFeedback(suggestionId, { feedbackType, correctResponse } = {}) {
+  return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ feedback_type: feedbackType, correct_response: correctResponse ?? null })
   }, SERVER_API);
 }
 

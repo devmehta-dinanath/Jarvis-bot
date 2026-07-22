@@ -1,4 +1,4 @@
-import { sendSuggestionReply } from "../../lib/api.js";
+import { sendSuggestionFeedback, sendSuggestionReply } from "../../lib/api.js";
 import {
   buildCategoryMeta,
   canSchedule,
@@ -35,7 +35,7 @@ function primaryActionLabel(suggestion) {
   return "Send reply";
 }
 
-export function createWhatsAppRequestCard(suggestion, { onSchedule, onDismiss, onSent }) {
+export function createWhatsAppRequestCard(suggestion, { onSchedule, onDismiss, onSent, onExcludeGroup, onWrong }) {
   const card = document.createElement("article");
   card.className = "language-card language-card--whatsapp";
   if (isUrgent(suggestion)) {
@@ -67,6 +67,9 @@ export function createWhatsAppRequestCard(suggestion, { onSchedule, onDismiss, o
     original.textContent =
       suggestion.details?.chip_label ||
       `You haven't replied to ${displayName(suggestion)} yet.`;
+  }
+  if (category === "media" && !suggestion.message_body) {
+    original.textContent = suggestion.details?.chip_label || "Media message — no caption.";
   }
 
   const meta = document.createElement("p");
@@ -129,7 +132,47 @@ export function createWhatsAppRequestCard(suggestion, { onSchedule, onDismiss, o
   dismissBtn.className = "btn btn--ghost";
   dismissBtn.textContent = "Dismiss";
 
-  actions.append(sendBtn, editBtn, scheduleBtn, dismissBtn);
+  const stopGroupBtn = document.createElement("button");
+  stopGroupBtn.type = "button";
+  stopGroupBtn.className = "btn btn--ghost btn--warning";
+  stopGroupBtn.textContent = "Stop reading this group";
+  stopGroupBtn.hidden = !suggestion.is_group;
+
+  const wrongBtn = document.createElement("button");
+  wrongBtn.type = "button";
+  wrongBtn.className = "btn btn--ghost btn--warning";
+  wrongBtn.textContent = "Wrong";
+
+  actions.append(sendBtn, editBtn, scheduleBtn, dismissBtn, wrongBtn, stopGroupBtn);
+
+  const correctionPanel = document.createElement("div");
+  correctionPanel.className = "whatsapp-card__correction";
+  correctionPanel.hidden = true;
+
+  const correctionLabel = document.createElement("p");
+  correctionLabel.className = "language-card__label";
+  correctionLabel.textContent = "What should the correct response have been?";
+
+  const correctionInput = document.createElement("textarea");
+  correctionInput.className = "whatsapp-card__correction-input";
+  correctionInput.rows = 2;
+  correctionInput.placeholder = "e.g. Should have said we're out of stock until next week.";
+
+  const correctionActions = document.createElement("div");
+  correctionActions.className = "language-card__actions";
+
+  const correctionSaveBtn = document.createElement("button");
+  correctionSaveBtn.type = "button";
+  correctionSaveBtn.className = "btn btn--primary";
+  correctionSaveBtn.textContent = "Save correction";
+
+  const correctionCancelBtn = document.createElement("button");
+  correctionCancelBtn.type = "button";
+  correctionCancelBtn.className = "btn btn--ghost";
+  correctionCancelBtn.textContent = "Cancel";
+
+  correctionActions.append(correctionSaveBtn, correctionCancelBtn);
+  correctionPanel.append(correctionLabel, correctionInput, correctionActions);
 
   function currentDraftText() {
     return draftInput.hidden ? draftText.textContent.trim() : draftInput.value.trim();
@@ -151,9 +194,9 @@ export function createWhatsAppRequestCard(suggestion, { onSchedule, onDismiss, o
     setEditing(draftInput.hidden);
   });
 
-  sendBtn.addEventListener("click", async () => {
+  async function sendDraft() {
     const text = currentDraftText();
-    if (!text) {
+    if (!text || sendBtn.disabled) {
       return;
     }
 
@@ -177,6 +220,17 @@ export function createWhatsAppRequestCard(suggestion, { onSchedule, onDismiss, o
         sendBtn.title = "";
       }, 3000);
     }
+  }
+
+  sendBtn.addEventListener("click", sendDraft);
+
+  draftInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    setEditing(false);
+    sendDraft();
   });
 
   scheduleBtn.addEventListener("click", async () => {
@@ -215,6 +269,62 @@ export function createWhatsAppRequestCard(suggestion, { onSchedule, onDismiss, o
     }
   });
 
-  card.append(header, original, meta, draftSection, actions);
+  stopGroupBtn.addEventListener("click", async () => {
+    if (typeof onExcludeGroup !== "function") {
+      return;
+    }
+    stopGroupBtn.disabled = true;
+    const originalLabel = stopGroupBtn.textContent;
+    stopGroupBtn.textContent = "Stopping…";
+    try {
+      await onExcludeGroup(suggestion);
+    } catch (error) {
+      stopGroupBtn.disabled = false;
+      stopGroupBtn.textContent = originalLabel;
+      stopGroupBtn.title = String(error.message || error);
+      window.setTimeout(() => {
+        stopGroupBtn.title = "";
+      }, 3000);
+    }
+  });
+
+  wrongBtn.addEventListener("click", () => {
+    correctionPanel.hidden = !correctionPanel.hidden;
+    if (!correctionPanel.hidden) {
+      correctionInput.value = "";
+      correctionInput.focus();
+    }
+  });
+
+  correctionCancelBtn.addEventListener("click", () => {
+    correctionPanel.hidden = true;
+  });
+
+  correctionSaveBtn.addEventListener("click", async () => {
+    const correctResponse = correctionInput.value.trim();
+    if (!correctResponse) {
+      return;
+    }
+    if (typeof onWrong !== "function") {
+      return;
+    }
+    correctionSaveBtn.disabled = true;
+    const originalLabel = correctionSaveBtn.textContent;
+    correctionSaveBtn.textContent = "Saving…";
+    try {
+      await onWrong(suggestion, correctResponse);
+      correctionSaveBtn.textContent = "Saved ✓";
+      card.classList.add("whatsapp-card--sent");
+    } catch (error) {
+      correctionSaveBtn.disabled = false;
+      correctionSaveBtn.textContent = originalLabel;
+      correctionSaveBtn.title = String(error.message || error);
+      window.setTimeout(() => {
+        correctionSaveBtn.title = "";
+      }, 3000);
+    }
+  });
+
+  card.append(header, original, meta, draftSection, actions, correctionPanel);
   return card;
 }

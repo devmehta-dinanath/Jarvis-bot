@@ -1,5 +1,6 @@
 import { createDailyInsightsPage } from "../pages/daily-insights-page.js";
 import { createMeetingPage } from "../pages/meeting-page.js";
+import { createSettingsPage } from "../pages/settings-page.js";
 import { createSummaryPage } from "../pages/summary-page.js";
 import { createCommandBar } from "./components/command-bar.js";
 
@@ -18,6 +19,11 @@ const MENU_ITEMS = [
     id: "summary",
     label: "Summary",
     renderPanel: createDailyInsightsPage
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    renderPanel: createSettingsPage
   }
 ];
 

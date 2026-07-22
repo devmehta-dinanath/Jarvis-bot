@@ -1,10 +1,13 @@
 import {
+  dismissAllSuggestions,
   dismissSuggestion,
   getInboxStatus,
   getPendingSuggestions,
   getWhatsAppCategories,
   refreshPendingInbox,
-  scheduleMeetingSuggestion
+  scheduleMeetingSuggestion,
+  sendSuggestionFeedback,
+  setContactExcluded
 } from "../lib/api.js";
 import {
   applyTaxonomyFromApi,
@@ -133,9 +136,20 @@ export function createSummaryPage() {
   const hero = document.createElement("article");
   hero.className = "hero-card";
 
+  const heroHeader = document.createElement("div");
+  heroHeader.className = "hero-card__header";
+
   const greeting = document.createElement("h2");
   greeting.className = "hero-card__greeting";
   greeting.textContent = getGreeting("Sujay");
+
+  const clearAllBtn = document.createElement("button");
+  clearAllBtn.type = "button";
+  clearAllBtn.className = "btn btn--ghost hero-card__clear-all";
+  clearAllBtn.textContent = "Clear all";
+  clearAllBtn.disabled = true;
+
+  heroHeader.append(greeting, clearAllBtn);
 
   const stats = document.createElement("div");
   stats.className = "stat-row";
@@ -151,7 +165,7 @@ export function createSummaryPage() {
   );
   emptyState.hidden = true;
 
-  hero.append(greeting, stats);
+  hero.append(heroHeader, stats);
   page.append(hero, ...sections.map((item) => item.section), emptyState);
 
   const handlers = {
@@ -160,8 +174,37 @@ export function createSummaryPage() {
       await dismissSuggestion(item.id);
       await reload();
     },
+    onExcludeGroup: async (item) => {
+      if (!item.wa_id) {
+        return;
+      }
+      await setContactExcluded(item.wa_id, true);
+      await reload();
+    },
+    onWrong: async (item, correctResponse) => {
+      await sendSuggestionFeedback(item.id, { feedbackType: "wrong", correctResponse });
+      await dismissSuggestion(item.id);
+      await reload();
+    },
     onSent: reload
   };
+
+  clearAllBtn.addEventListener("click", async () => {
+    clearAllBtn.disabled = true;
+    const originalLabel = clearAllBtn.textContent;
+    clearAllBtn.textContent = "Clearing…";
+    try {
+      await dismissAllSuggestions();
+      await reload();
+    } catch (error) {
+      clearAllBtn.title = String(error.message || error);
+      window.setTimeout(() => {
+        clearAllBtn.title = "";
+      }, 3000);
+    } finally {
+      clearAllBtn.textContent = originalLabel;
+    }
+  });
 
   async function reload() {
     let suggestions = [];
@@ -184,8 +227,11 @@ export function createSummaryPage() {
       });
       emptyState.hidden = true;
       stats.replaceChildren(createStatChip("—", "WhatsApp", "info"));
+      clearAllBtn.disabled = true;
       return;
     }
+
+    clearAllBtn.disabled = suggestions.length === 0;
 
     const buckets = partitionSuggestions(suggestions);
     const urgentCount = buckets.urgent?.length ?? 0;
