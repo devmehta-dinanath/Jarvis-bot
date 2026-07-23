@@ -125,6 +125,10 @@ def _greeting_chip_label() -> str:
     return "Casual message from this contact — reply when you can."
 
 
+def _clarify_chip_label(question: str) -> str:
+    return f"Needs one detail — {question}"
+
+
 def _voice_note_chip_label(contact_name: str | None) -> str:
     who = contact_name or "this contact"
     return f"Voice note received from {who} — reply when you have listened."
@@ -214,6 +218,7 @@ def _draft_reply_with_budget(
     instructions: list[str] | None = None,
     corrections: list[dict] | None = None,
     personal: bool = False,
+    voice_examples: list[str] | None = None,
 ) -> str:
     if WHATSAPP_AI_DRAFTS_ENABLED:
         try:
@@ -224,6 +229,7 @@ def _draft_reply_with_budget(
                     anger_level,
                     instructions=instructions,
                     corrections=corrections,
+                    voice_examples=voice_examples,
                     **_draft_lang_kwargs(result=result, message=message),
                 )
             return classifier.draft_reply(
@@ -234,6 +240,7 @@ def _draft_reply_with_budget(
                 instructions=instructions,
                 corrections=corrections,
                 personal=personal,
+                voice_examples=voice_examples,
                 **_draft_lang_kwargs(result=result, message=message),
             )
         except WhatsAppAIError:
@@ -394,6 +401,16 @@ class WhatsAppService:
         instructions = [
             i.text for i in repo.list_instructions(db, active_only=True)
         ]
+        voice_examples = repo.recent_outbound_examples(db, personal=is_personal_contact)
+
+        # Rule 12 — 7-day silent observation. Anchored retroactively to the earliest
+        # outbound message already on record (see get_or_create_learning_state), so an
+        # account with existing history doesn't lose a week of suggestions the moment
+        # this ships; a genuinely fresh install gets the real 7-day silent window.
+        learning_state = repo.get_or_create_learning_state(db)
+        in_silent_observation = (
+            datetime.utcnow() - learning_state.observation_started_at < timedelta(days=7)
+        )
 
         if wa_fallback.is_likely_spam(body, has_prior_history=prior_count > 0):
             result = classifier._silent_filter_result("spam")
@@ -513,6 +530,12 @@ class WhatsAppService:
                 "manual response, no AI draft", message.id,
             )
             self._create_safety_concern_suggestion(db, message, category, lane)
+        elif in_silent_observation:
+            logger.info(
+                "[WHATSAPP] Message %s suppressed — still in the 7-day silent observation "
+                "window (started %s, category=%s)",
+                message.id, learning_state.observation_started_at, category,
+            )
         elif category in classifier.FILTER_LABELS or category == "group":
             logger.info(
                 "[WHATSAPP] Message %s silently filtered (category=%s)", message.id, category
@@ -523,6 +546,28 @@ class WhatsAppService:
                 "(known_contact=%s recently_replied=%s category=%s)",
                 message.id, known_contact, recently_replied, category,
             )
+        elif result.get("needs_clarification"):
+            if repo.pending_clarification_exists(db, message.contact_id):
+                # Rule 13 — max one question per conversation at a time. Don't stack a
+                # second one; fall back to the plain low-confidence nudge instead of
+                # going silent entirely.
+                logger.info(
+                    "[WHATSAPP] Message %s needs clarification but one is already "
+                    "pending for contact %s — falling back to unconfident nudge",
+                    message.id, message.contact_id,
+                )
+                suggestion = self._create_unconfident_suggestion(
+                    db, message, category, priority, confidence, lane
+                )
+            else:
+                logger.info(
+                    "[WHATSAPP] Message %s is ambiguous — asking: %s",
+                    message.id, result.get("clarifying_question"),
+                )
+                suggestion = self._create_clarification_suggestion(
+                    db, message, category, priority, confidence, lane,
+                    result["clarifying_question"], result["clarifying_options"],
+                )
         elif below_threshold:
             logger.info(
                 "[WHATSAPP] Message %s below confidence threshold "
@@ -537,11 +582,11 @@ class WhatsAppService:
             )
         elif result["is_important"]:
             suggestion = self._create_suggestion(
-                db, message, history, body, result, priority, instructions, corrections
+                db, message, history, body, result, priority, instructions, corrections, voice_examples
             )
         elif category == "greeting":
             suggestion = self._create_greeting_suggestion(
-                db, message, history, body, result, instructions, corrections
+                db, message, history, body, result, instructions, corrections, voice_examples
             )
 
         if suggestion is not None:
@@ -580,6 +625,7 @@ class WhatsAppService:
         priority,
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
+        voice_examples: list[str] | None = None,
     ):
         if repo.suggestion_exists_for_message(db, message.id):
             return None
@@ -595,17 +641,17 @@ class WhatsAppService:
 
         if category == "payment":
             return self._create_payment_suggestion(
-                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections, voice_examples
             )
 
         if category == "lead":
             return self._create_lead_suggestion(
-                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections, voice_examples
             )
 
         if category == "document":
             return self._create_document_suggestion(
-                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections, voice_examples
             )
 
         if category == "personal_date":
@@ -622,12 +668,12 @@ class WhatsAppService:
 
         if category == "complaint":
             return self._create_complaint_suggestion(
-                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections, voice_examples
             )
 
         if category == "shipment":
             return self._create_shipment_suggestion(
-                db, message, history, body, result, priority, confidence, lane, instructions, corrections
+                db, message, history, body, result, priority, confidence, lane, instructions, corrections, voice_examples
             )
 
         if category == "meeting":
@@ -643,6 +689,7 @@ class WhatsAppService:
                 result=result,
                 instructions=instructions,
                 corrections=corrections,
+                voice_examples=voice_examples,
             )
             meeting = wa_calendar.enrich_meeting_details(meeting)
             confirmed = bool(meeting.get("confirmed"))
@@ -686,6 +733,7 @@ class WhatsAppService:
             instructions=instructions,
             corrections=corrections,
             personal=is_personal,
+            voice_examples=voice_examples,
         )
 
         details = None
@@ -724,6 +772,7 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
+        voice_examples: list[str] | None = None,
     ):
         payment_status = result.get("payment_status") or "overdue"
         hint = classifier.payment_reply_hint(payment_status)
@@ -736,6 +785,7 @@ class WhatsAppService:
             payment_status=payment_status,
             instructions=instructions,
             corrections=corrections,
+            voice_examples=voice_examples,
         )
 
         details = {
@@ -768,9 +818,11 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
+        voice_examples: list[str] | None = None,
     ):
         draft = _draft_reply_with_budget(
-            history, body, "lead", result=result, instructions=instructions, corrections=corrections
+            history, body, "lead", result=result, instructions=instructions, corrections=corrections,
+            voice_examples=voice_examples,
         )
 
         reference = message.timestamp or datetime.utcnow()
@@ -798,6 +850,7 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
+        voice_examples: list[str] | None = None,
     ):
         document_type = result.get("document_type")
         previous = repo.previous_document_sent(
@@ -811,7 +864,8 @@ class WhatsAppService:
             previously_sent_on = _short_date(previous.resolved_at or previous.created_at)
 
         draft = _draft_reply_with_budget(
-            history, body, "document", result=result, instructions=instructions, corrections=corrections
+            history, body, "document", result=result, instructions=instructions, corrections=corrections,
+            voice_examples=voice_examples,
         )
 
         details = {
@@ -839,6 +893,7 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
+        voice_examples: list[str] | None = None,
     ):
         anger_level = result.get("anger_level") or "high"
         draft = _draft_reply_with_budget(
@@ -850,6 +905,7 @@ class WhatsAppService:
             anger_level=anger_level,
             instructions=instructions,
             corrections=corrections,
+            voice_examples=voice_examples,
         )
 
         details = {
@@ -881,6 +937,7 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
+        voice_examples: list[str] | None = None,
     ):
         shipment_status = result.get("shipment_status") or "good"
         is_delay = shipment_status == "delayed"
@@ -894,6 +951,7 @@ class WhatsAppService:
             shipment_status=shipment_status,
             instructions=instructions,
             corrections=corrections,
+            voice_examples=voice_examples,
         )
 
         details = {
@@ -932,6 +990,7 @@ class WhatsAppService:
         result: dict | None = None,
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
+        voice_examples: list[str] | None = None,
     ):
         if repo.suggestion_exists_for_message(db, message.id):
             return None
@@ -954,6 +1013,7 @@ class WhatsAppService:
             instructions=instructions,
             corrections=corrections,
             personal=is_personal,
+            voice_examples=voice_examples,
         )
 
         details = {
@@ -993,6 +1053,42 @@ class WhatsAppService:
             details={
                 "chip_label": "Low confidence — AI did not draft a reply, please respond manually.",
                 "low_confidence": True,
+            },
+        )
+
+    def _create_clarification_suggestion(
+        self,
+        db,
+        message,
+        category: str,
+        priority: str,
+        confidence: int | None,
+        lane: str,
+        question: str,
+        options: list[str],
+    ):
+        """Rule 13 — ask ONE tap-option question instead of guessing wrong when the
+        message is genuinely, concretely ambiguous (see classifier.py's CLARIFYING
+        QUESTIONS rule). No draft_text until the user taps an option — see
+        actions.answer_clarification, which regenerates the draft using their answer
+        as context."""
+        if repo.suggestion_exists_for_message(db, message.id):
+            return None
+        return repo.create_suggestion(
+            db,
+            contact_id=message.contact_id,
+            message_id=message.id,
+            kind="clarify",
+            category=category,
+            priority=priority,
+            lane=lane,
+            confidence=confidence,
+            draft_text=None,
+            details={
+                "needs_clarification": True,
+                "clarifying_question": question,
+                "clarifying_options": options,
+                "chip_label": _clarify_chip_label(question),
             },
         )
 

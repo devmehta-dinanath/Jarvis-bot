@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import (
     CALENDAR_DEFAULT_TIMEZONE,
+    WHATSAPP_CORRECTIONS_CONTEXT_LIMIT,
     WHATSAPP_DEFAULT_MEETING_MINUTES,
+    WHATSAPP_HISTORY_CONTEXT_LIMIT,
     WHATSAPP_MEETING_CONFIRMATION_TEMPLATE,
     WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE,
 )
@@ -16,6 +18,7 @@ from app.services.google_calendar.service import google_calendar_service
 from app.services.whatsapp import classifier
 from app.services.whatsapp import client as wa_client
 from app.services.whatsapp import repository as repo
+from app.services.whatsapp import taxonomy as wa_taxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +106,42 @@ def send_reply(
             "Outside the customer service window — a template_name is required to reply."
         )
 
+    original_message = (
+        db.get(models.WhatsAppMessage, suggestion.message_id)
+        if suggestion.message_id is not None
+        else None
+    )
+
+    # Rule 12 — continuous learning: capture whether the user sent the AI's draft as-is
+    # (positive reinforcement) or changed it (a style correction), before translation
+    # mutates reply_text below. Only meaningful when there was an actual draft to compare
+    # against — not for a suggestion with no draft_text (e.g. a low-confidence nudge).
+    if suggestion.draft_text and reply_text is not None:
+        approved_text = (text if text is not None else suggestion.draft_text).strip()
+        was_edited = approved_text != suggestion.draft_text.strip()
+        try:
+            repo.record_feedback(
+                db,
+                suggestion_id=suggestion.id,
+                feedback_type="edited" if was_edited else "helpful",
+                original_category=suggestion.category,
+                original_confidence=suggestion.confidence,
+                message_snippet=original_message.body if original_message else None,
+                contact_id=suggestion.contact_id,
+                message_id=suggestion.message_id,
+                correct_response=approved_text if was_edited else None,
+            )
+        except Exception:
+            logger.exception(
+                "[WHATSAPP] Failed to record style-learning feedback for suggestion %s",
+                suggestion.id,
+            )
+
     # The user always writes/edits the reply in English; auto-translate into the contact's
     # own detected language (from the message this suggestion is replying to) right before
     # sending, so the contact always receives their own language. Falls back to the English
     # text if translation fails — better to send something than nothing.
-    if reply_text and suggestion.message_id is not None:
-        original_message = db.get(models.WhatsAppMessage, suggestion.message_id)
+    if reply_text and original_message is not None:
         reply_language = original_message.language if original_message else None
         if reply_language and not classifier.is_english(reply_language):
             try:
@@ -158,6 +191,150 @@ def send_reply(
         )
 
     return message
+
+
+def answer_clarification(
+    db: Session,
+    suggestion: models.WhatsAppSuggestion,
+    *,
+    answer: str,
+) -> models.WhatsAppSuggestion:
+    """Rule 13 — the user tapped one of the clarifying tap options; regenerate the
+    draft now that the ambiguity is resolved, using their answer as direct context.
+    The suggestion row itself doesn't change identity — it just gains a draft_text
+    it didn't have before, exactly like any other suggestion once classified."""
+    if suggestion.kind != "clarify":
+        raise WhatsAppActionError("This suggestion is not a clarifying question")
+
+    answer = (answer or "").strip()
+    if not answer:
+        raise WhatsAppActionError("An answer is required")
+
+    details = _details_dict(suggestion)
+    question = details.get("clarifying_question") or "the earlier question"
+
+    if suggestion.message_id is None:
+        raise WhatsAppActionError("Original message not found for this suggestion")
+    message = db.get(models.WhatsAppMessage, suggestion.message_id)
+    if message is None:
+        raise WhatsAppActionError("Original message not found for this suggestion")
+
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    is_personal = bool(contact is not None and contact.contact_type == "personal")
+
+    history = repo.recent_history(
+        db, suggestion.contact_id, limit=WHATSAPP_HISTORY_CONTEXT_LIMIT, before_message_id=message.id
+    )
+    instructions = [i.text for i in repo.list_instructions(db, active_only=True)]
+    corrections = repo.load_corrections_for_prompt(db, limit=WHATSAPP_CORRECTIONS_CONTEXT_LIMIT)
+    voice_examples = repo.recent_outbound_examples(db, personal=is_personal)
+
+    context_hint = (
+        f"You previously asked the user: \"{question}\" because the client's message was "
+        f"ambiguous. The user answered: \"{answer}\". Use that answer as the specific, "
+        "correct context for this reply — do not ask the question again or hedge."
+    )
+
+    try:
+        if suggestion.category == "complaint":
+            draft = classifier.draft_complaint_reply(
+                history,
+                message.body or "",
+                details.get("anger_level"),
+                language=message.language,
+                translation=message.translation,
+                instructions=instructions,
+                corrections=corrections,
+                voice_examples=voice_examples,
+            )
+        else:
+            draft = classifier.draft_reply(
+                history,
+                message.body or "",
+                suggestion.category or "other",
+                context_hint=context_hint,
+                language=message.language,
+                translation=message.translation,
+                instructions=instructions,
+                corrections=corrections,
+                personal=is_personal,
+                voice_examples=voice_examples,
+            )
+    except classifier.WhatsAppAIError:
+        logger.warning(
+            "[WHATSAPP] Drafting after clarification failed for suggestion %s — using fallback",
+            suggestion.id,
+        )
+        draft = "Got it, thanks for confirming — I'll follow up on that shortly."
+
+    details["needs_clarification"] = False
+    details["clarified_answer"] = answer
+    details["chip_label"] = wa_taxonomy.default_chip_label(suggestion.category) or "Ready to send"
+    suggestion.details = json.dumps(details)
+    suggestion.draft_text = draft
+    # The user just actively engaged with this — show the result immediately rather
+    # than making them wait out whatever Rule 9 delay the original message got.
+    suggestion.visible_after = None
+    db.commit()
+    db.refresh(suggestion)
+    return suggestion
+
+
+def forward_to_team(db: Session, suggestion: models.WhatsAppSuggestion) -> dict:
+    """Rule 14 — one-tap forward of the original client message to the assigned team
+    member's WhatsApp, using the same send path as any other outbound message. No
+    copy/paste, no switching apps — this is a real WAHA/Cloud API send, not a mailto-
+    style deep link."""
+    details = _details_dict(suggestion)
+    if details.get("forwarded_to"):
+        raise WhatsAppActionError("This was already forwarded")
+
+    rule = repo.find_forwarding_rule(
+        db, category=suggestion.category, payment_status=details.get("payment_status")
+    )
+    if rule is None:
+        raise WhatsAppActionError(
+            "No team member is assigned for this category yet — add one in Settings."
+        )
+
+    if suggestion.message_id is None:
+        raise WhatsAppActionError("Original message not found for this suggestion")
+    message = db.get(models.WhatsAppMessage, suggestion.message_id)
+    if message is None:
+        raise WhatsAppActionError("Original message not found for this suggestion")
+
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    contact_name = (contact.profile_name if contact else None) or (
+        contact.wa_id if contact else "Unknown"
+    )
+    forward_text = f'Forwarded from {contact_name}:\n"{(message.body or "").strip()}"'
+
+    team_contact = repo.upsert_contact(
+        db, wa_id=rule.team_member_wa_id, profile_name=rule.team_member_name, is_group=False
+    )
+    # Team members are an internal send target, not a client conversation — never let a
+    # reply from this number get pulled into the classifier/suggestion pipeline.
+    if team_contact.contact_type is None:
+        team_contact.contact_type = "team"
+    if not team_contact.is_excluded:
+        team_contact.is_excluded = True
+    db.flush()
+
+    sent = send_message(db, contact=team_contact, mode="text", text=forward_text)
+
+    details["forwarded_to"] = rule.label
+    details["forwarded_team_member"] = rule.team_member_name
+    details["forwarded_at"] = datetime.utcnow().isoformat()
+    suggestion.details = json.dumps(details)
+    db.commit()
+    db.refresh(suggestion)
+
+    return {
+        "ok": True,
+        "forwarded_to": rule.label,
+        "team_member_name": rule.team_member_name,
+        "sent_message_id": sent.id,
+    }
 
 
 def _to_calendar_iso(value: datetime) -> str:

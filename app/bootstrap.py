@@ -100,7 +100,39 @@ def bootstrap_database() -> None:
     _ensure_columns("whatsapp_suggestions", WHATSAPP_SUGGESTION_COLUMNS)
     _ensure_columns("whatsapp_feedback", WHATSAPP_FEEDBACK_COLUMNS)
     _backfill_whatsapp_group_contacts()
+    _seed_default_forwarding_rules()
     MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+# Rule 14 — "Forward to team": starting categories from the spec. team_member_wa_id is
+# left blank on purpose — the Forward button only appears once the user actually assigns
+# someone to a row in Settings, so seeding these can never silently forward anywhere.
+DEFAULT_FORWARDING_RULES: tuple[dict[str, str | None], ...] = (
+    {"label": "Accounts", "trigger_category": "payment", "trigger_payment_status": "received"},
+    {"label": "Production", "trigger_category": "order", "trigger_payment_status": None},
+    {"label": "Logistics", "trigger_category": "shipment", "trigger_payment_status": None},
+    {"label": "Support", "trigger_category": "complaint", "trigger_payment_status": None},
+)
+
+
+def _seed_default_forwarding_rules() -> None:
+    inspector = inspect(engine)
+    if "team_forwarding_rules" not in inspector.get_table_names():
+        return
+
+    with engine.begin() as connection:
+        existing = connection.execute(text("SELECT COUNT(*) FROM team_forwarding_rules")).scalar()
+        if existing:
+            return
+        for rule in DEFAULT_FORWARDING_RULES:
+            connection.execute(
+                text(
+                    "INSERT INTO team_forwarding_rules "
+                    "(label, trigger_category, trigger_payment_status, is_active, created_at) "
+                    "VALUES (:label, :trigger_category, :trigger_payment_status, 1, CURRENT_TIMESTAMP)"
+                ),
+                rule,
+            )
 
 
 def _backfill_whatsapp_group_contacts() -> None:

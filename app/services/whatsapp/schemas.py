@@ -55,6 +55,50 @@ class AddToCalendarRequest(BaseModel):
     )
 
 
+class ClarifyAnswerRequest(BaseModel):
+    """Body for POST /suggestions/{id}/clarify — the tap option the user picked."""
+
+    answer: str = Field(..., description="The exact tap-option text the user chose")
+
+
+class TeamForwardingRuleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    label: str
+    trigger_category: str
+    trigger_payment_status: str | None = None
+    team_member_name: str | None = None
+    team_member_wa_id: str | None = None
+    is_active: bool
+    created_at: datetime
+
+
+class TeamForwardingRuleListResponse(BaseModel):
+    items: list[TeamForwardingRuleResponse] = Field(default_factory=list)
+
+
+class CreateForwardingRuleRequest(BaseModel):
+    label: str = Field(..., min_length=1, max_length=100)
+    trigger_category: str = Field(..., description="A WhatsApp category, e.g. 'payment', 'order'")
+    trigger_payment_status: str | None = Field(
+        default=None, description="Only for trigger_category='payment' — 'received' or 'overdue'"
+    )
+    team_member_name: str | None = None
+    team_member_wa_id: str | None = Field(
+        default=None, description="WhatsApp number to forward to, international format"
+    )
+
+
+class UpdateForwardingRuleRequest(BaseModel):
+    label: str | None = None
+    trigger_category: str | None = None
+    trigger_payment_status: str | None = None
+    team_member_name: str | None = None
+    team_member_wa_id: str | None = None
+    is_active: bool | None = None
+
+
 class WhatsAppContactResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -132,6 +176,8 @@ class WhatsAppSuggestionResponse(BaseModel):
     message_translation: str | None = None
     message_language: str | None = None
     visible_after: datetime | None = None
+    forward_label: str | None = None
+    forwarded_to: str | None = None
 
 
 class WhatsAppSuggestionListResponse(BaseModel):

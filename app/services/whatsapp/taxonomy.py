@@ -9,6 +9,7 @@ CLASSIFIABLE_CATEGORIES = (
     "document",
     "complaint",
     "shipment",
+    "order",
     "personal_date",
     "personal_task",
     "family_plan",
@@ -26,6 +27,7 @@ WORK_CATEGORIES = (
     "document",
     "complaint",
     "shipment",
+    "order",
     "budget",
     "scope",
     "timeline",
@@ -62,6 +64,7 @@ UI_SECTIONS: tuple[dict[str, Any], ...] = (
             "lead",
             "document",
             "shipment",
+            "order",
             "budget",
             "scope",
             "timeline",
@@ -137,6 +140,15 @@ _CATEGORY_META: dict[str, dict[str, Any]] = {
         "demo_messages": [
             "Shipment cleared customs today",
             "Package delayed by 2 days",
+        ],
+    },
+    "order": {
+        "label": "Order confirmed",
+        "lane": "work",
+        "chip_label": "Order confirmed — acknowledge & proceed",
+        "demo_messages": [
+            "We'll go ahead with 500 units",
+            "Confirming the order for the blue variant",
         ],
     },
     "budget": {

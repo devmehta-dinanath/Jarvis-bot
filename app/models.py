@@ -430,6 +430,51 @@ class WhatsAppFeedback(Base):
     )
 
 
+class WhatsAppLearningState(Base):
+    """Single global row (this is a single-user app) anchoring the 7-day silent
+    observation window: Personal OS learns the user's reply style from
+    observation_started_at with no suggestions shown, then starts suggesting from
+    Day 7 onward. See app/services/whatsapp/repository.py::get_or_create_learning_state
+    for how this gets anchored (retroactively, to existing history, when available)."""
+
+    __tablename__ = "whatsapp_learning_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    observation_started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class TeamForwardingRule(Base):
+    """Rule 14 — 'forward to team'. Maps a detection trigger (a classified category, plus
+    an optional refinement like payment_status='received') to a team member's WhatsApp
+    number. When a suggestion matches an active rule with a configured wa_id, the UI
+    shows a one-tap Forward button (see routes._suggestion_response /
+    actions.forward_to_team). Starting rows (Accounts/Production/Logistics/Support) are
+    seeded with empty team_member_wa_id — the Forward button only ever appears once the
+    user has actually assigned someone in Settings."""
+
+    __tablename__ = "team_forwarding_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Matches WhatsAppSuggestion.category (e.g. "payment", "order", "shipment", "complaint").
+    trigger_category: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # Optional refinement — only used for category="payment" today ("received" vs "overdue").
+    trigger_payment_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    team_member_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    team_member_wa_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
 class UserInstruction(Base):
     """A standing plain-language rule the user configured in Settings — e.g. 'Do not read
     group messages' or 'Always reply formally to clients'. Fed into the WhatsApp classifier

@@ -25,6 +25,7 @@ CATEGORIES = (
     "document",
     "complaint",
     "shipment",
+    "order",
     "personal_date",
     "personal_task",
     "family_plan",
@@ -40,6 +41,7 @@ REPLY_CATEGORIES = (
     "document",
     "complaint",
     "shipment",
+    "order",
     "budget",
     "scope",
     "timeline",
@@ -59,6 +61,7 @@ _CATEGORY_PRIORITY = {
     "meeting": "high",
     "document": "high",
     "follow_up": "high",
+    "order": "high",
     "shipment": "medium",
     "personal_date": "low",
     "personal_task": "low",
@@ -93,6 +96,12 @@ _CATEGORY_GUIDE = (
     "dispatch, transit, delay, or receipt confirmation, WITHOUT an angry tone "
     "('Shipment cleared customs', 'Package delayed by 2 days', 'Goods received in good condition', "
     "'Out for delivery today').\n"
+    "- order: the client CONFIRMS placing an order or purchase — a definite commitment to buy, "
+    "not just an inquiry ('We'll go ahead with 500 units', 'Confirming the order for the blue "
+    "variant', 'Yes, let's book it', 'Please proceed with the order'). Distinguish from 'lead' "
+    "(a NEW prospective inquiry, not yet committed to buying) and from 'payment' (money actually "
+    "changing hands, not the order commitment itself) and from 'shipment' (delivery status of an "
+    "order already placed).\n"
     "- budget: pricing, cost, quotation, or any amount discussion with an EXISTING client that is "
     "not itself a payment notification.\n"
     "- scope: questions about project scope, features, deliverables, requirements, or details.\n"
@@ -206,6 +215,19 @@ _CLASSIFY_SYSTEM = (
     "- SPAM: if the message is clearly promotional, prize/lottery/offer spam, bulk broadcast, "
     "or sent by an unknown number with no conversation history and no legitimate business intent, "
     "set category='spam' and is_important=false. Never surface spam as an action item.\n"
+    "- CLARIFYING QUESTIONS: this is RARE — most messages should NOT trigger it. Only set "
+    "needs_clarification=true when the message could concretely mean 2-3 SPECIFIC, materially "
+    "different things — e.g. the conversation history already mentions two distinct orders/"
+    "shipments/dates/topics, and this message doesn't say which one it's about, so a drafted "
+    "reply would genuinely risk answering about the wrong one. Do NOT use it for ordinary wording "
+    "uncertainty, a single topic with unclear phrasing, or whenever you'd otherwise just use a "
+    "medium confidence score — in those cases classify normally instead. When you do use it: "
+    "clarifying_question is ONE short question (under 12 words) naming the real ambiguity, and "
+    "clarifying_options is a list of 2-3 SHORT (2-5 word) tap-friendly answers drawn from what's "
+    "concretely in the conversation (e.g. 'April shipment', 'May shipment'), optionally ending "
+    "with a catch-all like 'Not sure' — never something requiring the user to type. When "
+    "needs_clarification is true, set confidence low (this is explicitly the low-confidence case) "
+    "and leave clarifying_question/clarifying_options non-null; otherwise both must be null.\n"
     "- LIFE LANE vs WORK LANE: this system has two lanes that feel completely different to the user. "
     "WORK LANE (meeting, payment, lead, document, complaint, shipment, budget, scope, timeline, "
     "follow_up, other) — these produce urgent chips with business tone, draft replies, and "
@@ -249,6 +271,10 @@ _CLASSIFY_SYSTEM = (
     "family/a friend: informal wording, slang, no business framing, e.g. 'hey', 'where are you', "
     "'lets connect bro'; false for a professional-sounding message even if brief, e.g. 'Hi, "
     "hope you're well — following up on the quote'), "
+    "needs_clarification (boolean — per the CLARIFYING QUESTIONS rule above; false by default), "
+    "clarifying_question (string or null — required if needs_clarification is true), "
+    "clarifying_options (array of 2-3 short strings, or null — required if needs_clarification "
+    "is true), "
     "confidence (integer 0-100 — how certain you are that your category is correct; "
     "only use 80+ when the message unambiguously fits that category; "
     "use lower values when the message is vague, ambiguous, or could fit multiple categories)."
@@ -258,17 +284,23 @@ def _corrections_block(corrections: list[dict]) -> str:
     """Build a system-level memory block from past user corrections.
 
     Each correction dict is expected to have:
+      - feedback_type (str) — only "wrong" (a genuine category mistake) belongs here;
+        "edited" means the category was fine and only the drafted wording was
+        corrected, which is a drafting signal (_reply_corrections_block), not a
+        classification one — repeating it here would wrongly imply the category itself
+        was ever in question.
       - original_category (str)
       - message_snippet (str | None)
       - correct_response (str | None)
     """
-    if not corrections:
+    wrong_only = [c for c in corrections if c.get("feedback_type", "wrong") == "wrong"]
+    if not wrong_only:
         return ""
     lines = [
         "\n\nCORRECTION MEMORY — the user marked these past classifications as WRONG. "
         "Study them carefully. NEVER repeat the same mistake:\n"
     ]
-    for i, c in enumerate(corrections, 1):
+    for i, c in enumerate(wrong_only, 1):
         snippet = (c.get("message_snippet") or "").strip()
         if len(snippet) > 120:
             snippet = snippet[:120].rstrip() + "..."
@@ -677,6 +709,23 @@ def classify_message(
 
     lane = "life" if category in LIFE_LANE_CATEGORIES else "work"
 
+    clarifying_question = (data.get("clarifying_question") or "").strip() or None
+    raw_options = data.get("clarifying_options")
+    clarifying_options = None
+    if isinstance(raw_options, list):
+        cleaned = [str(o).strip() for o in raw_options if str(o).strip()][:3]
+        if len(cleaned) >= 2:
+            clarifying_options = cleaned
+    # Fail closed on malformed output: only ever act on this when the model gave us
+    # everything a tap-option question actually needs (a question + 2-3 real options).
+    # Also never for an unimportant message (greeting/small-talk) — nothing to clarify.
+    needs_clarification = bool(
+        is_important and data.get("needs_clarification") and clarifying_question and clarifying_options
+    )
+    if not needs_clarification:
+        clarifying_question = None
+        clarifying_options = None
+
     return {
         "is_important": is_important,
         "category": category,
@@ -692,6 +741,9 @@ def classify_message(
         "translation": translation,
         "summary": (data.get("summary") or "").strip() or None,
         "personal_tone": bool(data.get("personal_tone", False)),
+        "needs_clarification": needs_clarification,
+        "clarifying_question": clarifying_question,
+        "clarifying_options": clarifying_options,
     }
 
 
@@ -706,6 +758,26 @@ def _tone_instructions_block(instructions: list[str] | None) -> str:
     return "\n".join(lines)
 
 
+def _voice_examples_block(examples: list[str] | None) -> str:
+    """Real messages the user actually sent (see repo.recent_outbound_examples) — the
+    goal is for drafts to sound like the user wrote them, not like an AI. Skipped below
+    a minimum sample size to avoid overfitting a whole voice to one message."""
+    if not examples or len(examples) < 2:
+        return ""
+    lines = [
+        "\n\nTHE USER'S OWN VOICE — recent messages the user actually wrote and sent "
+        "themselves (not AI drafts). Match this tone, length, formality, language mix, "
+        "and sign-off style as closely as the situation allows — the goal is for your "
+        "draft to read like the user wrote it personally, not like a generic AI reply:\n"
+    ]
+    for i, text in enumerate(examples, 1):
+        snippet = text.strip()
+        if len(snippet) > 200:
+            snippet = snippet[:200].rstrip() + "..."
+        lines.append(f"{i}. \"{snippet}\"")
+    return "\n".join(lines)
+
+
 def draft_reply(
     history: list[dict[str, str]],
     message: str,
@@ -717,6 +789,7 @@ def draft_reply(
     instructions: list[str] | None = None,
     corrections: list[dict] | None = None,
     personal: bool = False,
+    voice_examples: list[str] | None = None,
 ) -> str:
     if personal and context_hint is None and category == "greeting":
         context_hint = (
@@ -745,6 +818,11 @@ def draft_reply(
             "This is a shipment/delivery update. Acknowledge it appropriately and keep the client "
             "informed."
         ),
+        "order": (
+            "The client has confirmed an order/purchase. Reply warmly, confirm you're proceeding, "
+            "and mention next steps (processing, production, or timeline) if appropriate — do not "
+            "invent a specific date you can't commit to."
+        ),
         "greeting": (
             "This is a casual/greeting message — there is no task to action. Reply warmly and "
             "briefly in a friendly tone that matches the client's message (including festival or "
@@ -765,6 +843,7 @@ def draft_reply(
         (_REPLY_SYSTEM_PERSONAL if personal else _REPLY_SYSTEM)
         + _tone_instructions_block(instructions)
         + _reply_corrections_block(corrections)
+        + _voice_examples_block(voice_examples)
     )
     return _chat(system, user_content, max_tokens=160, json_mode=False).strip()
 
@@ -778,6 +857,7 @@ def draft_complaint_reply(
     translation: str | None = None,
     instructions: list[str] | None = None,
     corrections: list[dict] | None = None,
+    voice_examples: list[str] | None = None,
 ) -> str:
     """Draft an empathetic reply to an unhappy client (acknowledge first, then resolve)."""
     tone = {
@@ -798,6 +878,7 @@ def draft_complaint_reply(
         _COMPLAINT_SYSTEM
         + _tone_instructions_block(instructions)
         + _reply_corrections_block(corrections)
+        + _voice_examples_block(voice_examples)
     )
     return _chat(system, user_content, max_tokens=180, json_mode=False).strip()
 

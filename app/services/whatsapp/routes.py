@@ -20,6 +20,8 @@ from app.services.whatsapp import webhook as wa_webhook
 from app.services.whatsapp.actions import WhatsAppActionError
 from app.services.whatsapp.schemas import (
     AddToCalendarRequest,
+    ClarifyAnswerRequest,
+    CreateForwardingRuleRequest,
     CreateInstructionRequest,
     DismissAllResponse,
     FeedbackRequest,
@@ -29,6 +31,9 @@ from app.services.whatsapp.schemas import (
     SendMessageRequest,
     SendReplyRequest,
     SetContactExcludedRequest,
+    TeamForwardingRuleListResponse,
+    TeamForwardingRuleResponse,
+    UpdateForwardingRuleRequest,
     UpdateInstructionRequest,
     UserInstructionListResponse,
     UserInstructionResponse,
@@ -158,6 +163,61 @@ def delete_instruction(instruction_id: int, db: Session = Depends(get_db)) -> No
     db.commit()
 
 
+@router.get("/forwarding-rules", response_model=TeamForwardingRuleListResponse)
+def list_forwarding_rules(db: Session = Depends(get_db)) -> TeamForwardingRuleListResponse:
+    """Rule 14 — 'forward to team' category → team member mappings configured in
+    Settings. See TeamForwardingRule in models.py."""
+    items = repo.list_forwarding_rules(db)
+    return TeamForwardingRuleListResponse(
+        items=[TeamForwardingRuleResponse.model_validate(r) for r in items]
+    )
+
+
+@router.post(
+    "/forwarding-rules",
+    response_model=TeamForwardingRuleResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_forwarding_rule(
+    payload: CreateForwardingRuleRequest,
+    db: Session = Depends(get_db),
+) -> TeamForwardingRuleResponse:
+    rule = repo.create_forwarding_rule(
+        db,
+        label=payload.label,
+        trigger_category=payload.trigger_category,
+        trigger_payment_status=payload.trigger_payment_status,
+        team_member_name=payload.team_member_name,
+        team_member_wa_id=payload.team_member_wa_id,
+    )
+    db.commit()
+    db.refresh(rule)
+    return TeamForwardingRuleResponse.model_validate(rule)
+
+
+@router.patch("/forwarding-rules/{rule_id}", response_model=TeamForwardingRuleResponse)
+def update_forwarding_rule(
+    rule_id: int,
+    payload: UpdateForwardingRuleRequest,
+    db: Session = Depends(get_db),
+) -> TeamForwardingRuleResponse:
+    fields = payload.model_dump(exclude_unset=True)
+    rule = repo.update_forwarding_rule(db, rule_id, **fields)
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Forwarding rule not found")
+    db.commit()
+    db.refresh(rule)
+    return TeamForwardingRuleResponse.model_validate(rule)
+
+
+@router.delete("/forwarding-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_forwarding_rule(rule_id: int, db: Session = Depends(get_db)) -> None:
+    deleted = repo.delete_forwarding_rule(db, rule_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Forwarding rule not found")
+    db.commit()
+
+
 @router.get("/contacts", response_model=WhatsAppContactListResponse)
 def list_contacts(
     limit: int = Query(default=50, ge=1, le=200),
@@ -274,6 +334,42 @@ def send_reply(
         wa_message_id=message.wa_message_id,
         message_id=message.id,
     )
+
+
+@router.post("/suggestions/{suggestion_id}/clarify", response_model=WhatsAppSuggestionResponse)
+def answer_clarification(
+    suggestion_id: int,
+    payload: ClarifyAnswerRequest,
+    db: Session = Depends(get_db),
+) -> WhatsAppSuggestionResponse:
+    """Rule 13 — the user tapped one of the clarifying tap options; regenerate the
+    draft using their answer, then return the updated card."""
+    suggestion = repo.get_suggestion(db, suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
+    try:
+        actions.answer_clarification(db, suggestion, answer=payload.answer)
+    except WhatsAppActionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _suggestion_response(suggestion, db)
+
+
+@router.post("/suggestions/{suggestion_id}/forward", response_model=WhatsAppSuggestionResponse)
+def forward_to_team(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+) -> WhatsAppSuggestionResponse:
+    """Rule 14 — one-tap forward of the original message to the assigned team member."""
+    suggestion = repo.get_suggestion(db, suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
+    try:
+        actions.forward_to_team(db, suggestion)
+    except WhatsAppActionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except wa_client.WhatsAppApiError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return _suggestion_response(suggestion, db)
 
 
 @router.post("/suggestions/{suggestion_id}/add-to-calendar")
@@ -450,6 +546,20 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
     draft_ready = suggestion.visible_after is None or suggestion.visible_after <= datetime.utcnow()
     draft_text = suggestion.draft_text if draft_ready else None
 
+    # Rule 14 — Forward to team: show a one-tap Forward button only when an active rule
+    # is configured (a real team member wa_id assigned) for this category, and only
+    # while it hasn't already been forwarded.
+    forward_label = None
+    forwarded_to = (details or {}).get("forwarded_to")
+    if db is not None and not forwarded_to:
+        rule = repo.find_forwarding_rule(
+            db,
+            category=suggestion.category,
+            payment_status=(details or {}).get("payment_status"),
+        )
+        if rule is not None:
+            forward_label = rule.label
+
     return WhatsAppSuggestionResponse(
         id=suggestion.id,
         contact_id=suggestion.contact_id,
@@ -473,4 +583,6 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         message_translation=message_translation,
         message_language=message_language,
         visible_after=suggestion.visible_after,
+        forward_label=forward_label,
+        forwarded_to=forwarded_to,
     )

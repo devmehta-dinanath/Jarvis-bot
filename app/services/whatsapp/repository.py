@@ -2,12 +2,18 @@ import json
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
 from app.config import WHATSAPP_CUSTOMER_WINDOW_HOURS
 
 logger = logging.getLogger(__name__)
+
+# Sentinel distinguishing "field not provided" from "field explicitly set to None" in
+# partial-update functions (e.g. update_forwarding_rule) whose columns are legitimately
+# nullable — a plain `None` default can't tell those two cases apart.
+_UNSET = object()
 
 
 def upsert_contact(
@@ -343,6 +349,20 @@ def pending_nudge_exists(db: Session, contact_id: int) -> bool:
     )
 
 
+def pending_clarification_exists(db: Session, contact_id: int) -> bool:
+    """Rule 13 — max one clarifying question per conversation at a time."""
+    return (
+        db.query(models.WhatsAppSuggestion.id)
+        .filter(
+            models.WhatsAppSuggestion.contact_id == contact_id,
+            models.WhatsAppSuggestion.kind == "clarify",
+            models.WhatsAppSuggestion.status == "pending",
+        )
+        .first()
+        is not None
+    )
+
+
 def suggestion_exists_for_message(db: Session, message_id: int) -> bool:
     return (
         db.query(models.WhatsAppSuggestion.id)
@@ -459,15 +479,19 @@ def load_corrections_for_prompt(
     *,
     limit: int = 20,
 ) -> list[dict]:
+    """"wrong" = genuine category mistakes; "edited" = the AI's wording was corrected
+    before sending, category was fine. Both carry a usable correct_response, but only
+    "wrong" belongs in classifier._corrections_block — see feedback_type filtering there."""
     rows = (
         db.query(models.WhatsAppFeedback)
-        .filter(models.WhatsAppFeedback.feedback_type == "wrong")
+        .filter(models.WhatsAppFeedback.feedback_type.in_(["wrong", "edited"]))
         .order_by(models.WhatsAppFeedback.id.desc())
         .limit(limit)
         .all()
     )
     return [
         {
+            "feedback_type": r.feedback_type,
             "original_category": r.original_category,
             "original_confidence": r.original_confidence,
             "message_snippet": r.message_snippet,
@@ -475,6 +499,60 @@ def load_corrections_for_prompt(
         }
         for r in rows
     ]
+
+
+def recent_outbound_examples(
+    db: Session,
+    *,
+    personal: bool,
+    limit: int = 8,
+) -> list[str]:
+    """Real messages the user actually sent — the ground truth for "how do they write."
+    Scoped to personal vs work contacts, matching the tone split already used for
+    drafting (see classifier._REPLY_SYSTEM_PERSONAL / service.py's is_personal checks)."""
+    query = (
+        db.query(models.WhatsAppMessage)
+        .join(models.WhatsAppContact, models.WhatsAppMessage.contact_id == models.WhatsAppContact.id)
+        .filter(models.WhatsAppMessage.direction == "outbound")
+        .filter(models.WhatsAppMessage.body.isnot(None))
+    )
+    if personal:
+        query = query.filter(models.WhatsAppContact.contact_type == "personal")
+    else:
+        query = query.filter(
+            (models.WhatsAppContact.contact_type.is_(None))
+            | (models.WhatsAppContact.contact_type != "personal")
+        )
+    rows = (
+        query.order_by(models.WhatsAppMessage.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    return [r.body.strip() for r in rows if r.body and r.body.strip()]
+
+
+def get_or_create_learning_state(db: Session) -> models.WhatsAppLearningState:
+    """The single global anchor for the 7-day silent observation window (see
+    WhatsAppLearningState). Anchored retroactively to the earliest outbound message
+    already on record, so an account with existing history doesn't lose suggestions
+    for a week the moment this feature ships — a genuinely fresh install (no outbound
+    history at all) anchors to now, giving it the real 7-day window."""
+    state = db.query(models.WhatsAppLearningState).first()
+    if state is not None:
+        return state
+
+    earliest_outbound = (
+        db.query(func.min(models.WhatsAppMessage.timestamp))
+        .filter(models.WhatsAppMessage.direction == "outbound")
+        .scalar()
+    )
+    state = models.WhatsAppLearningState(
+        observation_started_at=earliest_outbound or datetime.utcnow()
+    )
+    db.add(state)
+    db.commit()
+    db.refresh(state)
+    return state
 
 
 def list_contacts(
@@ -589,3 +667,100 @@ def within_reply_window(
         return False
     now = now or datetime.utcnow()
     return now - message.timestamp <= timedelta(hours=WHATSAPP_CUSTOMER_WINDOW_HOURS)
+
+
+# ── Rule 14 — Forward to team ──────────────────────────────────────────────
+
+
+def list_forwarding_rules(db: Session) -> list[models.TeamForwardingRule]:
+    return (
+        db.query(models.TeamForwardingRule)
+        .order_by(models.TeamForwardingRule.created_at.asc())
+        .all()
+    )
+
+
+def create_forwarding_rule(
+    db: Session,
+    *,
+    label: str,
+    trigger_category: str,
+    trigger_payment_status: str | None = None,
+    team_member_name: str | None = None,
+    team_member_wa_id: str | None = None,
+) -> models.TeamForwardingRule:
+    rule = models.TeamForwardingRule(
+        label=label.strip(),
+        trigger_category=trigger_category.strip(),
+        trigger_payment_status=(trigger_payment_status or "").strip() or None,
+        team_member_name=(team_member_name or "").strip() or None,
+        team_member_wa_id=(team_member_wa_id or "").strip() or None,
+    )
+    db.add(rule)
+    db.flush()
+    return rule
+
+
+def update_forwarding_rule(
+    db: Session,
+    rule_id: int,
+    *,
+    label: str | None = None,
+    trigger_category: str | None = None,
+    trigger_payment_status: str | None | object = _UNSET,
+    team_member_name: str | None | object = _UNSET,
+    team_member_wa_id: str | None | object = _UNSET,
+    is_active: bool | None = None,
+) -> models.TeamForwardingRule | None:
+    rule = db.get(models.TeamForwardingRule, rule_id)
+    if rule is None:
+        return None
+    if label is not None:
+        rule.label = label.strip()
+    if trigger_category is not None:
+        rule.trigger_category = trigger_category.strip()
+    if trigger_payment_status is not _UNSET:
+        rule.trigger_payment_status = (trigger_payment_status or "").strip() or None
+    if team_member_name is not _UNSET:
+        rule.team_member_name = (team_member_name or "").strip() or None
+    if team_member_wa_id is not _UNSET:
+        rule.team_member_wa_id = (team_member_wa_id or "").strip() or None
+    if is_active is not None:
+        rule.is_active = is_active
+    db.flush()
+    return rule
+
+
+def delete_forwarding_rule(db: Session, rule_id: int) -> bool:
+    rule = db.get(models.TeamForwardingRule, rule_id)
+    if rule is None:
+        return False
+    db.delete(rule)
+    return True
+
+
+def find_forwarding_rule(
+    db: Session,
+    *,
+    category: str | None,
+    payment_status: str | None = None,
+) -> models.TeamForwardingRule | None:
+    """The matching active, fully-configured rule for a suggestion, if any — used to
+    decide whether the UI shows a one-tap Forward button (see routes._suggestion_response)."""
+    if not category:
+        return None
+    rows = (
+        db.query(models.TeamForwardingRule)
+        .filter(
+            models.TeamForwardingRule.is_active.is_(True),
+            models.TeamForwardingRule.trigger_category == category,
+        )
+        .all()
+    )
+    for rule in rows:
+        if not rule.team_member_wa_id:
+            continue
+        if rule.trigger_payment_status and rule.trigger_payment_status != payment_status:
+            continue
+        return rule
+    return None
