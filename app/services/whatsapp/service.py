@@ -213,6 +213,7 @@ def _draft_reply_with_budget(
     message=None,
     instructions: list[str] | None = None,
     corrections: list[dict] | None = None,
+    personal: bool = False,
 ) -> str:
     if WHATSAPP_AI_DRAFTS_ENABLED:
         try:
@@ -232,6 +233,7 @@ def _draft_reply_with_budget(
                 context_hint=context_hint,
                 instructions=instructions,
                 corrections=corrections,
+                personal=personal,
                 **_draft_lang_kwargs(result=result, message=message),
             )
         except WhatsAppAIError:
@@ -386,6 +388,9 @@ class WhatsAppService:
         )
         contact_name = message.contact.profile_name if message.contact is not None else None
         is_known_sender = contact_name is not None
+        is_personal_contact = bool(
+            message.contact is not None and message.contact.contact_type == "personal"
+        )
         instructions = [
             i.text for i in repo.list_instructions(db, active_only=True)
         ]
@@ -407,6 +412,7 @@ class WhatsAppService:
                     instructions=instructions or None,
                     contact_name=contact_name,
                     is_known_sender=is_known_sender,
+                    is_personal_contact=is_personal_contact,
                 )
             except WhatsAppAIError as exc:
                 logger.warning(
@@ -453,10 +459,21 @@ class WhatsAppService:
             repo.mark_contact_personal(db, message.contact_id)
 
         confidence = result.get("confidence")
-        # Fail closed: an unparseable/missing confidence score is treated as "not confident"
-        # rather than bypassing the gate — no category (including payment/complaint) is exempt
-        # from the threshold, since a wrong suggestion is worse than a missed one.
-        below_threshold = confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
+        is_urgent_category = category in ("payment", "complaint", "lead")
+        is_life_lane = category in classifier.LIFE_LANE_CATEGORIES
+        reads_as_personal = is_personal_contact or bool(result.get("personal_tone"))
+
+        # Fail closed for client/WORK-lane messages: an unparseable/missing confidence score
+        # is treated as "not confident" and no such category (including payment/complaint) is
+        # exempt, since a wrong suggestion to a client is worse than a missed one. A contact
+        # already established as personal (family/close friend, from an earlier
+        # personal_date/personal_task/family_plan message) — or whose first message simply
+        # reads as personal in tone — is a different risk profile: a slightly-off casual reply
+        # costs nothing, so their non-urgent chatter always gets a drafted attempt instead of
+        # being held to the same client-accuracy bar.
+        below_threshold = (
+            confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
+        ) and not (reads_as_personal and not is_urgent_category)
 
         # Rule 9 — reply threshold/timing rules. This is a client-triage rule and does not
         # apply to LIFE lane messages (family/close friends, handled entirely separately).
@@ -464,8 +481,6 @@ class WhatsAppService:
         # known-contact/reply-cooldown gates below. Everything else must be from a contact
         # with prior history, and the user must not have replied to them within the cooldown
         # window, or it is suppressed entirely.
-        is_urgent_category = category in ("payment", "complaint", "lead")
-        is_life_lane = category in classifier.LIFE_LANE_CATEGORIES
         bypasses_reply_rules = is_urgent_category or is_life_lane
         known_contact = prior_count > 0
         recently_replied = (
@@ -526,7 +541,7 @@ class WhatsAppService:
             )
         elif category == "greeting":
             suggestion = self._create_greeting_suggestion(
-                db, message, history, body, instructions, corrections
+                db, message, history, body, result, instructions, corrections
             )
 
         if suggestion is not None:
@@ -574,6 +589,9 @@ class WhatsAppService:
             "life" if category in classifier.LIFE_LANE_CATEGORIES else "work"
         )
         confidence: int | None = result.get("confidence")
+        is_personal = bool(
+            message.contact is not None and message.contact.contact_type == "personal"
+        ) or bool(result.get("personal_tone"))
 
         if category == "payment":
             return self._create_payment_suggestion(
@@ -661,7 +679,13 @@ class WhatsAppService:
             return suggestion
 
         draft = _draft_reply_with_budget(
-            history, body, category, result=result, instructions=instructions, corrections=corrections
+            history,
+            body,
+            category,
+            result=result,
+            instructions=instructions,
+            corrections=corrections,
+            personal=is_personal,
         )
 
         details = None
@@ -905,6 +929,7 @@ class WhatsAppService:
         message,
         history,
         body,
+        result: dict | None = None,
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
     ):
@@ -913,6 +938,14 @@ class WhatsAppService:
         if repo.pending_nudge_exists(db, message.contact_id):
             return None
 
+        # A contact already established as personal (from a prior clean personal_date/
+        # personal_task/family_plan hit) is the strongest signal; failing that, fall back to
+        # this message's own tone — a brand-new contact's first "hey" shouldn't get a
+        # client-service-toned reply just because we haven't seen enough history yet.
+        is_personal = bool(
+            message.contact is not None and message.contact.contact_type == "personal"
+        ) or bool((result or {}).get("personal_tone"))
+
         draft = _draft_reply_with_budget(
             history,
             body,
@@ -920,6 +953,7 @@ class WhatsAppService:
             message=message,
             instructions=instructions,
             corrections=corrections,
+            personal=is_personal,
         )
 
         details = {
@@ -933,7 +967,7 @@ class WhatsAppService:
             kind="nudge",
             category="greeting",
             priority="low",
-            lane="work",
+            lane="life" if is_personal else "work",
             draft_text=draft,
             details=details,
         )

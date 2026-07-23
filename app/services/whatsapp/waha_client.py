@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import httpx
+from urllib.parse import quote
 
 from app.config import WAHA_API_KEY, WAHA_BASE_URL, WAHA_SESSION
 
@@ -15,6 +16,9 @@ _REQUEST_TIMEOUT_SECONDS = 15.0
 
 # lid (@lid) → phone digits cache (WhatsApp LID mappings are stable).
 _lid_to_pn_cache: dict[str, str | None] = {}
+
+# group JID → group subject cache (a group's name rarely changes mid-session).
+_group_name_cache: dict[str, str | None] = {}
 
 
 class WahaApiError(Exception):
@@ -189,6 +193,52 @@ def resolve_lid_to_phone(lid: str) -> str | None:
     else:
         logger.info("[WAHA] No phone mapping for LID %s", value)
     return pn
+
+
+def _clean_name(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def fetch_group_name(group_id: str) -> str | None:
+    """Best-effort fetch of a group's subject/name via the WAHA REST API.
+
+    Webhook payloads only ever carry the *sender's* pushName (see
+    ``webhook._waha_profile_name``) — never the group's own subject — so a group's
+    display name has to be looked up separately. Tries the dedicated groups endpoint
+    first, then falls back to the general chats endpoint some WAHA engines expose
+    instead; either may return the name under ``name`` or ``subject`` depending on
+    engine/version, so both are checked. Cached in-memory per process.
+    """
+    value = (group_id or "").strip()
+    if not value.endswith("@g.us"):
+        return None
+    if value in _group_name_cache:
+        return _group_name_cache[value]
+
+    encoded = quote(value, safe="")
+    name: str | None = None
+
+    data = _get(f"/api/{WAHA_SESSION}/groups/{encoded}")
+    if isinstance(data, dict):
+        name = _clean_name(data.get("name")) or _clean_name(data.get("subject"))
+
+    if not name:
+        data = _get(f"/api/{WAHA_SESSION}/chats/{encoded}")
+        if isinstance(data, dict):
+            name = _clean_name(data.get("name")) or _clean_name(data.get("subject"))
+
+    _group_name_cache[value] = name
+    if name:
+        logger.info("[WAHA] Resolved group name for %s → %s", value, name)
+    else:
+        logger.info(
+            "[WAHA] Could not resolve a name for group %s — groups/chats endpoint "
+            "returned no name/subject field",
+            value,
+        )
+    return name
 
 
 def resolve_contact_wa_id(peer: str, body: dict[str, Any] | None = None) -> str:

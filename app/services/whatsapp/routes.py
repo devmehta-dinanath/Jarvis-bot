@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
@@ -369,8 +370,6 @@ def dismiss_suggestion(
     suggestion_id: int,
     db: Session = Depends(get_db),
 ) -> WhatsAppSuggestionResponse:
-    from datetime import datetime
-
     suggestion = repo.get_suggestion(db, suggestion_id)
     if suggestion is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
@@ -443,6 +442,14 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
                 message_translation = message.translation
                 message_language = message.language
 
+    # Rule 9 timing (instant/30min/4-6h) governs when the DRAFTED REPLY is ready to show —
+    # the card/message itself is always listed as soon as it's classified (list_suggestions
+    # no longer filters on visible_after). Until the timer passes, hide draft_text so the UI
+    # renders it exactly like the existing "no draft yet" state (same as a low-confidence
+    # nudge) rather than inventing a new one.
+    draft_ready = suggestion.visible_after is None or suggestion.visible_after <= datetime.utcnow()
+    draft_text = suggestion.draft_text if draft_ready else None
+
     return WhatsAppSuggestionResponse(
         id=suggestion.id,
         contact_id=suggestion.contact_id,
@@ -453,7 +460,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         lane=getattr(suggestion, "lane", None),
         confidence=getattr(suggestion, "confidence", None),
         status=suggestion.status,
-        draft_text=suggestion.draft_text,
+        draft_text=draft_text,
         details=details,
         created_at=suggestion.created_at,
         resolved_at=suggestion.resolved_at,
@@ -465,4 +472,5 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         message_summary=message_summary,
         message_translation=message_translation,
         message_language=message_language,
+        visible_after=suggestion.visible_after,
     )

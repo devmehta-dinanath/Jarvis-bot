@@ -178,7 +178,17 @@ _CLASSIFY_SYSTEM = (
     "complaints, or business urgency ('this is critical for our launch' is NOT a safety concern). "
     "Detect the message language. Decide whether the message is important and needs action. "
     "Greetings, small-talk, thanks, emojis-only, and acknowledgements are NOT important "
-    "(set is_important=false, category=greeting). "
+    "(set is_important=false, category=greeting). This also covers casual check-in QUESTIONS "
+    "that carry no business content and no concrete task/plan/date — 'where are you', 'what's "
+    "the plan today', 'you up?', 'hi bro lets connect' are just as much small-talk as 'hey' is, "
+    "even though they're phrased as questions; do not treat 'it's phrased as a question' as a "
+    "reason to call something important on its own. Set is_important=false, category=greeting, "
+    "and use confidence 80+ for this call whenever the message has no business/client language "
+    "(no pricing, deadline, order, deliverable, complaint, or request for a document) and the "
+    "conversation history doesn't establish an existing business/client relationship — recognizing "
+    "'this has nothing business-actionable in it' does not require being certain about anything "
+    "else. Reserve low confidence for genuine ambiguity — e.g. history shows an active work "
+    "thread and this could plausibly be a client follow-up on it.\n"
     "Important messages MUST be classified into exactly one category:\n"
     f"{_CATEGORY_GUIDE}\n"
     "IMPORTANT CLASSIFICATION RULES:\n"
@@ -235,6 +245,10 @@ _CLASSIFY_SYSTEM = (
     "shipment_status ('delayed', 'good', or null), "
     "language (the detected language name), translation (English translation or null), "
     "summary (one short sentence describing the ask), "
+    "personal_tone (boolean — true if THIS message reads like a casual personal text from "
+    "family/a friend: informal wording, slang, no business framing, e.g. 'hey', 'where are you', "
+    "'lets connect bro'; false for a professional-sounding message even if brief, e.g. 'Hi, "
+    "hope you're well — following up on the quote'), "
     "confidence (integer 0-100 — how certain you are that your category is correct; "
     "only use 80+ when the message unambiguously fits that category; "
     "use lower values when the message is vague, ambiguous, or could fit multiple categories)."
@@ -390,6 +404,15 @@ _REPLY_SYSTEM = (
     "you will confirm shortly. Return ONLY the reply text in English, no preamble."
 )
 
+_REPLY_SYSTEM_PERSONAL = (
+    "You draft a short WhatsApp reply to a family member or close friend, in the user's own "
+    "casual voice — this is NOT a business or client message, so do not use any client-service "
+    "phrasing ('thank you for reaching out', 'lovely to hear from you', 'I appreciate your "
+    "message', etc.). Reply the way a real person quickly texts someone they know back — brief, "
+    "warm, plain, everyday language. ALWAYS write in English even if their message is in another "
+    "language. Return ONLY the reply text, no preamble."
+)
+
 _COMPLAINT_SYSTEM = (
     "You draft a WhatsApp reply to an UNHAPPY client on behalf of a freelancer/agency. "
     "ALWAYS write the reply in English — even when the client's message is in another language. "
@@ -519,6 +542,24 @@ def _silent_filter_result(label: str, language: str | None = None) -> dict[str, 
     }
 
 
+def _personal_contact_block() -> str:
+    """This contact has already been established as family/a close personal contact
+    (from a prior message that clearly classified as personal_date/personal_task/
+    family_plan) — not a client. Vague personal chit-chat from them should not be
+    forced into a business category just because it doesn't cleanly fit."""
+    return (
+        "\n\nPERSONAL CONTACT — this sender is a known family member or close friend, "
+        "not a business client. Casual check-ins with no concrete plan/task/date "
+        "('hey', 'where are you', 'what's the plan today', 'you up?') are is_important=false, "
+        "category='greeting' — do NOT force these into a WORK category (follow_up, other, etc.) "
+        "just because they don't cleanly fit personal_date/personal_task/family_plan. Only use "
+        "personal_task/family_plan/personal_date when the message states an actual task, plan, "
+        "or date. Because you know this is a personal contact, you have strong context for these "
+        "calls — use confidence 80+ for a clear greeting/personal_task/family_plan read here, "
+        "rather than hedging low just because the message is short."
+    )
+
+
 def classify_message(
     history: list[dict[str, str]],
     message: str,
@@ -530,6 +571,7 @@ def classify_message(
     instructions: list[str] | None = None,
     contact_name: str | None = None,
     is_known_sender: bool = True,
+    is_personal_contact: bool = False,
 ) -> dict[str, Any]:
     if is_group:
         system = _group_system(user_names)
@@ -547,6 +589,8 @@ def classify_message(
             is_group=is_group,
             is_known_sender=is_known_sender,
         )
+    if is_personal_contact and not is_group:
+        system = system + _personal_contact_block()
 
     context_tags: list[str] = []
     if is_group:
@@ -647,6 +691,7 @@ def classify_message(
         "language": language,
         "translation": translation,
         "summary": (data.get("summary") or "").strip() or None,
+        "personal_tone": bool(data.get("personal_tone", False)),
     }
 
 
@@ -671,7 +716,14 @@ def draft_reply(
     translation: str | None = None,
     instructions: list[str] | None = None,
     corrections: list[dict] | None = None,
+    personal: bool = False,
 ) -> str:
+    if personal and context_hint is None and category == "greeting":
+        context_hint = (
+            "This is a casual message from a family member/close friend — reply the way you'd "
+            "actually text them back. Short, plain, natural. No 'thank you for reaching out' or "
+            "similar client-service phrasing — just reply like a person."
+        )
     category_hint = context_hint or {
         "budget": "The client is asking about budget/pricing. Acknowledge and indicate next step.",
         "scope": "The client is asking about scope/requirements. Clarify or confirm details.",
@@ -701,15 +753,16 @@ def draft_reply(
     }.get(category, "Respond helpfully to the client's query.")
 
     lang_block = _language_context_block(language, translation)
+    sender_label = "Their" if personal else "Client's"
     user_content = (
         f"{lang_block}"
         f"Recent conversation:\n{_history_block(history)}\n\n"
-        f"Client's latest message:\n{message}\n\n"
+        f"{sender_label} latest message:\n{message}\n\n"
         f"Context: {category_hint}\n\n"
         "Write the reply text in English:"
     )
     system = (
-        _REPLY_SYSTEM
+        (_REPLY_SYSTEM_PERSONAL if personal else _REPLY_SYSTEM)
         + _tone_instructions_block(instructions)
         + _reply_corrections_block(corrections)
     )

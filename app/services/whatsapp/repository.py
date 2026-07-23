@@ -527,12 +527,10 @@ def list_suggestions(
     base = db.query(models.WhatsAppSuggestion)
     if status:
         base = base.filter(models.WhatsAppSuggestion.status == status)
-        if status == "pending":
-            now = datetime.utcnow()
-            base = base.filter(
-                (models.WhatsAppSuggestion.visible_after.is_(None))
-                | (models.WhatsAppSuggestion.visible_after <= now)
-            )
+        # Rule 9's timing (instant/30min/4-6h) gates when the DRAFTED REPLY is ready to
+        # show, not whether the message/card itself is visible — the card always lists
+        # the moment it's classified. See routes._suggestion_response, which hides
+        # draft_text until visible_after has passed.
     if kind:
         base = base.filter(models.WhatsAppSuggestion.kind == kind)
     if lane:

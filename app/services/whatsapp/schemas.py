@@ -131,6 +131,7 @@ class WhatsAppSuggestionResponse(BaseModel):
     message_summary: str | None = None
     message_translation: str | None = None
     message_language: str | None = None
+    visible_after: datetime | None = None
 
 
 class WhatsAppSuggestionListResponse(BaseModel):

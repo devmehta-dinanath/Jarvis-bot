@@ -360,8 +360,16 @@ def _store_waha_message(
         return None
 
     wa_id = resolve_contact_wa_id(str(peer), body)
-    profile_name = _waha_profile_name(body)
     is_group = _waha_is_group(body)
+    if is_group:
+        # _waha_profile_name() only ever carries the *sender's* pushName — using it here
+        # would label the group with whoever last happened to post in it. Look up the
+        # group's own subject instead (cached, so this only hits the API once per group).
+        from app.services.whatsapp.waha_client import fetch_group_name
+
+        profile_name = fetch_group_name(wa_id)
+    else:
+        profile_name = _waha_profile_name(body)
     contact = repo.upsert_contact(
         db, wa_id=wa_id, profile_name=profile_name, is_group=is_group
     )
