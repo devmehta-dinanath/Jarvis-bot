@@ -13,6 +13,7 @@ from app.config import (
 )
 from app.services.google_calendar.schemas import EventCreate, EventDateTime
 from app.services.google_calendar.service import google_calendar_service
+from app.services.whatsapp import classifier
 from app.services.whatsapp import client as wa_client
 from app.services.whatsapp import repository as repo
 
@@ -101,6 +102,24 @@ def send_reply(
         raise WhatsAppActionError(
             "Outside the customer service window — a template_name is required to reply."
         )
+
+    # The user always writes/edits the reply in English; auto-translate into the contact's
+    # own detected language (from the message this suggestion is replying to) right before
+    # sending, so the contact always receives their own language. Falls back to the English
+    # text if translation fails — better to send something than nothing.
+    if reply_text and suggestion.message_id is not None:
+        original_message = db.get(models.WhatsAppMessage, suggestion.message_id)
+        reply_language = original_message.language if original_message else None
+        if reply_language and not classifier.is_english(reply_language):
+            try:
+                reply_text = classifier.translate_reply_to_language(reply_text, reply_language)
+            except classifier.WhatsAppAIError:
+                logger.warning(
+                    "[WHATSAPP] Reply translation to %s failed for suggestion %s — "
+                    "sending English text",
+                    reply_language,
+                    suggestion.id,
+                )
 
     message = send_message(
         db,
@@ -233,8 +252,13 @@ def add_to_calendar(
     conference: bool = False,
     send_confirmation: bool = True,
 ) -> dict:
-    if suggestion.kind != "meeting":
-        raise WhatsAppActionError("Only meeting suggestions can be added to the calendar")
+    if suggestion.category not in ("meeting", "family_plan"):
+        raise WhatsAppActionError(
+            "Only meeting or family plan suggestions can be added to the calendar"
+        )
+
+    if suggestion.category == "family_plan":
+        return _add_family_plan_to_calendar(db, suggestion, calendar_id=calendar_id)
 
     details = _details_dict(suggestion)
     if details.get("calendar_event_id"):
@@ -338,4 +362,82 @@ def add_to_calendar(
         event["reply_error"] = reply_error
     if sent_message_id is not None:
         event["sent_message_id"] = sent_message_id
+    return event
+
+
+def _add_family_plan_to_calendar(
+    db: Session,
+    suggestion: models.WhatsAppSuggestion,
+    *,
+    calendar_id: str | None = None,
+) -> dict:
+    """Create a calendar event for a confirmed personal plan (lunch/dinner/outing).
+
+    Unlike a client meeting, this never requests a conference link and never sends a
+    WhatsApp confirmation — a calendar invite for a family plan shouldn't trigger an
+    automated message the way a client meeting confirmation does.
+    """
+    details = _details_dict(suggestion)
+    if details.get("calendar_event_id"):
+        raise WhatsAppActionError("This plan is already on the calendar")
+    if not details.get("confirmed"):
+        raise WhatsAppActionError(
+            "This plan is not yet confirmed by both sides of the conversation"
+        )
+
+    event_date = details.get("date")
+    if not event_date:
+        raise WhatsAppActionError("No date available for this plan; cannot schedule it.")
+
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    contact_name = (contact.profile_name if contact else None) or (
+        contact.wa_id if contact else None
+    )
+
+    start_time = details.get("time") or "09:00"
+    start_iso = f"{event_date}T{start_time}:00"
+    start_dt = _parse_iso(start_iso)
+    if start_dt is None:
+        raise WhatsAppActionError("Could not parse the plan's date/time.")
+    end_dt = start_dt + timedelta(hours=2)
+
+    label = details.get("event_label") or "Family plan"
+    summary = f"[Personal] {label}"
+    if contact_name and contact_name.lower() not in summary.lower():
+        summary = f"{summary} — {contact_name}"
+    description_parts = ["[Personal event — not work]"]
+    if contact_name:
+        description_parts.append(f"With: {contact_name}")
+    description = "\n".join(description_parts)
+
+    payload = EventCreate(
+        summary=summary,
+        description=description,
+        location=details.get("place"),
+        start=EventDateTime(
+            date_time=start_iso,
+            time_zone=CALENDAR_DEFAULT_TIMEZONE,
+        ),
+        end=EventDateTime(
+            date_time=end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            time_zone=CALENDAR_DEFAULT_TIMEZONE,
+        ),
+        conference=False,
+    )
+    event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
+
+    details["calendar_event_id"] = event.get("id")
+    details["calendar_html_link"] = event.get("htmlLink")
+    suggestion.details = json.dumps(details)
+    suggestion.status = "done"
+    suggestion.resolved_at = datetime.utcnow()
+    db.commit()
+    db.refresh(suggestion)
+
+    logger.info(
+        "[WHATSAPP] Created family plan calendar event %s for suggestion %s",
+        event.get("id"),
+        suggestion.id,
+    )
+    event["reply_sent"] = False
     return event

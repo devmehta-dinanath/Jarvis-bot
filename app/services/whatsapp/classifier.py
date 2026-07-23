@@ -168,6 +168,14 @@ def shipment_reply_hint(shipment_status: str | None) -> str:
 
 _CLASSIFY_SYSTEM = (
     "You triage inbound WhatsApp messages from clients for a freelancer/agency. "
+    "SAFETY FIRST — before anything else, check whether the message suggests the sender may be in "
+    "danger, distress, or an emergency (e.g. 'I'm in danger', 'help me', threats of harm, a medical "
+    "emergency, or anything describing an unsafe situation for themselves or someone else). If so, "
+    "set safety_concern=true regardless of category/confidence — a message like this must NEVER "
+    "receive a generic auto-drafted reply ('I'll get back to you shortly' or similar), since no "
+    "template response is ever appropriate here; it must be shown to the human to handle personally. "
+    "Only set safety_concern=true for genuine signs of danger/distress, not for figurative language, "
+    "complaints, or business urgency ('this is critical for our launch' is NOT a safety concern). "
     "Detect the message language. Decide whether the message is important and needs action. "
     "Greetings, small-talk, thanks, emojis-only, and acknowledgements are NOT important "
     "(set is_important=false, category=greeting). "
@@ -220,6 +228,8 @@ _CLASSIFY_SYSTEM = (
     "Respond ONLY with a JSON object with keys: "
     "is_important (boolean), category (one of "
     f"{', '.join(CATEGORIES)}, or 'greeting'), "
+    "safety_concern (boolean — true only for genuine signs the sender is in danger/distress, "
+    "per the SAFETY FIRST rule above; false otherwise), "
     "payment_status ('received', 'overdue', or null), "
     "document_type (string or null), anger_level ('low', 'medium', 'high', or null), "
     "shipment_status ('delayed', 'good', or null), "
@@ -359,12 +369,15 @@ def _group_system(user_names: list[str] | None) -> str:
     return (
         _CLASSIFY_SYSTEM
         + "\n\nGROUP CHAT MODE: This message arrived in a WhatsApp GROUP, not a direct chat. "
-        "Apply STRICT filtering. Set group_relevant=true ONLY if the message directly involves "
-        f"the account owner ({names}) — i.e. they are directly mentioned/addressed by name, OR "
-        "there is a clear payment, meeting, or urgent request that directly involves them. "
+        "Apply STRICT filtering. Set group_relevant=true ONLY if the message directly names or "
+        f"addresses the account owner ({names}) — e.g. '@{names}', 'hey {names}', or a reply/"
+        "question clearly directed at them by name. A payment, meeting, or urgent-sounding topic "
+        "in the group is NOT enough by itself — if the owner is not actually named/addressed, set "
+        "group_relevant=false regardless of how important the topic seems. "
         "For all other group chatter (general discussion, news, banter, messages aimed at other "
-        "people), set group_relevant=false and is_important=false. "
-        "Also set addressed=true if the owner is directly named/mentioned, else false. "
+        "people, or anything not naming the owner), set group_relevant=false and is_important=false. "
+        "Also set addressed=true if the owner is directly named/mentioned, else false — "
+        "group_relevant must equal addressed exactly. "
         "Add both keys 'group_relevant' (boolean) and 'addressed' (boolean) to the JSON."
     )
 
@@ -389,24 +402,61 @@ _COMPLAINT_SYSTEM = (
     "Return ONLY the reply text in English, no preamble."
 )
 
+_FINALISATION_SIGNALS = (
+    "'Confirmed', 'Sounds good', 'See you then', 'Done', 'Fixed', 'Ok 3pm works', "
+    "'Yes let's do it', 'Perfect see you Thursday'"
+)
+
 _MEETING_SYSTEM = (
     "You extract meeting details from a client's WhatsApp message and conversation history. "
     "Use the provided current date/time to resolve relative phrases like 'tomorrow', 'next Monday', "
     "or 'at 3pm' into concrete ISO 8601 datetimes in the given timezone. "
+    "NEVER use the current date/time as a stand-in for a time the client did not actually give. "
+    "A vague reference like 'today' or 'this week' is a DATE hint at most, not a time — do not "
+    "invent a clock time for it. Only resolve 'now'/'right now' to the current time when the "
+    "client is clearly asking to connect immediately (e.g. 'call me now', 'can we talk right now?'); "
+    "a short confirmation like 'yes connect today' or 'sounds good' is agreeing to meet, not "
+    "stating a specific time — if no explicit time is given anywhere in the message or the recent "
+    "conversation, set start and end to null and confirmed=false, even though the client agreed "
+    "to meet in principle. "
+    "MUTUAL CONFIRMATION RULE: the conversation history lines are labelled 'Client:' for the other "
+    "person and 'Me:' for the account owner. Finalisation signals — short closing phrases such as "
+    f"{_FINALISATION_SIGNALS} — mean a plan is agreed only once BOTH sides have shown clear "
+    "agreement to the SAME date/time (one side proposing a time, and the other side accepting it "
+    "with a phrase like these, in either order, counts as both sides). A time stated or proposed by "
+    "only ONE side — even if worded confidently or definitively — is NOT confirmed if the other "
+    "side has not also agreed to it anywhere in the message or history. Set confirmed=true ONLY "
+    "when this mutual agreement is clearly present; otherwise confirmed=false, no exceptions. "
     "Respond ONLY with a JSON object with keys: title (short meeting title), agenda (1-3 lines), "
     "location (place, video link, or phone if mentioned, else null), "
     "start (ISO 8601 datetime with timezone offset if resolved, else null), "
     "end (ISO 8601 datetime if given or inferable, else null), "
-    "confirmed (true only if the client states a definite, agreed time; false if the plan is "
-    "tentative, proposed, or still being negotiated such as 'are you free?' or 'maybe Friday?'). "
+    "confirmed (true only per the MUTUAL CONFIRMATION RULE above; false if the plan is tentative, "
+    "proposed, one-sided, or still being negotiated such as 'are you free?' or 'maybe Friday?'). "
     "If the client wants to meet but gives no specific time, set start and end to null."
 )
 
 
-def _is_english(language: str | None) -> bool:
+def is_english(language: str | None) -> bool:
     if not language:
         return True
     return language.strip().lower() in ("english", "en", "en-us", "en-gb")
+
+
+_is_english = is_english
+
+
+def translate_reply_to_language(text: str, target_language: str) -> str:
+    """Translate an English reply into the contact's own detected language before sending —
+    the user always writes in English, the contact always receives their own language."""
+    system = (
+        "You translate a WhatsApp business reply from English into another language for sending "
+        "to a client. Keep the tone, meaning, names, numbers, and links exactly as given — do not "
+        "add, remove, or explain anything. Respond with ONLY the translated text, no preamble, "
+        "no quotes, no English."
+    )
+    user_content = f"Target language: {target_language}\n\nEnglish text:\n{text}\n\nTranslation:"
+    return _chat(system, user_content, max_tokens=220, json_mode=False).strip()
 
 
 def _language_context_block(language: str | None, translation: str | None) -> str:
@@ -515,17 +565,26 @@ def classify_message(
 
     detected_language = (data.get("language") or "").strip() or None
     category = str(data.get("category") or "greeting").strip().lower()
+    # A genuine safety/distress signal must never be silently dropped — not as spam/forwarded,
+    # not as an irrelevant group message, not as an instruction-skip. It always surfaces.
+    safety_concern = bool(data.get("safety_concern", False))
 
-    if instructions and bool(data.get("instruction_skip", False)):
+    if instructions and bool(data.get("instruction_skip", False)) and not safety_concern:
         category = "instruction_skip"
 
-    if category in FILTER_LABELS:
-        return _silent_filter_result(category, detected_language)
+    if safety_concern:
+        if category in FILTER_LABELS or category not in CATEGORIES:
+            category = "other"
+    else:
+        if category in FILTER_LABELS:
+            return _silent_filter_result(category, detected_language)
 
-    if is_group and not bool(data.get("group_relevant", False)):
-        return _silent_filter_result("group", detected_language)
+        if is_group and not bool(data.get("group_relevant", False)):
+            return _silent_filter_result("group", detected_language)
 
     is_important = bool(data.get("is_important", False))
+    if safety_concern:
+        is_important = True
     if category in ALWAYS_IMPORTANT and category in CATEGORIES:
         is_important = True
     if is_group:
@@ -577,6 +636,7 @@ def classify_message(
     return {
         "is_important": is_important,
         "category": category,
+        "safety_concern": safety_concern,
         "lane": lane,
         "priority": priority,
         "confidence": confidence,
@@ -753,28 +813,39 @@ def extract_personal_task(message: str) -> dict[str, Any]:
 
 
 _FAMILY_PLAN_SYSTEM = (
-    "You extract a personal social plan or family outing from a WhatsApp message. "
+    "You extract a personal social plan or family outing from a WhatsApp message and its "
+    "conversation history. "
     "Use the provided current date/time to resolve relative phrases like 'tonight', 'Saturday', "
     "'next Sunday', 'this weekend' into concrete ISO 8601 dates in the given timezone. "
+    "MUTUAL CONFIRMATION RULE: history lines are labelled 'Client:' for the other person and "
+    "'Me:' for the account owner. Finalisation signals — short closing phrases such as "
+    f"{_FINALISATION_SIGNALS} — mean a plan is agreed only once BOTH sides have shown clear "
+    "agreement to the SAME date/time/place (one side proposing, the other accepting with a phrase "
+    "like these, in either order, counts as both sides). A plan mentioned or proposed by only ONE "
+    "side is NOT confirmed, even if stated definitively, unless the other side has also agreed to "
+    "it somewhere in the message or history. Set confirmed=true ONLY when this mutual agreement is "
+    "clearly present; otherwise confirmed=false, no exceptions. "
     "Respond ONLY with a JSON object with keys: "
     "event_label (short human-readable title for the event, e.g. 'Family dinner', "
     "'Movie night', 'Sunday lunch at Mum's'), "
     "date (ISO 8601 date string YYYY-MM-DD if resolved, else null), "
     "time (HH:MM 24-hour string if mentioned, else null), "
     "place (venue or location if mentioned, else null), "
-    "confirmed (true if the plan is confirmed/agreed, false if it is still a proposal or question)."
+    "confirmed (true only per the MUTUAL CONFIRMATION RULE above; false if the plan is still a "
+    "one-sided proposal or question)."
 )
 
 
-def extract_family_plan(message: str) -> dict[str, Any]:
-    """Extract a personal social event from a message and resolve the date/time."""
+def extract_family_plan(history: list[dict[str, str]], message: str) -> dict[str, Any]:
+    """Extract a personal social event from a message + history and resolve the date/time."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
     now = datetime.now(ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
     user_content = (
         f"Current date/time: {now.isoformat()} ({CALENDAR_DEFAULT_TIMEZONE})\n\n"
-        f"Message:\n{message}\n\n"
+        f"Recent conversation:\n{_history_block(history)}\n\n"
+        f"Latest message:\n{message}\n\n"
         "Extract the family plan as JSON:"
     )
     data = _chat_json(_FAMILY_PLAN_SYSTEM, user_content, max_tokens=140)

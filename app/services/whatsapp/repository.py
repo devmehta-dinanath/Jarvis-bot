@@ -364,6 +364,7 @@ def create_suggestion(
     confidence: int | None = None,
     draft_text: str | None = None,
     details: dict | None = None,
+    visible_after: datetime | None = None,
 ) -> models.WhatsAppSuggestion:
     suggestion = models.WhatsAppSuggestion(
         contact_id=contact_id,
@@ -376,6 +377,7 @@ def create_suggestion(
         status="pending",
         draft_text=draft_text,
         details=json.dumps(details) if details is not None else None,
+        visible_after=visible_after,
     )
     db.add(suggestion)
     db.flush()
@@ -525,6 +527,12 @@ def list_suggestions(
     base = db.query(models.WhatsAppSuggestion)
     if status:
         base = base.filter(models.WhatsAppSuggestion.status == status)
+        if status == "pending":
+            now = datetime.utcnow()
+            base = base.filter(
+                (models.WhatsAppSuggestion.visible_after.is_(None))
+                | (models.WhatsAppSuggestion.visible_after <= now)
+            )
     if kind:
         base = base.filter(models.WhatsAppSuggestion.kind == kind)
     if lane:

@@ -428,6 +428,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
     message_body = None
     message_summary = None
     message_translation = None
+    message_language = None
     if db is not None:
         contact = db.get(models.WhatsAppContact, suggestion.contact_id)
         if contact:
@@ -440,6 +441,7 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
                 message_body = message.body
                 message_summary = message.summary
                 message_translation = message.translation
+                message_language = message.language
 
     return WhatsAppSuggestionResponse(
         id=suggestion.id,
@@ -462,4 +464,5 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
         message_body=message_body,
         message_summary=message_summary,
         message_translation=message_translation,
+        message_language=message_language,
     )

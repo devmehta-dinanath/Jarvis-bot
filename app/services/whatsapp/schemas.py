@@ -128,8 +128,9 @@ class WhatsAppSuggestionResponse(BaseModel):
     wa_id: str | None = None
     is_group: bool = False
     message_body: str | None = None
-    message_summary: str | None = None 
-    message_translation: str | None = None 
+    message_summary: str | None = None
+    message_translation: str | None = None
+    message_language: str | None = None
 
 
 class WhatsAppSuggestionListResponse(BaseModel):

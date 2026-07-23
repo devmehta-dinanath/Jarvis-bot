@@ -54,6 +54,7 @@ WHATSAPP_SUGGESTION_COLUMNS: dict[str, str] = {
     "priority": "VARCHAR(20)",
     "lane": "VARCHAR(10)",
     "confidence": "INTEGER",
+    "visible_after": "DATETIME",
 }
 
 

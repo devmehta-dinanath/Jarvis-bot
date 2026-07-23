@@ -371,6 +371,9 @@ class WhatsAppSuggestion(Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
     draft_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Row exists (and can already be auto-dismissed by a reply) from creation, but is withheld
+    # from the pending list until this time — null means visible immediately.
+    visible_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,

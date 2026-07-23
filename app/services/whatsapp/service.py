@@ -1,4 +1,5 @@
 import logging
+import random
 import threading
 from datetime import datetime, timedelta
 
@@ -7,6 +8,8 @@ from app.config import (
     OPENAI_API_KEY,
     WHATSAPP_AI_DRAFTS_ENABLED,
     WHATSAPP_AUTO_ADD_CALENDAR,
+    WHATSAPP_CASUAL_SUGGESTION_DELAY_MAX_HOURS,
+    WHATSAPP_CASUAL_SUGGESTION_DELAY_MIN_HOURS,
     WHATSAPP_CHIP_CONFIDENCE_MIN,
     WHATSAPP_CORRECTIONS_CONTEXT_LIMIT,
     WHATSAPP_ENABLED,
@@ -16,9 +19,11 @@ from app.config import (
     WHATSAPP_FOLLOWUP_URGENT_HOURS,
     WHATSAPP_HISTORY_CONTEXT_LIMIT,
     WHATSAPP_LEAD_FOLLOWUP_HOURS,
+    WHATSAPP_NORMAL_SUGGESTION_DELAY_MINUTES,
     WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS,
     WHATSAPP_PERSONAL_SILENCE_DAYS,
     WHATSAPP_POLL_INTERVAL_SECONDS,
+    WHATSAPP_REPLY_COOLDOWN_HOURS,
     WHATSAPP_USER_NAMES,
 )
 from app.database import SessionLocal
@@ -453,9 +458,55 @@ class WhatsAppService:
         # from the threshold, since a wrong suggestion is worse than a missed one.
         below_threshold = confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
 
-        if category in classifier.FILTER_LABELS or category == "group":
+        # Rule 9 — reply threshold/timing rules. This is a client-triage rule and does not
+        # apply to LIFE lane messages (family/close friends, handled entirely separately).
+        # Payment/complaint/lead are "urgent": they always surface immediately and skip the
+        # known-contact/reply-cooldown gates below. Everything else must be from a contact
+        # with prior history, and the user must not have replied to them within the cooldown
+        # window, or it is suppressed entirely.
+        is_urgent_category = category in ("payment", "complaint", "lead")
+        is_life_lane = category in classifier.LIFE_LANE_CATEGORIES
+        bypasses_reply_rules = is_urgent_category or is_life_lane
+        known_contact = prior_count > 0
+        recently_replied = (
+            message.contact is not None
+            and message.contact.last_replied_at is not None
+            and (datetime.utcnow() - message.contact.last_replied_at)
+            < timedelta(hours=WHATSAPP_REPLY_COOLDOWN_HOURS)
+        )
+        suppressed_by_reply_rules = not bypasses_reply_rules and (
+            not known_contact or recently_replied
+        )
+
+        if bypasses_reply_rules:
+            delay = timedelta(0)
+        elif category == "greeting":
+            delay = timedelta(
+                hours=random.uniform(
+                    WHATSAPP_CASUAL_SUGGESTION_DELAY_MIN_HOURS,
+                    WHATSAPP_CASUAL_SUGGESTION_DELAY_MAX_HOURS,
+                )
+            )
+        else:
+            delay = timedelta(minutes=WHATSAPP_NORMAL_SUGGESTION_DELAY_MINUTES)
+        visible_after = datetime.utcnow() + delay
+
+        suggestion = None
+        if result.get("safety_concern"):
+            logger.warning(
+                "[WHATSAPP] Message %s flagged as a possible safety concern — surfacing for "
+                "manual response, no AI draft", message.id,
+            )
+            self._create_safety_concern_suggestion(db, message, category, lane)
+        elif category in classifier.FILTER_LABELS or category == "group":
             logger.info(
                 "[WHATSAPP] Message %s silently filtered (category=%s)", message.id, category
+            )
+        elif suppressed_by_reply_rules:
+            logger.info(
+                "[WHATSAPP] Message %s suppressed by reply-threshold rules "
+                "(known_contact=%s recently_replied=%s category=%s)",
+                message.id, known_contact, recently_replied, category,
             )
         elif below_threshold:
             logger.info(
@@ -466,15 +517,20 @@ class WhatsAppService:
                 confidence,
                 WHATSAPP_CHIP_CONFIDENCE_MIN,
             )
-            self._create_unconfident_suggestion(db, message, category, priority, confidence, lane)
+            suggestion = self._create_unconfident_suggestion(
+                db, message, category, priority, confidence, lane
+            )
         elif result["is_important"]:
-            self._create_suggestion(
+            suggestion = self._create_suggestion(
                 db, message, history, body, result, priority, instructions, corrections
             )
         elif category == "greeting":
-            self._create_greeting_suggestion(
+            suggestion = self._create_greeting_suggestion(
                 db, message, history, body, instructions, corrections
             )
+
+        if suggestion is not None:
+            suggestion.visible_after = visible_after
 
         db.commit()
         logger.info(
@@ -509,9 +565,9 @@ class WhatsAppService:
         priority,
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
-    ) -> None:
+    ):
         if repo.suggestion_exists_for_message(db, message.id):
-            return
+            return None
 
         category = result["category"]
         lane: str = result.get("lane") or (
@@ -520,46 +576,41 @@ class WhatsAppService:
         confidence: int | None = result.get("confidence")
 
         if category == "payment":
-            self._create_payment_suggestion(
+            return self._create_payment_suggestion(
                 db, message, history, body, result, priority, confidence, lane, instructions, corrections
             )
-            return
 
         if category == "lead":
-            self._create_lead_suggestion(
+            return self._create_lead_suggestion(
                 db, message, history, body, result, priority, confidence, lane, instructions, corrections
             )
-            return
 
         if category == "document":
-            self._create_document_suggestion(
+            return self._create_document_suggestion(
                 db, message, history, body, result, priority, confidence, lane, instructions, corrections
             )
-            return
 
         if category == "personal_date":
             self._create_personal_date_suggestion(db, message, history, body, priority, confidence, lane)
-            return
+            return None
 
         if category == "personal_task":
             self._create_personal_task_suggestion(db, message, history, body, priority, confidence, lane)
-            return
+            return None
 
         if category == "family_plan":
             self._create_family_plan_suggestion(db, message, history, body, priority, confidence, lane)
-            return
+            return None
 
         if category == "complaint":
-            self._create_complaint_suggestion(
+            return self._create_complaint_suggestion(
                 db, message, history, body, result, priority, confidence, lane, instructions, corrections
             )
-            return
 
         if category == "shipment":
-            self._create_shipment_suggestion(
+            return self._create_shipment_suggestion(
                 db, message, history, body, result, priority, confidence, lane, instructions, corrections
             )
-            return
 
         if category == "meeting":
             try:
@@ -607,7 +658,7 @@ class WhatsAppService:
                         "[WHATSAPP] Auto calendar booking failed for suggestion %s",
                         suggestion.id,
                     )
-            return
+            return suggestion
 
         draft = _draft_reply_with_budget(
             history, body, category, result=result, instructions=instructions, corrections=corrections
@@ -620,7 +671,7 @@ class WhatsAppService:
             chip = wa_taxonomy.default_chip_label(category)
             if chip:
                 details = {"chip_label": chip}
-        repo.create_suggestion(
+        return repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -649,7 +700,7 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
-    ) -> None:
+    ):
         payment_status = result.get("payment_status") or "overdue"
         hint = classifier.payment_reply_hint(payment_status)
         draft = _draft_reply_with_budget(
@@ -668,7 +719,7 @@ class WhatsAppService:
             "chip_label": _payment_chip_label(payment_status),
             "logged_at": datetime.utcnow().isoformat(),
         }
-        repo.create_suggestion(
+        suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -686,13 +737,14 @@ class WhatsAppService:
             payment_status,
             message.id,
         )
+        return suggestion
 
     def _create_lead_suggestion(
         self, db, message, history, body, result, priority,
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
-    ) -> None:
+    ):
         draft = _draft_reply_with_budget(
             history, body, "lead", result=result, instructions=instructions, corrections=corrections
         )
@@ -704,7 +756,7 @@ class WhatsAppService:
             "follow_up_due_at": follow_up_due_at.isoformat(),
             "chip_label": _lead_chip_label(),
         }
-        repo.create_suggestion(
+        return repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -722,7 +774,7 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
-    ) -> None:
+    ):
         document_type = result.get("document_type")
         previous = repo.previous_document_sent(
             db,
@@ -745,7 +797,7 @@ class WhatsAppService:
             "confirm_before_send": previous is not None,
             "chip_label": _document_chip_label(document_type, previously_sent_on),
         }
-        repo.create_suggestion(
+        return repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -763,7 +815,7 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
-    ) -> None:
+    ):
         anger_level = result.get("anger_level") or "high"
         draft = _draft_reply_with_budget(
             history,
@@ -780,7 +832,7 @@ class WhatsAppService:
             "anger_level": anger_level,
             "chip_label": _complaint_chip_label(anger_level),
         }
-        repo.create_suggestion(
+        suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -798,13 +850,14 @@ class WhatsAppService:
             anger_level,
             message.id,
         )
+        return suggestion
 
     def _create_shipment_suggestion(
         self, db, message, history, body, result, priority,
         confidence: int | None = None, lane: str = "work",
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
-    ) -> None:
+    ):
         shipment_status = result.get("shipment_status") or "good"
         is_delay = shipment_status == "delayed"
         hint = classifier.shipment_reply_hint(shipment_status)
@@ -826,7 +879,7 @@ class WhatsAppService:
             "chip_label": _shipment_chip_label(shipment_status),
             "logged_at": datetime.utcnow().isoformat(),
         }
-        repo.create_suggestion(
+        suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -844,6 +897,7 @@ class WhatsAppService:
             shipment_status,
             message.id,
         )
+        return suggestion
 
     def _create_greeting_suggestion(
         self,
@@ -853,11 +907,11 @@ class WhatsAppService:
         body,
         instructions: list[str] | None = None,
         corrections: list[dict] | None = None,
-    ) -> None:
+    ):
         if repo.suggestion_exists_for_message(db, message.id):
-            return
+            return None
         if repo.pending_nudge_exists(db, message.contact_id):
-            return
+            return None
 
         draft = _draft_reply_with_budget(
             history,
@@ -872,7 +926,7 @@ class WhatsAppService:
             "tone": "casual",
             "chip_label": _greeting_chip_label(),
         }
-        repo.create_suggestion(
+        return repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -905,6 +959,28 @@ class WhatsAppService:
             details={
                 "chip_label": "Low confidence — AI did not draft a reply, please respond manually.",
                 "low_confidence": True,
+            },
+        )
+
+    def _create_safety_concern_suggestion(self, db, message, category: str, lane: str) -> None:
+        """The message may indicate the sender is in danger or distress — always surface it,
+        regardless of confidence or category, and never auto-generate a reply for it. This
+        needs a human's personal attention, not a templated response."""
+        if repo.suggestion_exists_for_message(db, message.id):
+            return
+        repo.create_suggestion(
+            db,
+            contact_id=message.contact_id,
+            message_id=message.id,
+            kind="nudge",
+            category=category,
+            priority="critical",
+            lane=lane,
+            confidence=None,
+            draft_text=None,
+            details={
+                "chip_label": "Possible safety concern — please respond personally, do not send an automated reply.",
+                "safety_concern": True,
             },
         )
 
@@ -1106,14 +1182,17 @@ class WhatsAppService:
         confidence: int | None = None, lane: str = "life",
     ) -> None:
         try:
-            plan = classifier.extract_family_plan(body)
+            plan = classifier.extract_family_plan(history, body)
         except WhatsAppAIError:
             plan = wa_fallback.extract_family_plan(body)
+
+        confirmed = bool(plan.get("confirmed"))
 
         calendar_event_id = None
         calendar_html_link = None
         if (
-            plan.get("date")
+            confirmed
+            and plan.get("date")
             and WHATSAPP_AUTO_ADD_CALENDAR
             and google_calendar_service.auth_status().authorized
         ):
@@ -1130,14 +1209,19 @@ class WhatsAppService:
                 end_iso = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
                 label = plan.get("event_label") or "Family plan"
+                contact_name = message.contact.profile_name if message.contact else None
+                summary = f"[Personal] {label}"
+                if contact_name and contact_name.lower() not in summary.lower():
+                    summary = f"{summary} — {contact_name}"
                 description_parts = ["[Personal event — not work]"]
-                if plan.get("place"):
-                    description_parts.append(f"Location: {plan['place']}")
+                if contact_name:
+                    description_parts.append(f"With: {contact_name}")
                 description = "\n".join(description_parts)
 
                 payload = EventCreate(
-                    summary=f"[Personal] {label}",
+                    summary=summary,
                     description=description,
+                    location=plan.get("place"),
                     start=EventDateTime(
                         date_time=start_iso,
                         time_zone=CALENDAR_DEFAULT_TIMEZONE,
@@ -1173,10 +1257,14 @@ class WhatsAppService:
 
         if calendar_event_id:
             chip_label = f"{label} {when_str} — added to calendar ✓".strip()
-        elif when_str:
+        elif confirmed and when_str:
             chip_label = f"{label} {when_str} — add to calendar?".strip()
-        else:
+        elif confirmed:
             chip_label = f"{label} — add to calendar?"
+        elif when_str:
+            chip_label = f"{label} {when_str} mentioned — no time confirmed yet".strip()
+        else:
+            chip_label = f"{label} mentioned — no time confirmed yet"
 
         repo.create_suggestion(
             db,

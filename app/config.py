@@ -277,10 +277,23 @@ WHATSAPP_LEAD_FOLLOWUP_HOURS = float(os.getenv("WHATSAPP_LEAD_FOLLOWUP_HOURS", "
 WHATSAPP_EOD_REMINDER_HOUR = int(os.getenv("WHATSAPP_EOD_REMINDER_HOUR", "17"))
 WHATSAPP_EOD_REMINDER_MINUTE = int(os.getenv("WHATSAPP_EOD_REMINDER_MINUTE", "0"))
 # Rule 1 — minimum LLM confidence (0-100) required before a chip is surfaced to the user.
-# Business-critical categories (payment, complaint) bypass this gate and always surface.
+# Applies to every category with no exceptions — a wrong suggestion is worse than a missed one.
 WHATSAPP_CHIP_CONFIDENCE_MIN = int(os.getenv("WHATSAPP_CHIP_CONFIDENCE_MIN", "80"))
 # Rule 2 — how many recent "wrong" corrections to inject into the classifier prompt.
 WHATSAPP_CORRECTIONS_CONTEXT_LIMIT = int(os.getenv("WHATSAPP_CORRECTIONS_CONTEXT_LIMIT", "5"))
+# Rule 9 — reply-suggestion threshold/timing rules.
+# Payment/complaint/lead are "urgent": they always surface immediately and skip the known-contact
+# and reply-cooldown gates below. Everything else must pass both gates and waits out its delay.
+WHATSAPP_REPLY_COOLDOWN_HOURS = float(os.getenv("WHATSAPP_REPLY_COOLDOWN_HOURS", "6"))
+WHATSAPP_NORMAL_SUGGESTION_DELAY_MINUTES = float(
+    os.getenv("WHATSAPP_NORMAL_SUGGESTION_DELAY_MINUTES", "30")
+)
+WHATSAPP_CASUAL_SUGGESTION_DELAY_MIN_HOURS = float(
+    os.getenv("WHATSAPP_CASUAL_SUGGESTION_DELAY_MIN_HOURS", "4")
+)
+WHATSAPP_CASUAL_SUGGESTION_DELAY_MAX_HOURS = float(
+    os.getenv("WHATSAPP_CASUAL_SUGGESTION_DELAY_MAX_HOURS", "6")
+)
 # Category 17: how many days of silence on a personal contact before a nudge is raised.
 WHATSAPP_PERSONAL_SILENCE_DAYS = float(os.getenv("WHATSAPP_PERSONAL_SILENCE_DAYS", "3"))
 # How often (seconds) the background worker checks for silent personal contacts.
