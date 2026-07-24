@@ -1039,5 +1039,12 @@ def _chat(system: str, user_content: str, *, max_tokens: int, json_mode: bool) -
     except APIError as exc:
         logger.error("[WHATSAPP] OpenAI API error: %s", exc)
         raise WhatsAppAIError(str(exc)) from exc
+    except Exception as exc:
+        # Catch-all for anything the openai SDK raises that isn't a RateLimitError/APIError
+        # subclass (connection drops, timeouts, etc.) — these must never escape as a bare
+        # exception, since callers only know how to handle WhatsAppAIError and an unhandled
+        # type here can jam the background classification queue for every contact.
+        logger.error("[WHATSAPP] OpenAI call failed unexpectedly: %s", exc)
+        raise WhatsAppAIError(str(exc)) from exc
 
     return (response.choices[0].message.content or "").strip()

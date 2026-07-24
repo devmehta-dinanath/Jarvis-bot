@@ -339,7 +339,19 @@ class WhatsAppService:
                 message = repo.next_unclassified_voice_note(db)
                 if message is None:
                     break
-                self._handle_voice_note(db, message)
+                try:
+                    self._handle_voice_note(db, message)
+                except Exception:
+                    # Same queue-jam risk as text messages — next_unclassified_voice_note()
+                    # always refetches the oldest one, so a failure here would otherwise
+                    # block every voice note behind it forever.
+                    logger.exception(
+                        "[WHATSAPP] Voice note handling failed unexpectedly for message %s — "
+                        "marking as failed instead of blocking the queue",
+                        message.id,
+                    )
+                    db.rollback()
+                    self._mark_classification_failed(db, message)
                 processed += 1
         finally:
             db.close()
@@ -381,6 +393,48 @@ class WhatsAppService:
             db.commit()
             return
 
+        try:
+            self._classify_one_unsafe(db, message, body)
+        except Exception:
+            # next_unclassified_inbound() always fetches the single oldest unclassified
+            # message across ALL contacts — if this message's classification keeps raising,
+            # it would get retried forever and permanently block every message queued behind
+            # it (any contact, group or not) from ever being classified. Fail this one message
+            # closed instead: surface it manually and let the queue move on.
+            logger.exception(
+                "[WHATSAPP] Classification failed unexpectedly for message %s — "
+                "marking as failed instead of blocking the queue",
+                message.id,
+            )
+            db.rollback()
+            self._mark_classification_failed(db, message)
+
+    def _mark_classification_failed(self, db, message) -> None:
+        db.refresh(message)
+        if message.classified_at is not None:
+            return
+        message.classified_at = datetime.utcnow()
+        message.is_important = False
+        message.category = "error"
+        message.priority = "normal"
+        if not repo.suggestion_exists_for_message(db, message.id):
+            repo.create_suggestion(
+                db,
+                contact_id=message.contact_id,
+                message_id=message.id,
+                kind="nudge",
+                category="error",
+                priority="normal",
+                lane="work",
+                draft_text=None,
+                details={
+                    "chip_label": "Couldn't classify this message automatically — please review it manually.",
+                    "classification_error": True,
+                },
+            )
+        db.commit()
+
+    def _classify_one_unsafe(self, db, message, body: str) -> None:
         history = repo.recent_history(
             db,
             message.contact_id,
