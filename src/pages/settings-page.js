@@ -301,10 +301,12 @@ function createInstructionRow(instruction, { onSave, onDelete }) {
     cancelBtn.textContent = "Cancel";
 
     editActions.append(saveBtn, cancelBtn);
+    row.classList.add("instruction-row--editing");
     row.replaceChildren(editor, editActions);
     editor.focus();
 
     cancelBtn.addEventListener("click", () => {
+      row.classList.remove("instruction-row--editing");
       row.replaceChildren(text, actions);
     });
 
@@ -707,11 +709,15 @@ function createForwardingRuleRow(rule, { onSave, onDelete }) {
     const form = createForwardingRuleForm({
       initial: rule,
       submitLabel: "Save",
-      onCancel: () => row.replaceChildren(info, actions),
+      onCancel: () => {
+        row.classList.remove("instruction-row--editing");
+        row.replaceChildren(info, actions);
+      },
       onSubmit: async (fields) => {
         await onSave(rule, fields);
       }
     });
+    row.classList.add("instruction-row--editing");
     row.replaceChildren(form);
   });
 

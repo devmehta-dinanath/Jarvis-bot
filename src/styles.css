@@ -1351,10 +1351,14 @@ a:focus-visible,
 }
 
 .instruction-form {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 10px;
-  align-items: flex-start;
   margin-bottom: 12px;
+}
+
+.instruction-form__submit {
+  justify-self: end;
 }
 
 .instruction-form__input {
@@ -1385,6 +1389,7 @@ a:focus-visible,
 
 .forwarding-form {
   display: grid;
+  grid-template-columns: 1fr;
   gap: 8px;
   padding: 12px;
   border-radius: var(--radius-md);
@@ -1394,11 +1399,15 @@ a:focus-visible,
 
 .forwarding-form .instruction-form__input {
   min-height: 40px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .forwarding-form__select {
   appearance: none;
   cursor: pointer;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .forwarding-row {
@@ -1438,6 +1447,24 @@ a:focus-visible,
   border-radius: var(--radius-md);
   background: var(--bg-card);
   border: 1px solid var(--border);
+}
+
+/* While editing, the row holds a full editor (textarea/form) + action buttons instead of
+   the normal [text][actions] pair — stack it full-width instead of shrink-wrapping as a
+   flex item, which is what made the swapped-in editor look tiny/off-center before. */
+.instruction-row--editing {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.instruction-row--editing > .instruction-form__input,
+.instruction-row--editing > .forwarding-form {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.instruction-row--editing > .instruction-row__actions {
+  align-self: flex-end;
 }
 
 .instruction-row__text {

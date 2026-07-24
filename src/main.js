@@ -59,7 +59,7 @@ function createWindow() {
 
   mainWindow = new BrowserWindow({
     ...bounds,
-    minWidth: 320,
+    minWidth: 380,
     minHeight: 480,
     maxWidth: Math.round(screen.getPrimaryDisplay().workArea.width * 0.4),
     backgroundColor: "#121420",
