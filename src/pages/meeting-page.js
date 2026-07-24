@@ -3,6 +3,7 @@ import {
   getScheduledMeetingSuggestions,
   getTodayCalendarEvents
 } from "../lib/api.js";
+import { markUpdated } from "../lib/last-updated.js";
 import { formatClockTime, formatMeetingTime, isToday, meetingDurationMinutes } from "../lib/time.js";
 import { createActionCard } from "../ui/components/action-card.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
@@ -273,6 +274,7 @@ export function createMeetingPage() {
 
     if (bookedOnly.length === 0) {
       bookedList.replaceChildren(createEmptyState("No WhatsApp meetings booked yet."));
+      markUpdated();
       return;
     }
 
@@ -298,6 +300,8 @@ export function createMeetingPage() {
         })
       );
     });
+
+    markUpdated();
   }
 
   reload();

@@ -52,10 +52,12 @@ function getRightPanelBounds() {
   };
 }
 
+let mainWindow = null;
+
 function createWindow() {
   const bounds = getRightPanelBounds();
 
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     ...bounds,
     minWidth: 320,
     minHeight: 480,
@@ -70,6 +72,9 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, "..", "index.html"));
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
 }
 
 app.whenReady().then(async () => {
@@ -79,6 +84,11 @@ app.whenReady().then(async () => {
     }
 
     return shell.openExternal(url);
+  });
+
+  ipcMain.handle("app-hard-reload", (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    target?.webContents.reloadIgnoringCache();
   });
 
   try {

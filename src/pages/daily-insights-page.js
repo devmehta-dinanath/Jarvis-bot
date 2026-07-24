@@ -13,6 +13,7 @@ import {
   getGreeting,
   toISODateKey
 } from "../lib/time.js";
+import { markUpdated } from "../lib/last-updated.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
 import { createStatChip } from "../ui/components/stat-chip.js";
 
@@ -482,6 +483,7 @@ export function createDailyInsightsPage() {
   async function reload() {
     try {
       await loadIndex();
+      markUpdated();
     } catch (error) {
       host.replaceChildren(
         createEmptyState(`Could not load summaries — ${error.message}`, null)

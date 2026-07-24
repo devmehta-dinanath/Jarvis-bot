@@ -76,6 +76,55 @@ export function deleteUserInstruction(instructionId) {
   }, SERVER_API);
 }
 
+export function getForwardingRules() {
+  return fetchJson("/api/v1/whatsapp/forwarding-rules", {}, SERVER_API);
+}
+
+export function createForwardingRule({
+  label,
+  triggerCategory,
+  triggerPaymentStatus,
+  teamMemberName,
+  teamMemberWaId
+}) {
+  return fetchJson("/api/v1/whatsapp/forwarding-rules", {
+    method: "POST",
+    body: JSON.stringify({
+      label,
+      trigger_category: triggerCategory,
+      trigger_payment_status: triggerPaymentStatus ?? null,
+      team_member_name: teamMemberName ?? null,
+      team_member_wa_id: teamMemberWaId ?? null
+    })
+  }, SERVER_API);
+}
+
+export function updateForwardingRule(ruleId, fields = {}) {
+  const body = {};
+  if (fields.label !== undefined) body.label = fields.label;
+  if (fields.triggerCategory !== undefined) body.trigger_category = fields.triggerCategory;
+  if (fields.triggerPaymentStatus !== undefined) body.trigger_payment_status = fields.triggerPaymentStatus;
+  if (fields.teamMemberName !== undefined) body.team_member_name = fields.teamMemberName;
+  if (fields.teamMemberWaId !== undefined) body.team_member_wa_id = fields.teamMemberWaId;
+  if (fields.isActive !== undefined) body.is_active = fields.isActive;
+  return fetchJson(`/api/v1/whatsapp/forwarding-rules/${encodeURIComponent(ruleId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body)
+  }, SERVER_API);
+}
+
+export function deleteForwardingRule(ruleId) {
+  return fetchJson(`/api/v1/whatsapp/forwarding-rules/${encodeURIComponent(ruleId)}`, {
+    method: "DELETE"
+  }, SERVER_API);
+}
+
+export function forwardSuggestion(suggestionId) {
+  return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/forward`, {
+    method: "POST"
+  }, SERVER_API);
+}
+
 export function getInboxStatus() {
   return fetchJson("/api/v1/whatsapp/inbox/status", {}, SERVER_API);
 }
@@ -118,6 +167,13 @@ export function sendSuggestionReply(suggestionId, { text, mode = "auto" } = {}) 
   }, SERVER_API);
 }
 
+export function answerClarification(suggestionId, answer) {
+  return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/clarify`, {
+    method: "POST",
+    body: JSON.stringify({ answer })
+  }, SERVER_API);
+}
+
 export function sendSuggestionFeedback(suggestionId, { feedbackType, correctResponse } = {}) {
   return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/feedback`, {
     method: "POST",
@@ -142,6 +198,14 @@ export function getTodayCalendarEvents() {
 
 export function getCalendarStatus() {
   return fetchJson("/api/v1/calendar/status", {}, SERVER_API);
+}
+
+export function getCalendarAuthUrl() {
+  return fetchJson("/api/v1/calendar/auth/url", {}, SERVER_API);
+}
+
+export function revokeCalendarAuth() {
+  return fetchJson("/api/v1/calendar/auth/token", { method: "DELETE" }, SERVER_API);
 }
 
 export function getLatestDailySummary() {

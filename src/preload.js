@@ -8,5 +8,8 @@ contextBridge.exposeInMainWorld("jarvisApp", {
   serverUrl: process.env.JARVIS_SERVER_URL ?? DEFAULT_SERVER_URL,
   openExternal(url) {
     return ipcRenderer.invoke("open-external", url);
+  },
+  hardReload() {
+    return ipcRenderer.invoke("app-hard-reload");
   }
 });

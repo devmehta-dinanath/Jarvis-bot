@@ -7,6 +7,7 @@ import {
   refreshPendingInbox,
   scheduleMeetingSuggestion,
   sendSuggestionFeedback,
+  sendSuggestionReply,
   setContactExcluded
 } from "../lib/api.js";
 import {
@@ -14,6 +15,7 @@ import {
   CATEGORY_SECTIONS,
   partitionSuggestions
 } from "../lib/whatsapp-categories.js";
+import { markUpdated } from "../lib/last-updated.js";
 import { formatDateTime, getGreeting } from "../lib/time.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
 import { createStatChip } from "../ui/components/stat-chip.js";
@@ -133,6 +135,10 @@ export function createSummaryPage() {
   const page = document.createElement("section");
   page.className = "os-page os-page--whatsapp";
 
+  // While a card has an open "Wrong" correction panel or an in-progress draft edit, the
+  // periodic auto-refresh must not wipe/rebuild the card list out from under the user.
+  let activeInteractions = 0;
+
   const hero = document.createElement("article");
   hero.className = "hero-card";
 
@@ -182,11 +188,16 @@ export function createSummaryPage() {
       await reload();
     },
     onWrong: async (item, correctResponse) => {
+      // Actually send the corrected reply to the contact, then record it as a correction
+      // so future classification/drafting never repeats the original mistake.
+      await sendSuggestionReply(item.id, { text: correctResponse, mode: "auto" });
       await sendSuggestionFeedback(item.id, { feedbackType: "wrong", correctResponse });
-      await dismissSuggestion(item.id);
       await reload();
     },
-    onSent: reload
+    onSent: reload,
+    onInteractionChange: (active) => {
+      activeInteractions = Math.max(0, activeInteractions + (active ? 1 : -1));
+    }
   };
 
   clearAllBtn.addEventListener("click", async () => {
@@ -275,11 +286,18 @@ export function createSummaryPage() {
         ).childNodes
       );
     }
+
+    markUpdated();
   }
 
   reload();
   getWhatsAppCategories().then(applyTaxonomyFromApi).catch(() => {});
-  const timer = window.setInterval(reload, REFRESH_MS);
+  const timer = window.setInterval(() => {
+    if (activeInteractions > 0) {
+      return;
+    }
+    reload();
+  }, REFRESH_MS);
   page.addEventListener("jarvis:destroy", () => window.clearInterval(timer));
 
   return page;

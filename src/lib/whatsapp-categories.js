@@ -10,6 +10,7 @@ export const WORK_CATEGORIES = [
   "document",
   "complaint",
   "shipment",
+  "order",
   "budget",
   "scope",
   "timeline",
@@ -37,6 +38,7 @@ export const CATEGORY_LABELS = {
   document: "Document request",
   complaint: "Complaint",
   shipment: "Shipment",
+  order: "Order confirmed",
   budget: "Budget / pricing",
   scope: "Scope",
   timeline: "Timeline",
@@ -84,6 +86,7 @@ export const CATEGORY_SECTIONS = [
       "lead",
       "document",
       "shipment",
+      "order",
       "budget",
       "scope",
       "timeline",
@@ -106,7 +109,7 @@ export const CATEGORY_SECTIONS = [
 ];
 
 const URGENT_CATEGORIES = new Set(["payment", "complaint"]);
-const SCHEDULE_CATEGORIES = new Set(["meeting"]);
+const SCHEDULE_CATEGORIES = new Set(["meeting", "family_plan"]);
 
 export function resolveCategory(suggestion) {
   return suggestion.category || suggestion.kind || "other";
@@ -135,7 +138,12 @@ export function isUrgent(suggestion) {
 }
 
 export function canSchedule(suggestion) {
-  return SCHEDULE_CATEGORIES.has(resolveCategory(suggestion));
+  // Never show Schedule for a tentative or one-sided plan — only once both sides of the
+  // conversation have clearly confirmed (see classifier.py MUTUAL CONFIRMATION RULE).
+  return (
+    SCHEDULE_CATEGORIES.has(resolveCategory(suggestion)) &&
+    suggestion.details?.confirmed === true
+  );
 }
 
 export function canSendReply(suggestion) {
@@ -161,6 +169,26 @@ export function partitionSuggestions(suggestions) {
   return buckets;
 }
 
+function draftPendingHint(suggestion, formatMeetingTime) {
+  // The card lists the moment it's classified; the drafted reply itself is what waits
+  // out Rule 9's timer (instant/30min/4-6h). Only show this when that's actually why
+  // there's no draft yet — not for low-confidence, a pending clarifying question (that
+  // has its own UI — see needs_clarification), or reminder-only (no-reply) cards.
+  if (
+    suggestion.draft_text ||
+    suggestion.details?.low_confidence ||
+    suggestion.details?.needs_clarification ||
+    !suggestion.visible_after
+  ) {
+    return null;
+  }
+  const readyAt = new Date(suggestion.visible_after);
+  if (Number.isNaN(readyAt.getTime()) || readyAt <= new Date()) {
+    return null;
+  }
+  return `Drafting reply — ready ${formatMeetingTime ? formatMeetingTime(suggestion.visible_after) : readyAt.toLocaleString()}`;
+}
+
 export function buildCategoryMeta(suggestion, { formatMeetingTime }) {
   const key = resolveCategory(suggestion);
   const parts = [];
@@ -168,6 +196,11 @@ export function buildCategoryMeta(suggestion, { formatMeetingTime }) {
   const actionHint = categoryActionHint(suggestion);
   if (actionHint && actionHint !== categoryLabel(suggestion)) {
     parts.push(actionHint);
+  }
+
+  const pendingHint = draftPendingHint(suggestion, formatMeetingTime);
+  if (pendingHint) {
+    parts.push(pendingHint);
   }
 
   if (key === "payment") {
