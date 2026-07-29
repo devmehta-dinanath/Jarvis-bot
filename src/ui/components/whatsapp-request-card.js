@@ -27,6 +27,11 @@ function isEnglishLanguage(language) {
 }
 
 function defaultDraft(suggestion) {
+  // 7-day silent observation: never fall back to a canned line here — the whole point is
+  // an empty box so whatever gets sent is genuinely the owner's own wording, not AI-authored.
+  if (suggestion.details?.silent_observation) {
+    return suggestion.draft_text || "";
+  }
   const link = suggestion.details?.meet_link || suggestion.details?.calendar_html_link;
   if (link && resolveCategory(suggestion) === "meeting") {
     return `Yes, happy to connect! Here's the link: ${link}`;
@@ -113,7 +118,12 @@ export function createWhatsAppRequestCard(
   original.className = "language-card__original";
   original.textContent =
     suggestion.message_body || suggestion.message_summary || "No message text.";
-  if (category === "personal_silence" && !suggestion.message_body) {
+  if (
+    (category === "personal_silence" ||
+      category === "awaiting_reply" ||
+      category === "pending_commitment") &&
+    !suggestion.message_body
+  ) {
     original.textContent =
       suggestion.details?.chip_label ||
       `You haven't replied to ${displayName(suggestion)} yet.`;
@@ -187,9 +197,13 @@ export function createWhatsAppRequestCard(
   draftSection.className = "language-card__draft";
   draftSection.hidden = !showDraft;
 
+  const isSilentObservation = Boolean(suggestion.details?.silent_observation);
+
   const draftLabel = document.createElement("p");
   draftLabel.className = "language-card__label";
-  draftLabel.textContent = isForeignLanguage
+  draftLabel.textContent = isSilentObservation
+    ? "Your reply — learning your tone, no AI draft"
+    : isForeignLanguage
     ? `Draft reply — write in English, sent to them in ${suggestion.message_language}`
     : "Draft reply";
 
@@ -201,8 +215,12 @@ export function createWhatsAppRequestCard(
   draftInput.className = "whatsapp-card__draft-input";
   draftInput.value = defaultDraft(suggestion);
   draftInput.rows = 3;
-  draftInput.hidden = true;
+  draftInput.hidden = !isSilentObservation;
   draftInput.setAttribute("aria-label", "Edit draft reply");
+  if (isSilentObservation) {
+    draftInput.placeholder = "Type your reply…";
+    draftText.hidden = true;
+  }
 
   draftSection.append(draftLabel, draftText, draftInput);
 
@@ -218,7 +236,7 @@ export function createWhatsAppRequestCard(
   const editBtn = document.createElement("button");
   editBtn.type = "button";
   editBtn.className = "btn btn--ghost";
-  editBtn.textContent = "Edit";
+  editBtn.textContent = isSilentObservation ? "Done" : "Edit";
   editBtn.hidden = !showDraft;
 
   const scheduleBtn = document.createElement("button");
@@ -304,7 +322,6 @@ export function createWhatsAppRequestCard(
   }
 
   function setEditing(editing) {
-    const wasEditing = !draftInput.hidden;
     draftInput.hidden = !editing;
     draftText.hidden = editing;
     editBtn.textContent = editing ? "Done" : "Edit";
@@ -313,9 +330,6 @@ export function createWhatsAppRequestCard(
       draftInput.focus();
     } else {
       draftText.textContent = draftInput.value.trim() || defaultDraft(suggestion);
-    }
-    if (editing !== wasEditing) {
-      setInteracting(editing);
     }
   }
 
@@ -361,6 +375,13 @@ export function createWhatsAppRequestCard(
     setEditing(false);
     sendDraft();
   });
+
+  // Focus-driven instead of click-driven: covers both the "click Edit first" flow above
+  // and the silent-observation box, which is editable from the moment it renders with no
+  // Edit click to hook into. Without this, typing here is invisible to the auto-refresh
+  // guard and the periodic reload wipes the in-progress draft out from under the user.
+  draftInput.addEventListener("focus", () => setInteracting(true));
+  draftInput.addEventListener("blur", () => setInteracting(false));
 
   scheduleBtn.addEventListener("click", async () => {
     if (typeof onSchedule !== "function") {

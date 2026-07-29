@@ -290,10 +290,18 @@ export function createSummaryPage() {
     markUpdated();
   }
 
+  function isUserTyping() {
+    const active = document.activeElement;
+    return Boolean(active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT"));
+  }
+
   reload();
   getWhatsAppCategories().then(applyTaxonomyFromApi).catch(() => {});
   const timer = window.setInterval(() => {
-    if (activeInteractions > 0) {
+    // activeInteractions covers tracked interactions (draft edit, correction panel).
+    // isUserTyping() is a blanket fallback keyed off actual DOM focus, so any input/textarea
+    // we forget to wire up explicitly is still protected from being wiped mid-refresh.
+    if (activeInteractions > 0 || isUserTyping()) {
       return;
     }
     reload();

@@ -24,11 +24,14 @@ export const NUDGE_CATEGORIES = ["greeting", "voice_note", "media"];
 
 export const LIFE_NUDGE_CATEGORIES = ["personal_silence"];
 
+export const WORK_NUDGE_CATEGORIES = ["awaiting_reply", "pending_commitment"];
+
 export const ALL_SURFACE_CATEGORIES = [
   ...WORK_CATEGORIES,
   ...LIFE_CATEGORIES,
   ...NUDGE_CATEGORIES,
-  ...LIFE_NUDGE_CATEGORIES
+  ...LIFE_NUDGE_CATEGORIES,
+  ...WORK_NUDGE_CATEGORIES
 ];
 
 export const CATEGORY_LABELS = {
@@ -50,7 +53,9 @@ export const CATEGORY_LABELS = {
   greeting: "Casual message",
   voice_note: "Voice note",
   media: "Media",
-  personal_silence: "Reply reminder"
+  personal_silence: "Reply reminder",
+  awaiting_reply: "Awaiting your reply",
+  pending_commitment: "Pending commitment"
 };
 
 /** Merge labels from GET /api/v1/whatsapp/categories (backend taxonomy.py). */
@@ -91,7 +96,9 @@ export const CATEGORY_SECTIONS = [
       "scope",
       "timeline",
       "follow_up",
-      "other"
+      "other",
+      "awaiting_reply",
+      "pending_commitment"
     ]
   },
   {
@@ -149,8 +156,10 @@ export function canSchedule(suggestion) {
 export function canSendReply(suggestion) {
   // No draft means the AI either can't send a reply for this category (voice note,
   // media, reminders) or deliberately didn't draft one (low-confidence chip) — never
-  // fall back to a generic canned reply in either case.
-  return Boolean(suggestion.draft_text);
+  // fall back to a generic canned reply in either case. The one exception is the 7-day
+  // silent-observation window: there's still no AI draft, but the box itself should show
+  // so the owner can type and send their own reply from inside the app.
+  return Boolean(suggestion.draft_text) || Boolean(suggestion.details?.silent_observation);
 }
 
 export function partitionSuggestions(suggestions) {
@@ -178,6 +187,7 @@ function draftPendingHint(suggestion, formatMeetingTime) {
     suggestion.draft_text ||
     suggestion.details?.low_confidence ||
     suggestion.details?.needs_clarification ||
+    suggestion.details?.silent_observation ||
     !suggestion.visible_after
   ) {
     return null;
