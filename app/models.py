@@ -448,6 +448,36 @@ class WhatsAppLearningState(Base):
     )
 
 
+class WhatsAppCommitment(Base):
+    """A promise the account owner made to a client in an outbound message ('I'll send
+    you the price list') that hasn't been fulfilled yet. Detected/resolved by
+    classifier.detect_commitment / check_commitment_fulfilled (see
+    WhatsAppService._analyze_commitment); reminded on by
+    WhatsAppService._check_pending_commitments, re-using the same 24h/3-day thresholds
+    as the awaiting-reply check. Only one open commitment is tracked per contact at a
+    time — a new one isn't looked for until the current one is fulfilled."""
+
+    __tablename__ = "whatsapp_commitments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    contact_id: Mapped[int] = mapped_column(
+        ForeignKey("whatsapp_contacts.id"), nullable=False, index=True
+    )
+    # The outbound message where the promise was made.
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("whatsapp_messages.id"), nullable=True
+    )
+    commitment_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    label: Mapped[str] = mapped_column(String(300), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    contact: Mapped["WhatsAppContact"] = relationship("WhatsAppContact")
+
+
 class TeamForwardingRule(Base):
     """Rule 14 — 'forward to team'. Maps a detection trigger (a classified category, plus
     an optional refinement like payment_status='received') to a team member's WhatsApp

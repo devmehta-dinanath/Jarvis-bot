@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app import models
@@ -246,6 +246,123 @@ def personal_contacts_awaiting_reply(
     return [c for c in contacts if not pending_life_nudge_exists(db, c.id)]
 
 
+def work_contacts_awaiting_reply(
+    db: Session,
+    *,
+    flag_hours: float,
+    active_within_days: int = 30,
+) -> list[models.WhatsAppContact]:
+    """Client/work-lane counterpart to personal_contacts_awaiting_reply. Unlike the
+    'follow_up' category (which only fires once the other side re-pings you), this
+    catches a client who sent one message and simply never got a reply — proactively,
+    on elapsed time alone."""
+    cutoff = datetime.utcnow() - timedelta(hours=flag_hours)
+    active_since = datetime.utcnow() - timedelta(days=active_within_days)
+    contacts = (
+        db.query(models.WhatsAppContact)
+        .filter(
+            or_(
+                models.WhatsAppContact.contact_type.is_(None),
+                models.WhatsAppContact.contact_type != "personal",
+            ),
+            models.WhatsAppContact.is_group.is_(False),
+            models.WhatsAppContact.is_excluded.is_(False),
+            models.WhatsAppContact.last_inbound_at.isnot(None),
+            models.WhatsAppContact.last_inbound_at >= active_since,
+            models.WhatsAppContact.last_inbound_at <= cutoff,
+            (
+                models.WhatsAppContact.last_replied_at.is_(None)
+                | (models.WhatsAppContact.last_replied_at <= models.WhatsAppContact.last_inbound_at)
+            ),
+        )
+        .all()
+    )
+    return [c for c in contacts if not pending_followup_nudge_exists(db, c.id)]
+
+
+def pending_followup_nudge_exists(db: Session, contact_id: int) -> bool:
+    """Same dedup rule as pending_life_nudge_exists: one awaiting-reply nudge per
+    contact per silence period — a new one becomes possible once they message again."""
+    contact = db.get(models.WhatsAppContact, contact_id)
+    query = db.query(models.WhatsAppSuggestion.id).filter(
+        models.WhatsAppSuggestion.contact_id == contact_id,
+        models.WhatsAppSuggestion.kind == "followup_nudge",
+    )
+    if contact is not None and contact.last_inbound_at is not None:
+        query = query.filter(
+            models.WhatsAppSuggestion.created_at >= contact.last_inbound_at
+        )
+    return query.first() is not None
+
+
+def pending_commitment_for_contact(db: Session, contact_id: int) -> models.WhatsAppCommitment | None:
+    """The one open (unfulfilled) commitment for this contact, if any — only one is
+    tracked at a time per contact."""
+    return (
+        db.query(models.WhatsAppCommitment)
+        .filter(
+            models.WhatsAppCommitment.contact_id == contact_id,
+            models.WhatsAppCommitment.fulfilled_at.is_(None),
+        )
+        .order_by(models.WhatsAppCommitment.created_at.desc())
+        .first()
+    )
+
+
+def create_commitment(
+    db: Session,
+    *,
+    contact_id: int,
+    message_id: int | None,
+    commitment_type: str,
+    label: str,
+) -> models.WhatsAppCommitment:
+    commitment = models.WhatsAppCommitment(
+        contact_id=contact_id,
+        message_id=message_id,
+        commitment_type=commitment_type,
+        label=label,
+    )
+    db.add(commitment)
+    db.flush()
+    return commitment
+
+
+def fulfill_commitment(db: Session, commitment_id: int) -> None:
+    commitment = db.get(models.WhatsAppCommitment, commitment_id)
+    if commitment is not None:
+        commitment.fulfilled_at = datetime.utcnow()
+
+
+def commitments_awaiting_reminder(
+    db: Session,
+    *,
+    flag_hours: float,
+    reminder_interval_hours: float,
+) -> list[models.WhatsAppCommitment]:
+    """Unfulfilled commitments old enough to flag, that haven't been reminded about
+    recently. last_reminded_at (not the created suggestion) is the dedup source of
+    truth — a reminder chip can get dismissed by an unrelated later reply, but the
+    underlying promise is still open and due to be re-flagged."""
+    now = datetime.utcnow()
+    cutoff = now - timedelta(hours=flag_hours)
+    reminder_cutoff = now - timedelta(hours=reminder_interval_hours)
+    return (
+        db.query(models.WhatsAppCommitment)
+        .join(models.WhatsAppContact, models.WhatsAppCommitment.contact_id == models.WhatsAppContact.id)
+        .filter(
+            models.WhatsAppCommitment.fulfilled_at.is_(None),
+            models.WhatsAppCommitment.created_at <= cutoff,
+            (
+                models.WhatsAppCommitment.last_reminded_at.is_(None)
+                | (models.WhatsAppCommitment.last_reminded_at <= reminder_cutoff)
+            ),
+            models.WhatsAppContact.is_excluded.is_(False),
+        )
+        .all()
+    )
+
+
 def contact_prior_message_count(db: Session, contact_id: int, *, exclude_message_id: int) -> int:
     return (
         db.query(models.WhatsAppMessage.id)
@@ -276,6 +393,22 @@ def next_unclassified_inbound(db: Session) -> models.WhatsAppMessage | None:
         db.query(models.WhatsAppMessage)
         .filter(
             models.WhatsAppMessage.direction == "inbound",
+            models.WhatsAppMessage.classified_at.is_(None),
+            models.WhatsAppMessage.msg_type == "text",
+        )
+        .order_by(models.WhatsAppMessage.id.asc())
+        .first()
+    )
+
+
+def next_uncommitment_checked_outbound(db: Session) -> models.WhatsAppMessage | None:
+    """Oldest outbound text message not yet checked for a new/fulfilled commitment.
+    Reuses classified_at as the 'processed' marker — safe because classification only
+    ever queries direction == 'inbound'."""
+    return (
+        db.query(models.WhatsAppMessage)
+        .filter(
+            models.WhatsAppMessage.direction == "outbound",
             models.WhatsAppMessage.classified_at.is_(None),
             models.WhatsAppMessage.msg_type == "text",
         )

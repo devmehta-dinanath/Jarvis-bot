@@ -456,6 +456,26 @@ def extract_family_plan(message: str) -> dict[str, Any]:
     }
 
 
+def detect_commitment(message: str) -> dict[str, Any]:
+    """No-LLM fallback: never guess a commitment without the model — false positives here
+    would nag the user about promises that were never actually made."""
+    return {"is_commitment": False, "commitment_type": None, "label": None}
+
+
+def check_commitment_fulfilled(label: str, message: str) -> bool:
+    """No-LLM fallback: stay conservative — never mark a commitment fulfilled without
+    the model actually confirming it, or a real one could go quietly unreminded."""
+    return False
+
+
+def extract_deadline(message: str) -> dict[str, Any]:
+    """Keyword-only fallback: returns a best-effort deadline structure (no date resolved)."""
+    return {
+        "deadline_label": "Deadline",
+        "date": None,
+    }
+
+
 def extract_personal_date(message: str) -> dict[str, Any]:
     """Keyword-only fallback: returns a best-effort personal date structure (no date resolved)."""
     return {

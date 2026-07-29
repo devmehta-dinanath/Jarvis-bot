@@ -492,6 +492,58 @@ _MEETING_SYSTEM = (
 )
 
 
+_COMMITMENT_SYSTEM = (
+    "You analyze a business message the ACCOUNT OWNER just sent to a client on WhatsApp. "
+    "Decide whether this message makes a NEW commitment to send or do something for the "
+    "client that is NOT already done in the message itself — e.g. 'I'll send you the price "
+    "list', 'Let me get you the details', 'I will share the invoice shortly', 'I'll confirm "
+    "and send the documents tomorrow'. "
+    "Do NOT treat it as a commitment if the message already delivers the thing right there "
+    "(e.g. it contains the actual price/quote, or is just answering a question with the "
+    "answer included) — only a promise of FUTURE action counts. Small talk, greetings, and "
+    "messages with no promise at all are never commitments. "
+    "Respond ONLY with a JSON object with keys: "
+    "is_commitment (boolean), "
+    "commitment_type ('pricing', 'document', 'other', or null — null if is_commitment is "
+    "false; 'pricing' for a quote/cost/budget promise, 'document' for a file/invoice/"
+    "catalogue/report promise, 'other' for anything else), "
+    "label (a short description of what was promised, e.g. 'Send price list', 'Share the "
+    "invoice', or null if is_commitment is false)."
+)
+
+
+def detect_commitment(message: str) -> dict[str, Any]:
+    """Does this outbound message promise the client something not yet delivered?"""
+    user_content = f"Message the account owner just sent:\n{message}\n\nAnalyze as JSON:"
+    data = _chat_json(_COMMITMENT_SYSTEM, user_content, max_tokens=100)
+    return {
+        "is_commitment": bool(data.get("is_commitment", False)),
+        "commitment_type": (data.get("commitment_type") or "").strip().lower() or None,
+        "label": (data.get("label") or "").strip() or None,
+    }
+
+
+_FULFILLMENT_SYSTEM = (
+    "The account owner previously promised something to a client on WhatsApp. They just "
+    "sent this client a NEW message. Decide whether the new message actually fulfills that "
+    "promise — e.g. it contains the price/quote, references an attached document, or "
+    "explicitly confirms it was sent/shared. A message that just chats about something "
+    "else, or repeats another vague 'I'll send it soon', does NOT fulfill it. "
+    "Respond ONLY with a JSON object with key: fulfilled (boolean)."
+)
+
+
+def check_commitment_fulfilled(label: str, message: str) -> bool:
+    """Does this new outbound message actually deliver on a previously promised commitment?"""
+    user_content = (
+        f"What was promised: {label}\n\n"
+        f"New message the account owner just sent:\n{message}\n\n"
+        "Analyze as JSON:"
+    )
+    data = _chat_json(_FULFILLMENT_SYSTEM, user_content, max_tokens=40)
+    return bool(data.get("fulfilled", False))
+
+
 def is_english(language: str | None) -> bool:
     if not language:
         return True
@@ -895,6 +947,19 @@ _PERSONAL_DATE_SYSTEM = (
     "notes (any extra context from the message, or null)."
 )
 
+_DEADLINE_SYSTEM = (
+    "You extract a business deadline or delivery date from a client's WhatsApp message. "
+    "Use the provided current date/time to resolve relative phrases like 'by Friday', "
+    "'end of month', 'in 3 days', 'before the 20th' into a concrete ISO 8601 date in the "
+    "given timezone. If the message only asks a vague question with no date stated or "
+    "implied ('when will it be ready?', 'what's the timeline?'), set date to null — do "
+    "NOT invent one just because the category is about a deadline. "
+    "Respond ONLY with a JSON object with keys: "
+    "deadline_label (short description, e.g. 'Delivery deadline', 'Report due date', "
+    "'Requested ETA'), "
+    "date (ISO 8601 date string YYYY-MM-DD if a concrete date is given/resolvable, else null)."
+)
+
 _PERSONAL_TASK_SYSTEM = (
     "You extract a personal errand, task, or to-do from a WhatsApp message. "
     "Respond ONLY with a JSON object with keys: "
@@ -904,6 +969,25 @@ _PERSONAL_TASK_SYSTEM = (
     "items (list of specific items/things if the task involves picking something up, else []), "
     "timing_hint (any timing context like 'on the way home', 'before Saturday', or null)."
 )
+
+
+def extract_deadline(message: str) -> dict[str, Any]:
+    """Extract a business deadline/delivery date and resolve it to a concrete date,
+    for the 'timeline' category — a null date means no concrete date was actually given."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
+    user_content = (
+        f"Current date/time: {now.isoformat()} ({CALENDAR_DEFAULT_TIMEZONE})\n\n"
+        f"Message:\n{message}\n\n"
+        "Extract the deadline as JSON:"
+    )
+    data = _chat_json(_DEADLINE_SYSTEM, user_content, max_tokens=100)
+    return {
+        "deadline_label": (data.get("deadline_label") or "").strip() or "Deadline",
+        "date": (data.get("date") or "").strip() or None,
+    }
 
 
 def extract_personal_date(message: str) -> dict[str, Any]:
