@@ -1536,10 +1536,11 @@ class WhatsAppService:
                     message.contact_id, message.id)
 
     def _handle_media_message(self, db, message) -> None:
-        """Caption-less media (photo/video/document/sticker/...) is never downloaded or
-        read — there was never any vision/OCR step here, but this used to still raise a
-        "sent a photo" nudge chip for it. That's no longer useful, so it's just marked
-        classified (so it isn't retried forever) and otherwise ignored."""
+        """Media (photo/video/document/sticker/...) is never downloaded, read, or
+        classified — not the file, and not the caption either when there is one (see
+        webhook._classify_if_enabled, which routes every inbound media msg_type here
+        before the caption/body is even looked at). It's just marked classified (so it
+        isn't retried forever) and otherwise ignored — no suggestion, no chip."""
         db.refresh(message)
         if message.classified_at is not None:
             return
@@ -1553,8 +1554,8 @@ class WhatsAppService:
         message.priority = "low"
         db.commit()
         logger.info(
-            "[WHATSAPP] Caption-less media ignored for contact %s (message=%s type=%s) — "
-            "media content is not read",
+            "[WHATSAPP] Media message ignored for contact %s (message=%s type=%s) — "
+            "content and caption are not read",
             message.contact_id, message.id, message.msg_type,
         )
 

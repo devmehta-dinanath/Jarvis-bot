@@ -676,9 +676,24 @@ def set_reminder(
     if contact_name and contact_name.lower() not in summary.lower():
         summary = f"{summary} — {contact_name}"
 
+    original_message = (
+        db.get(models.WhatsAppMessage, suggestion.message_id)
+        if suggestion.message_id is not None
+        else None
+    )
+    description_parts = []
+    if contact_name:
+        description_parts.append(f"With: {contact_name}")
+    if original_message is not None and (original_message.body or "").strip():
+        description_parts.append(f'Message: "{original_message.body.strip()}"')
+    description_parts.append(
+        "Personal reminder set from Personal OS — no message was sent to the contact."
+    )
+    description = "\n\n".join(description_parts)
+
     payload = EventCreate(
         summary=summary,
-        description="Personal reminder set from Personal OS — no message was sent to the contact.",
+        description=description,
         start=EventDateTime(
             date_time=_to_calendar_iso(start_dt),
             time_zone=CALENDAR_DEFAULT_TIMEZONE,

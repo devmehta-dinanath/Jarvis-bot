@@ -442,21 +442,20 @@ def _classify_if_enabled(db: Session, message) -> None:
             service_manager.whatsapp.handle_voice_note_now(db, message)
             return
 
-        if not (message.body or "").strip():
-            # No text to classify. Previously this unconditionally dropped the
-            # message here — including captioned photos/videos/documents,
-            # which DO have a body (their caption) but were skipped purely
-            # because msg_type != "text", making them silently invisible in
-            # the inbox feed. Bodiless media (no caption) still can't be
-            # classified, but surface it as a lightweight chip instead of
-            # dropping it outright so it isn't invisible either.
-            if message.direction == "inbound" and message.msg_type in _MEDIA_MSG_TYPES:
-                service_manager.whatsapp.handle_media_message_now(db, message)
+        # Media (photo/video/document/sticker/...) is never read or classified — not the
+        # file, and not its caption either, even when one is present. Previously only
+        # bodiless (caption-less) media was skipped here; a captioned PDF/photo still fell
+        # through to the normal classifier below and raised a real suggestion card off the
+        # caption text, which is the "still being shown media" bug this closes.
+        if message.direction == "inbound" and message.msg_type in _MEDIA_MSG_TYPES:
+            service_manager.whatsapp.handle_media_message_now(db, message)
             return
 
-        # Any message with usable text — a plain text message or a captioned
-        # media message — goes through the normal classifier regardless of
-        # msg_type.
+        if not (message.body or "").strip():
+            return
+
+        # Any message with usable text — a plain text message — goes through the normal
+        # classifier.
         service_manager.whatsapp.classify_message_now(db, message)
     except WhatsAppAIError as exc:
         logger.warning("[WHATSAPP] Immediate classification failed for %s: %s", message.id, exc)
