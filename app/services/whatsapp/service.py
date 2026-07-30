@@ -23,7 +23,6 @@ from app.config import (
     WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS,
     WHATSAPP_PERSONAL_SILENCE_DAYS,
     WHATSAPP_POLL_INTERVAL_SECONDS,
-    WHATSAPP_REPLY_COOLDOWN_HOURS,
     WHATSAPP_SILENT_OBSERVATION_HOURS,
     WHATSAPP_USER_NAMES,
 )
@@ -700,23 +699,16 @@ class WhatsAppService:
             confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
         ) and not (reads_as_personal and not is_urgent_category)
 
-        # Rule 9 — reply threshold/timing rules. This is a client-triage rule and does not
-        # apply to LIFE lane messages (family/close friends, handled entirely separately).
-        # Payment/complaint/lead are "urgent": they always surface immediately and skip the
-        # known-contact/reply-cooldown gates below. Everything else must be from a contact
-        # with prior history, and the user must not have replied to them within the cooldown
-        # window, or it is suppressed entirely.
+        # Rule 9 — reply timing only now. Used to also gate on "known contact" (prior
+        # message history) and a reply-cooldown, silently dropping a non-urgent message
+        # entirely if either failed — calibrated for the old 7-day silent window, where a
+        # contact naturally built up prior history before suggestions ever started
+        # showing. With the window down to a few hours, that gate was dropping most
+        # first-time non-urgent messages right when the window ended (only payment/
+        # complaint/lead ever got through, since those bypass it) — removed at the user's
+        # request. Payment/complaint/lead/life-lane still surface instantly; everything
+        # else just waits out its normal delay below instead of being suppressed.
         bypasses_reply_rules = is_urgent_category or is_life_lane
-        known_contact = prior_count > 0
-        recently_replied = (
-            message.contact is not None
-            and message.contact.last_replied_at is not None
-            and (datetime.utcnow() - message.contact.last_replied_at)
-            < timedelta(hours=WHATSAPP_REPLY_COOLDOWN_HOURS)
-        )
-        suppressed_by_reply_rules = not bypasses_reply_rules and (
-            not known_contact or recently_replied
-        )
 
         if bypasses_reply_rules:
             delay = timedelta(0)
@@ -774,12 +766,6 @@ class WhatsAppService:
             )
             suggestion = self._create_blank_suggestion(
                 db, message, category, priority, lane, confidence
-            )
-        elif suppressed_by_reply_rules:
-            logger.info(
-                "[WHATSAPP] Message %s suppressed by reply-threshold rules "
-                "(known_contact=%s recently_replied=%s category=%s)",
-                message.id, known_contact, recently_replied, category,
             )
         elif result.get("needs_clarification"):
             if repo.pending_clarification_exists(db, message.contact_id):
