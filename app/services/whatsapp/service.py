@@ -1,3 +1,4 @@
+import json
 import logging
 import random
 import threading
@@ -687,17 +688,21 @@ class WhatsAppService:
         if not is_group and not is_forwarded and not is_life_lane:
             self._analyze_client_commitment(db, message, body, result["is_important"])
 
-        # Fail closed for client/WORK-lane messages: an unparseable/missing confidence score
-        # is treated as "not confident" and no such category (including payment/complaint) is
-        # exempt, since a wrong suggestion to a client is worse than a missed one. A contact
-        # already established as personal (family/close friend, from an earlier
-        # personal_date/personal_task/family_plan message) — or whose first message simply
-        # reads as personal in tone — is a different risk profile: a slightly-off casual reply
-        # costs nothing, so their non-urgent chatter always gets a drafted attempt instead of
-        # being held to the same client-accuracy bar.
+        # "Confidence" here is the classifier's certainty about the CATEGORY (is this a
+        # payment vs. a lead vs. just chatter?) — a completely separate signal from
+        # whether we actually know how the owner answers this kind of question. A message
+        # can score low on category confidence while there's still precedent for "how do I
+        # answer this kind of question" — has_reply_precedent checks exactly that (at
+        # least one prior reply to ANY contact about this category, not just this one —
+        # generalized at the user's request), and skips the confidence gate when it's
+        # true, same as the personal-tone exemption below. Fail closed everywhere else: an
+        # unparseable/missing confidence score counts as "not confident", and no category
+        # (including payment/complaint) is otherwise exempt — a wrong suggestion to a
+        # client is worse than a missed one.
+        has_precedent = repo.has_reply_precedent(db, category)
         below_threshold = (
             confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
-        ) and not (reads_as_personal and not is_urgent_category)
+        ) and not (reads_as_personal and not is_urgent_category) and not has_precedent
 
         # Rule 9 — reply timing only now. Used to also gate on "known contact" (prior
         # message history) and a reply-cooldown, silently dropping a non-urgent message
@@ -724,6 +729,7 @@ class WhatsAppService:
         visible_after = datetime.utcnow() + delay
 
         suggestion = None
+        needs_review_reason: str | None = None
         if result.get("safety_concern"):
             logger.warning(
                 "[WHATSAPP] Message %s flagged as a possible safety concern — surfacing for "
@@ -770,16 +776,18 @@ class WhatsAppService:
         elif result.get("needs_clarification"):
             if repo.pending_clarification_exists(db, message.contact_id):
                 # Rule 13 — max one question per conversation at a time. Don't stack a
-                # second one; fall back to the plain low-confidence nudge instead of
-                # going silent entirely.
+                # second one; draft a normal reply in the owner's tone instead of going
+                # silent entirely, flagged for a manual double-check since the ambiguity
+                # was never actually resolved.
                 logger.info(
                     "[WHATSAPP] Message %s needs clarification but one is already "
-                    "pending for contact %s — falling back to unconfident nudge",
+                    "pending for contact %s — drafting a best-effort reply instead",
                     message.id, message.contact_id,
                 )
-                suggestion = self._create_unconfident_suggestion(
-                    db, message, category, priority, confidence, lane
+                suggestion = self._create_suggestion(
+                    db, message, history, body, result, priority, instructions, corrections, voice_examples
                 )
+                needs_review_reason = "Ambiguous — please double-check before sending"
             else:
                 logger.info(
                     "[WHATSAPP] Message %s is ambiguous — asking: %s",
@@ -790,13 +798,13 @@ class WhatsAppService:
                     result["clarifying_question"], result["clarifying_options"],
                 )
         elif below_threshold:
+            # No reply precedent for this contact+category and the AI itself isn't
+            # confident about the category either — genuinely don't know how to respond,
+            # so no draft (see has_reply_precedent above for what exempts this).
             logger.info(
-                "[WHATSAPP] Message %s below confidence threshold "
-                "(category=%s confidence=%s < %s) — showing message, no AI draft",
-                message.id,
-                category,
-                confidence,
-                WHATSAPP_CHIP_CONFIDENCE_MIN,
+                "[WHATSAPP] Message %s below confidence threshold and no reply "
+                "precedent (category=%s confidence=%s < %s) — no AI draft",
+                message.id, category, confidence, WHATSAPP_CHIP_CONFIDENCE_MIN,
             )
             suggestion = self._create_unconfident_suggestion(
                 db, message, category, priority, confidence, lane
@@ -810,8 +818,15 @@ class WhatsAppService:
                 db, message, history, body, result, instructions, corrections, voice_examples
             )
 
+        if suggestion is None and needs_review_reason is not None:
+            # Some category dispatches (personal_date/personal_task/family_plan) create
+            # their suggestion internally and always return None here.
+            suggestion = repo.get_suggestion_for_message(db, message.id)
+
         if suggestion is not None:
             suggestion.visible_after = visible_after
+            if needs_review_reason is not None:
+                self._flag_needs_review(db, suggestion, needs_review_reason)
 
         db.commit()
         logger.info(
@@ -1330,12 +1345,30 @@ class WhatsAppService:
             details=details,
         )
 
+    def _flag_needs_review(self, db, suggestion, reason: str) -> None:
+        """Mark an already-drafted suggestion for a manual double-check instead of hiding
+        the draft outright — used for the Rule 13 double-clarification fallback (a second
+        ambiguous message when one clarifying question is already pending; see
+        _classify_one_unsafe), where a best-effort draft is still worth showing even
+        though the ambiguity was never actually resolved. The draft itself is untouched;
+        this only adds a warning prefix to the chip. low_confidence also suppresses the
+        "drafting reply, ready at..." countdown hint in the UI (see
+        whatsapp-categories.js draftPendingHint) since that timer isn't the reason
+        nothing's shown yet."""
+        details = json.loads(suggestion.details) if suggestion.details else {}
+        details["low_confidence"] = True
+        existing_label = details.get("chip_label")
+        details["chip_label"] = f"{reason} — {existing_label}" if existing_label else reason
+        suggestion.details = json.dumps(details)
+
     def _create_unconfident_suggestion(
         self, db, message, category: str, priority: str, confidence: int | None, lane: str
     ) -> None:
-        """AI could not classify/draft this with enough confidence to trust — surface the raw
-        message so the user knows it needs a look, but never auto-generate a reply for it.
-        No draft_text is set; the UI shows the message with no send/edit action."""
+        """No reply precedent for this contact+category, and the AI itself isn't
+        confident about the category either (see has_reply_precedent/below_threshold in
+        _classify_one_unsafe) — surface the raw message so the owner knows it needs a
+        look, but never auto-generate a reply for it. No draft_text is set; the UI shows
+        the message with no send/edit action."""
         if repo.suggestion_exists_for_message(db, message.id):
             return
         repo.create_suggestion(

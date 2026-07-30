@@ -528,6 +528,17 @@ def suggestion_exists_for_message(db: Session, message_id: int) -> bool:
     )
 
 
+def get_suggestion_for_message(
+    db: Session, message_id: int
+) -> models.WhatsAppSuggestion | None:
+    return (
+        db.query(models.WhatsAppSuggestion)
+        .filter(models.WhatsAppSuggestion.message_id == message_id)
+        .order_by(models.WhatsAppSuggestion.created_at.desc())
+        .first()
+    )
+
+
 def create_suggestion(
     db: Session,
     *,
@@ -671,6 +682,69 @@ def _preceding_inbound_category(
     return inbound_by_contact[idx][1] if idx >= 0 else None
 
 
+def _contact_category_reply_matches(
+    db: Session, contact_id: int, category: str, *, limit: int = 50
+) -> list[models.WhatsAppMessage]:
+    """Outbound replies to THIS contact whose immediately preceding inbound message was
+    THIS category — the tightest "how would I actually answer this" precedent signal.
+    Shared by recent_outbound_examples (tone matching) and has_reply_precedent
+    (confidence gating) — see WhatsAppService._classify_one_unsafe."""
+    inbound = (
+        db.query(models.WhatsAppMessage.timestamp, models.WhatsAppMessage.category)
+        .filter(models.WhatsAppMessage.contact_id == contact_id)
+        .filter(models.WhatsAppMessage.direction == "inbound")
+        .order_by(models.WhatsAppMessage.timestamp.asc())
+        .all()
+    )
+    if not inbound:
+        return []
+    outbound = (
+        db.query(models.WhatsAppMessage)
+        .filter(models.WhatsAppMessage.contact_id == contact_id)
+        .filter(models.WhatsAppMessage.direction == "outbound")
+        .filter(models.WhatsAppMessage.body.isnot(None))
+        .order_by(models.WhatsAppMessage.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        row for row in outbound
+        if _preceding_inbound_category(inbound, row.timestamp) == category
+    ]
+
+
+def has_reply_precedent(db: Session, category: str, *, min_count: int = 1) -> bool:
+    """True when there are at least `min_count` prior replies about THIS category —
+    across ANY contact, not scoped to one specific person (generalized at the user's
+    request: once the owner has established how they answer a CATEGORY of question for
+    anyone, a different contact's first-ever message in that category shouldn't need to
+    independently build up its own history before it stops being gated). Real precedent
+    for "how would I answer this", not just a broad personal/work tone guess.
+    Classification confidence (from classifier.classify_message) is the AI's certainty
+    about which CATEGORY a message belongs to; it has no idea whether we already know how
+    the owner answers this kind of question. This is the second, independent signal that
+    lets a message skip the confidence gate even when category confidence itself is shaky
+    — see WhatsAppService._classify_one_unsafe's below_threshold. min_count=1: a single
+    prior answer to this category, for anyone, is treated as enough precedent — the
+    quality of the draft itself still depends on the contact-scoped tone examples from
+    recent_outbound_examples and classifier._voice_examples_block's own (separate,
+    unchanged) minimum sample size before it actually uses examples in the prompt."""
+    contact_ids = [
+        row[0]
+        for row in db.query(models.WhatsAppMessage.contact_id)
+        .filter(models.WhatsAppMessage.direction == "inbound")
+        .filter(models.WhatsAppMessage.category == category)
+        .distinct()
+        .all()
+    ]
+    total = 0
+    for contact_id in contact_ids:
+        total += len(_contact_category_reply_matches(db, contact_id, category, limit=min_count + 10))
+        if total >= min_count:
+            return True
+    return False
+
+
 def recent_outbound_examples(
     db: Session,
     *,
@@ -700,26 +774,7 @@ def recent_outbound_examples(
                 examples.append(body)
 
     if contact_id is not None and category:
-        inbound = (
-            db.query(models.WhatsAppMessage.timestamp, models.WhatsAppMessage.category)
-            .filter(models.WhatsAppMessage.contact_id == contact_id)
-            .filter(models.WhatsAppMessage.direction == "inbound")
-            .order_by(models.WhatsAppMessage.timestamp.asc())
-            .all()
-        )
-        outbound = (
-            db.query(models.WhatsAppMessage)
-            .filter(models.WhatsAppMessage.contact_id == contact_id)
-            .filter(models.WhatsAppMessage.direction == "outbound")
-            .filter(models.WhatsAppMessage.body.isnot(None))
-            .order_by(models.WhatsAppMessage.timestamp.desc())
-            .limit(50)
-            .all()
-        )
-        matches = [
-            row for row in outbound
-            if _preceding_inbound_category(inbound, row.timestamp) == category
-        ]
+        matches = _contact_category_reply_matches(db, contact_id, category)
         _add(matches[:limit])
 
     if contact_id is not None and len(examples) < limit:
