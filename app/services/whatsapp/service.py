@@ -24,6 +24,7 @@ from app.config import (
     WHATSAPP_PERSONAL_SILENCE_DAYS,
     WHATSAPP_POLL_INTERVAL_SECONDS,
     WHATSAPP_REPLY_COOLDOWN_HOURS,
+    WHATSAPP_SILENT_OBSERVATION_HOURS,
     WHATSAPP_USER_NAMES,
 )
 from app.database import SessionLocal
@@ -55,6 +56,24 @@ def _draft_lang_kwargs(
             "translation": message.translation,
         }
     return {"language": None, "translation": None}
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an LLM-returned ISO datetime (e.g. classifier deadline_at extraction) into a
+    naive UTC datetime, matching datetime.utcnow() — everything this gets compared
+    against (commitments_awaiting_reminder) is naive UTC, so an aware value must be
+    converted, not just stripped, or a timezone offset silently becomes a same-clock-time
+    UTC value and shifts the deadline by hours."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        from datetime import timezone as _timezone
+        dt = dt.astimezone(_timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 def _format_meeting_when(meeting: dict) -> str | None:
@@ -132,23 +151,6 @@ def _clarify_chip_label(question: str) -> str:
 def _voice_note_chip_label(contact_name: str | None) -> str:
     who = contact_name or "this contact"
     return f"Voice note received from {who} — reply when you have listened."
-
-
-_MEDIA_TYPE_LABELS = {
-    "image": "a photo",
-    "video": "a video",
-    "document": "a document",
-    "sticker": "a sticker",
-    "contacts": "a contact card",
-    "location": "a location",
-    "media": "a file",
-}
-
-
-def _media_chip_label(contact_name: str | None, msg_type: str) -> str:
-    who = contact_name or "this contact"
-    what = _MEDIA_TYPE_LABELS.get(msg_type, "a file")
-    return f"{who} sent {what} with no caption — open WhatsApp to view it."
 
 
 def _eod_remind_at() -> datetime:
@@ -327,6 +329,10 @@ class WhatsAppService:
                     self._check_pending_commitments()
                 except Exception:
                     logger.exception("[WHATSAPP] Pending commitments check failed")
+                try:
+                    self._check_pending_client_commitments()
+                except Exception:
+                    logger.exception("[WHATSAPP] Pending client commitments check failed")
                 interval_s = WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS * 3600
                 self._next_silence_check_at = datetime.utcnow() + timedelta(seconds=interval_s)
 
@@ -479,7 +485,7 @@ class WhatsAppService:
             db.commit()
             return
 
-        pending = repo.pending_commitment_for_contact(db, message.contact_id)
+        pending = repo.pending_commitment_for_contact(db, message.contact_id, direction="owner")
         try:
             if pending is not None:
                 if classifier.check_commitment_fulfilled(pending.label, body):
@@ -497,14 +503,68 @@ class WhatsAppService:
                         message_id=message.id,
                         commitment_type=detected["commitment_type"] or "other",
                         label=detected["label"] or "Follow up on this",
+                        direction="owner",
+                        deadline_at=_parse_iso(detected.get("deadline_at")),
                     )
                     logger.info(
-                        "[WHATSAPP] New commitment detected for contact %s: %s",
-                        message.contact_id, detected["label"],
+                        "[WHATSAPP] New commitment detected for contact %s: %s (deadline=%s)",
+                        message.contact_id, detected["label"], detected.get("deadline_at"),
                     )
         except WhatsAppAIError as exc:
             logger.warning(
                 "[WHATSAPP] OpenAI commitment check failed for message %s: %s",
+                message.id, exc,
+            )
+        db.commit()
+
+    def _analyze_client_commitment(self, db, message, body: str, is_important: bool) -> None:
+        """Client-side counterpart to _analyze_commitment: does this INBOUND message
+        either fulfill the client's own currently open promise to the account owner, or
+        make a new one ('I'll send the payment proof in 2 hours')? Called from
+        _classify_one_unsafe right after classification — unlike the owner-side check,
+        this doesn't get its own queue since inbound messages are already processed one
+        at a time there. See WhatsAppCommitment.direction."""
+        if not is_important:
+            return
+        try:
+            self._analyze_client_commitment_unsafe(db, message, body)
+        except Exception:
+            logger.exception(
+                "[WHATSAPP] Client-commitment check failed unexpectedly for message %s",
+                message.id,
+            )
+            db.rollback()
+
+    def _analyze_client_commitment_unsafe(self, db, message, body: str) -> None:
+        pending = repo.pending_commitment_for_contact(db, message.contact_id, direction="client")
+        try:
+            if pending is not None:
+                if classifier.check_client_commitment_fulfilled(pending.label, body):
+                    repo.fulfill_commitment(db, pending.id)
+                    logger.info(
+                        "[WHATSAPP] Client commitment fulfilled for contact %s: %s",
+                        message.contact_id, pending.label,
+                    )
+            else:
+                detected = classifier.detect_client_commitment(body)
+                if detected["is_commitment"]:
+                    repo.create_commitment(
+                        db,
+                        contact_id=message.contact_id,
+                        message_id=message.id,
+                        commitment_type=detected["commitment_type"] or "other",
+                        label=detected["label"] or "Follow up on this",
+                        direction="client",
+                        deadline_at=_parse_iso(detected.get("deadline_at")),
+                    )
+                    logger.info(
+                        "[WHATSAPP] New client commitment detected for contact %s: %s "
+                        "(deadline=%s)",
+                        message.contact_id, detected["label"], detected.get("deadline_at"),
+                    )
+        except WhatsAppAIError as exc:
+            logger.warning(
+                "[WHATSAPP] OpenAI client-commitment check failed for message %s: %s",
                 message.id, exc,
             )
         db.commit()
@@ -530,15 +590,15 @@ class WhatsAppService:
         instructions = [
             i.text for i in repo.list_instructions(db, active_only=True)
         ]
-        voice_examples = repo.recent_outbound_examples(db, personal=is_personal_contact)
 
-        # Rule 12 — 7-day silent observation. Anchored retroactively to the earliest
-        # outbound message already on record (see get_or_create_learning_state), so an
-        # account with existing history doesn't lose a week of suggestions the moment
-        # this ships; a genuinely fresh install gets the real 7-day silent window.
+        # Rule 12 — silent tone-learning observation window. Anchored retroactively to the
+        # earliest outbound message already on record (see get_or_create_learning_state), so
+        # an account with existing history doesn't lose the window's worth of suggestions the
+        # moment this ships; a genuinely fresh install gets the real window from install time.
         learning_state = repo.get_or_create_learning_state(db)
         in_silent_observation = (
-            datetime.utcnow() - learning_state.observation_started_at < timedelta(days=7)
+            datetime.utcnow() - learning_state.observation_started_at
+            < timedelta(hours=WHATSAPP_SILENT_OBSERVATION_HOURS)
         )
 
         if wa_fallback.is_likely_spam(body, has_prior_history=prior_count > 0):
@@ -583,6 +643,18 @@ class WhatsAppService:
         lane: str = result.get("lane") or (
             "life" if category in classifier.LIFE_LANE_CATEGORIES else "work"
         )
+        # Rule 12 tone learning — prefer examples of how the owner has replied to THIS
+        # contact about THIS category before, falling back to the broader personal/work
+        # split when there isn't enough of that history yet (see
+        # repo.recent_outbound_examples). What gets typed into the empty reply box during
+        # the silent window becomes exactly this history, so drafting quality after the
+        # window ends improves as more per-person/per-category examples accumulate.
+        voice_examples = repo.recent_outbound_examples(
+            db,
+            personal=is_personal_contact,
+            contact_id=message.contact_id,
+            category=category,
+        )
         priority = result.get("priority", "normal")
         if category == "follow_up":
             priority = self._followup_priority(db, message)
@@ -608,6 +680,13 @@ class WhatsAppService:
         is_urgent_category = category in ("payment", "complaint", "lead")
         is_life_lane = category in classifier.LIFE_LANE_CATEGORIES
         reads_as_personal = is_personal_contact or bool(result.get("personal_tone"))
+
+        # Client-side commitment tracking ("I'll send the payment proof in 2 hours") — a
+        # WORK-lane, one-on-one concept, same scope as the owner-side commitment system.
+        # Runs regardless of which suggestion path this message takes below (including the
+        # silent-observation blank box), since it's a separate side channel, not a chip.
+        if not is_group and not is_forwarded and not is_life_lane:
+            self._analyze_client_commitment(db, message, body, result["is_important"])
 
         # Fail closed for client/WORK-lane messages: an unparseable/missing confidence score
         # is treated as "not confident" and no such category (including payment/complaint) is
@@ -663,18 +742,33 @@ class WhatsAppService:
             logger.info(
                 "[WHATSAPP] Message %s silently filtered (category=%s)", message.id, category
             )
-        elif in_silent_observation and (result["is_important"] or category == "greeting"):
-            # Rule 12 — 7-day silent observation. Checked ahead of Rule 9 (known-contact/
-            # cooldown gate) and the clarification/confidence gates deliberately: those all
-            # exist to decide whether an AI draft is trustworthy enough to show, but during
-            # this window there is no AI draft at all — every is_important/greeting message,
-            # including a brand-new contact's very first message, gets the same empty reply
-            # box. The point is to learn Sujay's own tone, not contaminate it with AI wording,
-            # and to capture exactly the first-contact replies that matter most for that.
-            # His own reply is saved as a normal outbound message either way, which is what
-            # feeds recent_outbound_examples/voice learning afterwards.
+        elif in_silent_observation and category == "meeting" and result["is_important"]:
+            # Rule 12 exception — a meeting proposal ("let's connect at 5") still needs an
+            # actionable schedule button during the silent window: waiting out the window
+            # for a manual reply could mean missing the proposed time entirely. Extracts
+            # the time exactly like the normal flow, but — like every other silent-window
+            # suggestion — sets no AI-drafted reply text; the owner's own tap on the
+            # schedule button is the acceptance, not AI wording.
             logger.info(
-                "[WHATSAPP] Message %s in 7-day silent observation window (started %s, "
+                "[WHATSAPP] Message %s is a meeting request during the silent observation "
+                "window — surfacing schedule button, no AI draft", message.id,
+            )
+            suggestion = self._create_silent_meeting_suggestion(
+                db, message, history, body, priority, lane, confidence
+            )
+        elif in_silent_observation and (result["is_important"] or category == "greeting"):
+            # Rule 12 — silent tone-learning observation. Checked ahead of Rule 9
+            # (known-contact/cooldown gate) and the clarification/confidence gates
+            # deliberately: those all exist to decide whether an AI draft is trustworthy
+            # enough to show, but during this window there is no AI draft at all — every
+            # is_important/greeting message, including a brand-new contact's very first
+            # message, gets the same empty reply box. The point is to learn the owner's own
+            # tone, not contaminate it with AI wording, and to capture exactly the
+            # first-contact replies that matter most for that. Their own reply is saved as
+            # a normal outbound message either way, which is what feeds
+            # recent_outbound_examples/voice learning afterwards.
+            logger.info(
+                "[WHATSAPP] Message %s in silent observation window (started %s, "
                 "category=%s) — surfacing with no AI draft for manual reply",
                 message.id, learning_state.observation_started_at, category,
             )
@@ -1301,6 +1395,42 @@ class WhatsAppService:
             },
         )
 
+    def _create_silent_meeting_suggestion(
+        self, db, message, history, body, priority: str, lane: str, confidence: int | None
+    ):
+        """Rule 12 exception for meeting requests (see _classify_one_unsafe): extracts the
+        proposed time the same way the normal meeting flow does, so the schedule button and
+        add_to_calendar both work, but sets no AI-drafted reply text — consistent with every
+        other suggestion raised during the silent window. The owner's tap on the schedule
+        button is the acceptance (see whatsapp-categories.js canSchedule for the meeting
+        category, which no longer requires the contact to have also confirmed in-chat)."""
+        if repo.suggestion_exists_for_message(db, message.id):
+            return None
+        try:
+            meeting = classifier.extract_meeting(history, body)
+        except WhatsAppAIError:
+            logger.warning(
+                "[WHATSAPP] OpenAI meeting extraction failed for message %s during silent "
+                "observation, using fallback", message.id,
+            )
+            meeting = wa_fallback.extract_meeting(body)
+        meeting = wa_calendar.enrich_meeting_details(meeting)
+        when = _format_meeting_when(meeting)
+        meeting["chip_label"] = f"Meeting {when} — schedule?" if when else "Meeting requested — schedule?"
+        meeting["silent_observation"] = True
+        return repo.create_suggestion(
+            db,
+            contact_id=message.contact_id,
+            message_id=message.id,
+            kind="meeting",
+            category="meeting",
+            priority=priority,
+            lane=lane,
+            confidence=confidence,
+            draft_text=None,
+            details=meeting,
+        )
+
     def _create_clarification_suggestion(
         self,
         db,
@@ -1406,49 +1536,27 @@ class WhatsAppService:
                     message.contact_id, message.id)
 
     def _handle_media_message(self, db, message) -> None:
+        """Caption-less media (photo/video/document/sticker/...) is never downloaded or
+        read — there was never any vision/OCR step here, but this used to still raise a
+        "sent a photo" nudge chip for it. That's no longer useful, so it's just marked
+        classified (so it isn't retried forever) and otherwise ignored."""
         db.refresh(message)
         if message.classified_at is not None:
             return
 
         from app import models as _models
         contact = db.get(_models.WhatsAppContact, message.contact_id)
-        contact_name = contact.profile_name if contact else None
-
-        if contact is not None and contact.is_excluded:
-            message.classified_at = datetime.utcnow()
-            message.is_important = False
-            message.category = "excluded"
-            db.commit()
-            return
 
         message.classified_at = datetime.utcnow()
         message.is_important = False
-        message.category = "media"
+        message.category = "excluded" if (contact is not None and contact.is_excluded) else "media"
         message.priority = "low"
-
-        if not repo.suggestion_exists_for_message(db, message.id):
-            media_lane = (
-                "life" if contact and getattr(contact, "contact_type", None) == "personal"
-                else "work"
-            )
-            repo.create_suggestion(
-                db,
-                contact_id=message.contact_id,
-                message_id=message.id,
-                kind="nudge",
-                category="media",
-                priority="low",
-                lane=media_lane,
-                draft_text=None,
-                details={
-                    "chip_label": _media_chip_label(contact_name, message.msg_type),
-                    "msg_type": message.msg_type,
-                },
-            )
-
         db.commit()
-        logger.info("[WHATSAPP] Caption-less media flagged for contact %s (message=%s type=%s)",
-                    message.contact_id, message.id, message.msg_type)
+        logger.info(
+            "[WHATSAPP] Caption-less media ignored for contact %s (message=%s type=%s) — "
+            "media content is not read",
+            message.contact_id, message.id, message.msg_type,
+        )
 
     def _create_personal_date_suggestion(
         self, db, message, history, body, priority,
@@ -1756,13 +1864,15 @@ class WhatsAppService:
         """Remind the owner about their own unfulfilled promises (pricing/documents they
         said they'd send) before the client has to chase them — the commitment
         counterpart to _check_work_awaiting_reply, which flags the client's side of an
-        unanswered thread instead of the owner's own side. Re-uses the same 24h/3-day
-        thresholds: first reminder past 24h unfulfilled, escalating to urgent past 3
-        days, re-reminded every further 24h while still open."""
+        unanswered thread instead of the owner's own side. Fires as soon as the promise's
+        own deadline has passed ('in 2 hours', 'by Friday' — see classifier.detect_commitment
+        deadline_at extraction); falls back to the generic 24h/3-day thresholds when the
+        message gave no timeframe at all, re-reminded every further 24h while still open."""
         db = SessionLocal()
         try:
             commitments = repo.commitments_awaiting_reminder(
                 db,
+                direction="owner",
                 flag_hours=WHATSAPP_FOLLOWUP_FLAG_HOURS,
                 reminder_interval_hours=WHATSAPP_FOLLOWUP_FLAG_HOURS,
             )
@@ -1770,10 +1880,11 @@ class WhatsAppService:
                 contact = commitment.contact
                 if contact is None:
                     continue
-                hours_waiting = (
-                    datetime.utcnow() - commitment.created_at
-                ).total_seconds() / 3600
-                is_urgent_wait = hours_waiting >= WHATSAPP_FOLLOWUP_URGENT_HOURS
+                reference = commitment.deadline_at or commitment.created_at
+                hours_overdue = max(
+                    0.0, (datetime.utcnow() - reference).total_seconds() / 3600
+                )
+                is_urgent_wait = hours_overdue >= WHATSAPP_FOLLOWUP_URGENT_HOURS
                 priority = "very_high" if is_urgent_wait else "high"
                 display_name = (contact.profile_name or "").strip() or contact.wa_id
                 chip_label = (
@@ -1794,16 +1905,94 @@ class WhatsAppService:
                         "chip_label": chip_label,
                         "commitment_label": commitment.label,
                         "commitment_type": commitment.commitment_type,
-                        "hours_waiting": round(hours_waiting, 1),
+                        "hours_overdue": round(hours_overdue, 1),
                     },
                 )
                 commitment.last_reminded_at = datetime.utcnow()
                 db.commit()
                 logger.info(
-                    "[WHATSAPP] Commitment reminder raised for contact %s (%.1f hours, "
-                    "priority=%s): %s",
+                    "[WHATSAPP] Commitment reminder raised for contact %s (%.1f hours "
+                    "overdue, priority=%s): %s",
                     commitment.contact_id,
-                    hours_waiting,
+                    hours_overdue,
+                    priority,
+                    commitment.label,
+                )
+        finally:
+            db.close()
+
+    def _check_pending_client_commitments(self) -> None:
+        """Client-side counterpart to _check_pending_commitments: the client promised the
+        owner something ('I'll send the payment proof in 2 hours') and hasn't delivered.
+        Same deadline-aware timing, but the reminder comes with an editable, sendable draft
+        (classifier.draft_commitment_nudge) since the fix here is a WhatsApp message, not
+        an action only the owner can take."""
+        db = SessionLocal()
+        try:
+            commitments = repo.commitments_awaiting_reminder(
+                db,
+                direction="client",
+                flag_hours=WHATSAPP_FOLLOWUP_FLAG_HOURS,
+                reminder_interval_hours=WHATSAPP_FOLLOWUP_FLAG_HOURS,
+            )
+            for commitment in commitments:
+                contact = commitment.contact
+                if contact is None:
+                    continue
+                reference = commitment.deadline_at or commitment.created_at
+                hours_overdue = max(
+                    0.0, (datetime.utcnow() - reference).total_seconds() / 3600
+                )
+                is_urgent_wait = hours_overdue >= WHATSAPP_FOLLOWUP_URGENT_HOURS
+                priority = "very_high" if is_urgent_wait else "high"
+                display_name = (contact.profile_name or "").strip() or contact.wa_id
+
+                instructions = [i.text for i in repo.list_instructions(db, active_only=True)]
+                voice_examples = repo.recent_outbound_examples(
+                    db, personal=False, contact_id=commitment.contact_id, category="follow_up"
+                )
+                try:
+                    draft = classifier.draft_commitment_nudge(
+                        commitment.label,
+                        contact_name=display_name,
+                        instructions=instructions or None,
+                        voice_examples=voice_examples or None,
+                    )
+                except WhatsAppAIError:
+                    logger.warning(
+                        "[WHATSAPP] OpenAI nudge drafting failed for client commitment %s, "
+                        "using fallback text", commitment.id,
+                    )
+                    draft = f"Hi, just following up on {commitment.label.lower()} — any update?"
+
+                chip_label = (
+                    f"{display_name} still hasn't sent: {commitment.label} — urgent"
+                    if is_urgent_wait
+                    else f"{display_name} said they'd send {commitment.label} — follow up?"
+                )
+                repo.create_suggestion(
+                    db,
+                    contact_id=commitment.contact_id,
+                    message_id=commitment.message_id,
+                    kind="client_commitment_reminder",
+                    category="client_commitment",
+                    priority=priority,
+                    lane="work",
+                    draft_text=draft,
+                    details={
+                        "chip_label": chip_label,
+                        "commitment_label": commitment.label,
+                        "commitment_type": commitment.commitment_type,
+                        "hours_overdue": round(hours_overdue, 1),
+                    },
+                )
+                commitment.last_reminded_at = datetime.utcnow()
+                db.commit()
+                logger.info(
+                    "[WHATSAPP] Client commitment reminder raised for contact %s (%.1f "
+                    "hours overdue, priority=%s): %s",
+                    commitment.contact_id,
+                    hours_overdue,
                     priority,
                     commitment.label,
                 )

@@ -1,8 +1,9 @@
+import bisect
 import json
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app import models
@@ -295,13 +296,17 @@ def pending_followup_nudge_exists(db: Session, contact_id: int) -> bool:
     return query.first() is not None
 
 
-def pending_commitment_for_contact(db: Session, contact_id: int) -> models.WhatsAppCommitment | None:
-    """The one open (unfulfilled) commitment for this contact, if any — only one is
-    tracked at a time per contact."""
+def pending_commitment_for_contact(
+    db: Session, contact_id: int, *, direction: str = "owner"
+) -> models.WhatsAppCommitment | None:
+    """The one open (unfulfilled) commitment for this contact in this direction, if any —
+    only one is tracked at a time per (contact, direction); see
+    WhatsAppCommitment.direction."""
     return (
         db.query(models.WhatsAppCommitment)
         .filter(
             models.WhatsAppCommitment.contact_id == contact_id,
+            models.WhatsAppCommitment.direction == direction,
             models.WhatsAppCommitment.fulfilled_at.is_(None),
         )
         .order_by(models.WhatsAppCommitment.created_at.desc())
@@ -316,12 +321,16 @@ def create_commitment(
     message_id: int | None,
     commitment_type: str,
     label: str,
+    direction: str = "owner",
+    deadline_at: datetime | None = None,
 ) -> models.WhatsAppCommitment:
     commitment = models.WhatsAppCommitment(
         contact_id=contact_id,
         message_id=message_id,
         commitment_type=commitment_type,
         label=label,
+        direction=direction,
+        deadline_at=deadline_at,
     )
     db.add(commitment)
     db.flush()
@@ -337,22 +346,36 @@ def fulfill_commitment(db: Session, commitment_id: int) -> None:
 def commitments_awaiting_reminder(
     db: Session,
     *,
+    direction: str = "owner",
     flag_hours: float,
     reminder_interval_hours: float,
 ) -> list[models.WhatsAppCommitment]:
-    """Unfulfilled commitments old enough to flag, that haven't been reminded about
-    recently. last_reminded_at (not the created suggestion) is the dedup source of
-    truth — a reminder chip can get dismissed by an unrelated later reply, but the
-    underlying promise is still open and due to be re-flagged."""
+    """Unfulfilled commitments in this direction that are due for a reminder, and
+    haven't been reminded about recently. "Due" means: past the deadline actually
+    extracted from the promise text ('in 2 hours', 'by Friday') when there was one —
+    otherwise past the generic flag_hours fallback from when the promise was made.
+    last_reminded_at (not the created suggestion) is the dedup source of truth — a
+    reminder chip can get dismissed by an unrelated later reply, but the underlying
+    promise is still open and due to be re-flagged."""
     now = datetime.utcnow()
-    cutoff = now - timedelta(hours=flag_hours)
+    fallback_cutoff = now - timedelta(hours=flag_hours)
     reminder_cutoff = now - timedelta(hours=reminder_interval_hours)
     return (
         db.query(models.WhatsAppCommitment)
         .join(models.WhatsAppContact, models.WhatsAppCommitment.contact_id == models.WhatsAppContact.id)
         .filter(
+            models.WhatsAppCommitment.direction == direction,
             models.WhatsAppCommitment.fulfilled_at.is_(None),
-            models.WhatsAppCommitment.created_at <= cutoff,
+            or_(
+                and_(
+                    models.WhatsAppCommitment.deadline_at.isnot(None),
+                    models.WhatsAppCommitment.deadline_at <= now,
+                ),
+                and_(
+                    models.WhatsAppCommitment.deadline_at.is_(None),
+                    models.WhatsAppCommitment.created_at <= fallback_cutoff,
+                ),
+            ),
             (
                 models.WhatsAppCommitment.last_reminded_at.is_(None)
                 | (models.WhatsAppCommitment.last_reminded_at <= reminder_cutoff)
@@ -634,42 +657,114 @@ def load_corrections_for_prompt(
     ]
 
 
+def _preceding_inbound_category(
+    inbound_by_contact: list[tuple[datetime, str | None]], before: datetime | None
+) -> str | None:
+    """Category of the most recent inbound message strictly before `before`, given a list
+    of (timestamp, category) pairs already sorted ascending by timestamp. Used to figure
+    out "what was this outbound reply actually about" for per-category tone examples,
+    since outbound messages don't carry a category of their own."""
+    if before is None:
+        return None
+    timestamps = [t for t, _ in inbound_by_contact]
+    idx = bisect.bisect_left(timestamps, before) - 1
+    return inbound_by_contact[idx][1] if idx >= 0 else None
+
+
 def recent_outbound_examples(
     db: Session,
     *,
     personal: bool,
+    contact_id: int | None = None,
+    category: str | None = None,
     limit: int = 8,
 ) -> list[str]:
     """Real messages the user actually sent — the ground truth for "how do they write."
-    Scoped to personal vs work contacts, matching the tone split already used for
-    drafting (see classifier._REPLY_SYSTEM_PERSONAL / service.py's is_personal checks)."""
-    query = (
-        db.query(models.WhatsAppMessage)
-        .join(models.WhatsAppContact, models.WhatsAppMessage.contact_id == models.WhatsAppContact.id)
-        .filter(models.WhatsAppMessage.direction == "outbound")
-        .filter(models.WhatsAppMessage.body.isnot(None))
-    )
-    if personal:
-        query = query.filter(models.WhatsAppContact.contact_type == "personal")
-    else:
-        query = query.filter(
-            (models.WhatsAppContact.contact_type.is_(None))
-            | (models.WhatsAppContact.contact_type != "personal")
+
+    Tiered so the closest, most relevant tone signal wins, topping up with broader
+    fallbacks only when there isn't enough of it yet (Rule 12 — tone learned during the
+    silent observation window is exactly this history, scoped as tightly as possible):
+      1. Replies to THIS contact, about THIS category (same category as the inbound
+         message immediately preceding the reply).
+      2. Any recent reply to THIS contact, regardless of category.
+      3. The original personal-vs-work split (unchanged fallback behavior).
+    """
+    examples: list[str] = []
+    seen: set[str] = set()
+
+    def _add(rows) -> None:
+        for r in rows:
+            body = (r.body or "").strip()
+            if body and body not in seen:
+                seen.add(body)
+                examples.append(body)
+
+    if contact_id is not None and category:
+        inbound = (
+            db.query(models.WhatsAppMessage.timestamp, models.WhatsAppMessage.category)
+            .filter(models.WhatsAppMessage.contact_id == contact_id)
+            .filter(models.WhatsAppMessage.direction == "inbound")
+            .order_by(models.WhatsAppMessage.timestamp.asc())
+            .all()
         )
-    rows = (
-        query.order_by(models.WhatsAppMessage.timestamp.desc())
-        .limit(limit)
-        .all()
-    )
-    return [r.body.strip() for r in rows if r.body and r.body.strip()]
+        outbound = (
+            db.query(models.WhatsAppMessage)
+            .filter(models.WhatsAppMessage.contact_id == contact_id)
+            .filter(models.WhatsAppMessage.direction == "outbound")
+            .filter(models.WhatsAppMessage.body.isnot(None))
+            .order_by(models.WhatsAppMessage.timestamp.desc())
+            .limit(50)
+            .all()
+        )
+        matches = [
+            row for row in outbound
+            if _preceding_inbound_category(inbound, row.timestamp) == category
+        ]
+        _add(matches[:limit])
+
+    if contact_id is not None and len(examples) < limit:
+        rows = (
+            db.query(models.WhatsAppMessage)
+            .filter(models.WhatsAppMessage.contact_id == contact_id)
+            .filter(models.WhatsAppMessage.direction == "outbound")
+            .filter(models.WhatsAppMessage.body.isnot(None))
+            .order_by(models.WhatsAppMessage.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+        _add(rows)
+
+    if len(examples) < limit:
+        query = (
+            db.query(models.WhatsAppMessage)
+            .join(models.WhatsAppContact, models.WhatsAppMessage.contact_id == models.WhatsAppContact.id)
+            .filter(models.WhatsAppMessage.direction == "outbound")
+            .filter(models.WhatsAppMessage.body.isnot(None))
+        )
+        if personal:
+            query = query.filter(models.WhatsAppContact.contact_type == "personal")
+        else:
+            query = query.filter(
+                (models.WhatsAppContact.contact_type.is_(None))
+                | (models.WhatsAppContact.contact_type != "personal")
+            )
+        rows = (
+            query.order_by(models.WhatsAppMessage.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+        _add(rows)
+
+    return examples[:limit]
 
 
 def get_or_create_learning_state(db: Session) -> models.WhatsAppLearningState:
-    """The single global anchor for the 7-day silent observation window (see
-    WhatsAppLearningState). Anchored retroactively to the earliest outbound message
-    already on record, so an account with existing history doesn't lose suggestions
-    for a week the moment this feature ships — a genuinely fresh install (no outbound
-    history at all) anchors to now, giving it the real 7-day window."""
+    """The single global anchor for the silent observation window (see
+    WhatsAppLearningState, length set by WHATSAPP_SILENT_OBSERVATION_HOURS). Anchored
+    retroactively to the earliest outbound message already on record, so an account
+    with existing history doesn't lose suggestions for the whole window the moment
+    this feature ships — a genuinely fresh install (no outbound history at all)
+    anchors to now, giving it the real window."""
     state = db.query(models.WhatsAppLearningState).first()
     if state is not None:
         return state
@@ -732,6 +827,7 @@ def list_suggestions(
     kind: str | None,
     lane: str | None,
     contact_id: int | None,
+    has_reminder: bool | None = None,
     limit: int,
     offset: int,
 ) -> tuple[list[models.WhatsAppSuggestion], int]:
@@ -748,6 +844,11 @@ def list_suggestions(
         base = base.filter(models.WhatsAppSuggestion.lane == lane)
     if contact_id is not None:
         base = base.filter(models.WhatsAppSuggestion.contact_id == contact_id)
+    if has_reminder:
+        # details is a JSON blob (see actions.set_reminder) — reminder_event_id is only
+        # ever present once a reminder has actually been created, so a literal substring
+        # match on the JSON key is enough; used by the Upcoming reminders view.
+        base = base.filter(models.WhatsAppSuggestion.details.contains('"reminder_event_id"'))
     total = base.count()
     items = (
         base.order_by(models.WhatsAppSuggestion.created_at.desc())

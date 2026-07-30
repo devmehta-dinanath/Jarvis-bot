@@ -276,9 +276,18 @@ WHATSAPP_LEAD_FOLLOWUP_HOURS = float(os.getenv("WHATSAPP_LEAD_FOLLOWUP_HOURS", "
 # End-of-day reminder time for personal tasks/errands (local clock hour, 24h format).
 WHATSAPP_EOD_REMINDER_HOUR = int(os.getenv("WHATSAPP_EOD_REMINDER_HOUR", "17"))
 WHATSAPP_EOD_REMINDER_MINUTE = int(os.getenv("WHATSAPP_EOD_REMINDER_MINUTE", "0"))
-# Rule 1 — minimum LLM confidence (0-100) required before a chip is surfaced to the user.
+# Rule 12 — length of the silent tone-learning window (hours) after the account owner's
+# earliest outbound message (or install time, for a fresh account) during which no AI
+# draft is shown for important/greeting messages — only the raw message with an empty,
+# editable reply box, so the owner's own wording is what gets learned from. Meeting
+# requests and reminders/nudges are exempt from this window (see WhatsAppService rule 12).
+WHATSAPP_SILENT_OBSERVATION_HOURS = float(
+    os.getenv("WHATSAPP_SILENT_OBSERVATION_HOURS", "3")
+)
+# Rule 1 — minimum LLM confidence (0-100) required before an AI-drafted reply is surfaced.
 # Applies to every category with no exceptions — a wrong suggestion is worse than a missed one.
-WHATSAPP_CHIP_CONFIDENCE_MIN = int(os.getenv("WHATSAPP_CHIP_CONFIDENCE_MIN", "80"))
+# Below this, the message still surfaces but as a "low confidence" nudge with no AI draft.
+WHATSAPP_CHIP_CONFIDENCE_MIN = int(os.getenv("WHATSAPP_CHIP_CONFIDENCE_MIN", "90"))
 # Rule 2 — how many recent "wrong" corrections to inject into the classifier prompt.
 WHATSAPP_CORRECTIONS_CONTEXT_LIMIT = int(os.getenv("WHATSAPP_CORRECTIONS_CONTEXT_LIMIT", "5"))
 # Rule 9 — reply-suggestion threshold/timing rules.

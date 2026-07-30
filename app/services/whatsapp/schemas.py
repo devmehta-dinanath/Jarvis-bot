@@ -55,6 +55,19 @@ class AddToCalendarRequest(BaseModel):
     )
 
 
+class RemindMeRequest(BaseModel):
+    """Body for POST /suggestions/{id}/remind — a personal calendar reminder, independent
+    of category and never requiring the other side of the conversation to confirm anything."""
+
+    remind_at: str | None = Field(
+        default=None,
+        description="ISO datetime override; defaults to the message's own extracted "
+        "date/time, or 24 hours from now if there isn't one",
+    )
+    title: str | None = Field(default=None, description="Override the reminder's calendar title")
+    calendar_id: str | None = None
+
+
 class ClarifyAnswerRequest(BaseModel):
     """Body for POST /suggestions/{id}/clarify — the tap option the user picked."""
 

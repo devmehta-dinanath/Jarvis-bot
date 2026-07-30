@@ -28,6 +28,7 @@ from app.services.whatsapp.schemas import (
     FeedbackResponse,
     InboxStatusResponse,
     RefreshPendingResponse,
+    RemindMeRequest,
     SendMessageRequest,
     SendReplyRequest,
     SetContactExcludedRequest,
@@ -272,16 +273,21 @@ def list_suggestions(
         description="work | life — filter suggestions by rendering lane",
     ),
     contact_id: int | None = Query(default=None),
+    has_reminder: bool | None = Query(
+        default=None,
+        description="Only suggestions with a personal reminder set (see actions.set_reminder)",
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> WhatsAppSuggestionListResponse:
     items, total = repo.list_suggestions(
-        db, 
+        db,
         status=status,
         kind=kind,
         lane=lane,
         contact_id=contact_id,
+        has_reminder=has_reminder,
         limit=limit,
         offset=offset,
     )
@@ -411,6 +417,41 @@ def add_to_calendar(
         "reply_sent": event.get("reply_sent", False),
         "reply_error": event.get("reply_error"),
         "sent_message_id": event.get("sent_message_id"),
+    }
+
+
+@router.post("/suggestions/{suggestion_id}/remind")
+def remind_me(
+    suggestion_id: int,
+    payload: RemindMeRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    suggestion = repo.get_suggestion(db, suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
+    body = payload or RemindMeRequest()
+    try:
+        event = actions.set_reminder(
+            db,
+            suggestion,
+            remind_at=body.remind_at,
+            title=body.title,
+            calendar_id=body.calendar_id,
+        )
+    except WhatsAppActionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except HttpError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Google Calendar error: {exc}",
+        ) from exc
+    return {
+        "ok": True,
+        "event_id": event.get("id"),
+        "html_link": event.get("htmlLink"),
+        "reminder_at": event.get("reminder_at"),
     }
 
 

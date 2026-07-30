@@ -492,6 +492,21 @@ _MEETING_SYSTEM = (
 )
 
 
+_DEADLINE_HINT_INSTRUCTION = (
+    "Use the given current date/time to resolve any timeframe mentioned ('in 2 hours', "
+    "'by tomorrow', 'by Friday', 'end of day') into a concrete ISO 8601 datetime in the "
+    "given timezone. If no timeframe is mentioned at all, leave it null — do not invent one."
+)
+
+
+def _now_context_line() -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
+    return f"Current date/time: {now.isoformat()} ({CALENDAR_DEFAULT_TIMEZONE})\n\n"
+
+
 _COMMITMENT_SYSTEM = (
     "You analyze a business message the ACCOUNT OWNER just sent to a client on WhatsApp. "
     "Decide whether this message makes a NEW commitment to send or do something for the "
@@ -502,24 +517,30 @@ _COMMITMENT_SYSTEM = (
     "(e.g. it contains the actual price/quote, or is just answering a question with the "
     "answer included) — only a promise of FUTURE action counts. Small talk, greetings, and "
     "messages with no promise at all are never commitments. "
+    f"{_DEADLINE_HINT_INSTRUCTION} "
     "Respond ONLY with a JSON object with keys: "
     "is_commitment (boolean), "
     "commitment_type ('pricing', 'document', 'other', or null — null if is_commitment is "
     "false; 'pricing' for a quote/cost/budget promise, 'document' for a file/invoice/"
     "catalogue/report promise, 'other' for anything else), "
     "label (a short description of what was promised, e.g. 'Send price list', 'Share the "
-    "invoice', or null if is_commitment is false)."
+    "invoice', or null if is_commitment is false), "
+    "deadline_at (ISO 8601 datetime string for when they said they'd do it, else null)."
 )
 
 
 def detect_commitment(message: str) -> dict[str, Any]:
     """Does this outbound message promise the client something not yet delivered?"""
-    user_content = f"Message the account owner just sent:\n{message}\n\nAnalyze as JSON:"
-    data = _chat_json(_COMMITMENT_SYSTEM, user_content, max_tokens=100)
+    user_content = (
+        f"{_now_context_line()}Message the account owner just sent:\n{message}\n\n"
+        "Analyze as JSON:"
+    )
+    data = _chat_json(_COMMITMENT_SYSTEM, user_content, max_tokens=140)
     return {
         "is_commitment": bool(data.get("is_commitment", False)),
         "commitment_type": (data.get("commitment_type") or "").strip().lower() or None,
         "label": (data.get("label") or "").strip() or None,
+        "deadline_at": (data.get("deadline_at") or "").strip() or None,
     }
 
 
@@ -542,6 +563,96 @@ def check_commitment_fulfilled(label: str, message: str) -> bool:
     )
     data = _chat_json(_FULFILLMENT_SYSTEM, user_content, max_tokens=40)
     return bool(data.get("fulfilled", False))
+
+
+_CLIENT_COMMITMENT_SYSTEM = (
+    "You analyze a WhatsApp message a CLIENT just sent to the account owner. Decide "
+    "whether this message makes a NEW commitment to send or do something for the account "
+    "owner that is NOT already done in the message itself — e.g. 'I'll send the payment "
+    "proof in 2 hours', 'I'll get you the signed contract tomorrow', 'let me confirm and "
+    "get back to you by Friday'. "
+    "Do NOT treat it as a commitment if the message already delivers the thing right there, "
+    "is just a question, or is a vague acknowledgement ('ok', 'noted', 'sure') with no "
+    "actual promise — only a promise of FUTURE action from the client counts. "
+    f"{_DEADLINE_HINT_INSTRUCTION} "
+    "Respond ONLY with a JSON object with keys: "
+    "is_commitment (boolean), "
+    "commitment_type ('payment', 'document', 'other', or null — null if is_commitment is "
+    "false), "
+    "label (a short description of what the client promised, e.g. 'Send payment proof', "
+    "'Share signed contract', or null if is_commitment is false), "
+    "deadline_at (ISO 8601 datetime string for when they said they'd do it, else null)."
+)
+
+
+def detect_client_commitment(message: str) -> dict[str, Any]:
+    """Does this INBOUND message from a client promise the account owner something not
+    yet delivered? Client-side counterpart to detect_commitment — see
+    WhatsAppCommitment.direction."""
+    user_content = (
+        f"{_now_context_line()}Message from the client:\n{message}\n\nAnalyze as JSON:"
+    )
+    data = _chat_json(_CLIENT_COMMITMENT_SYSTEM, user_content, max_tokens=140)
+    return {
+        "is_commitment": bool(data.get("is_commitment", False)),
+        "commitment_type": (data.get("commitment_type") or "").strip().lower() or None,
+        "label": (data.get("label") or "").strip() or None,
+        "deadline_at": (data.get("deadline_at") or "").strip() or None,
+    }
+
+
+_CLIENT_FULFILLMENT_SYSTEM = (
+    "A client previously promised the account owner something on WhatsApp. They just sent "
+    "a NEW message. Decide whether the new message actually fulfills that promise — e.g. it "
+    "contains the promised info, references an attached file, or explicitly confirms it was "
+    "sent/done. A message that just chats about something else, or repeats another vague "
+    "'I'll send it soon', does NOT fulfill it. "
+    "Respond ONLY with a JSON object with key: fulfilled (boolean)."
+)
+
+
+def check_client_commitment_fulfilled(label: str, message: str) -> bool:
+    """Does this new inbound message from the client actually deliver on a previously
+    promised commitment of theirs?"""
+    user_content = (
+        f"What the client promised: {label}\n\n"
+        f"New message from the client:\n{message}\n\n"
+        "Analyze as JSON:"
+    )
+    data = _chat_json(_CLIENT_FULFILLMENT_SYSTEM, user_content, max_tokens=40)
+    return bool(data.get("fulfilled", False))
+
+
+_CLIENT_NUDGE_SYSTEM = (
+    "Write a short, friendly WhatsApp follow-up message from the account owner to a client "
+    "who has not yet delivered on something they said they'd do. Reference what they "
+    "promised naturally and briefly ask for an update — do not sound automated, pushy, or "
+    "passive-aggressive. One or two short sentences."
+)
+
+
+def draft_commitment_nudge(
+    label: str,
+    *,
+    contact_name: str | None = None,
+    instructions: list[str] | None = None,
+    voice_examples: list[str] | None = None,
+) -> str:
+    """A short, sendable nudge for a client who hasn't delivered on their own promise (see
+    WhatsAppCommitment.direction == 'client') — used by
+    WhatsAppService._check_pending_client_commitments so the reminder comes with an
+    editable draft, not just a flag."""
+    who = contact_name or "the client"
+    user_content = (
+        f"{who} previously said: \"{label}\"\n\n"
+        "They haven't followed through yet. Write the follow-up message in English:"
+    )
+    system = (
+        _CLIENT_NUDGE_SYSTEM
+        + _tone_instructions_block(instructions)
+        + _voice_examples_block(voice_examples)
+    )
+    return _chat(system, user_content, max_tokens=120, json_mode=False).strip()
 
 
 def is_english(language: str | None) -> bool:

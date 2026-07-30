@@ -431,11 +431,12 @@ class WhatsAppFeedback(Base):
 
 
 class WhatsAppLearningState(Base):
-    """Single global row (this is a single-user app) anchoring the 7-day silent
-    observation window: Personal OS learns the user's reply style from
-    observation_started_at with no suggestions shown, then starts suggesting from
-    Day 7 onward. See app/services/whatsapp/repository.py::get_or_create_learning_state
-    for how this gets anchored (retroactively, to existing history, when available)."""
+    """Single global row (this is a single-user app) anchoring the silent tone-learning
+    observation window (length set by WHATSAPP_SILENT_OBSERVATION_HOURS, default 3h):
+    Personal OS learns the user's reply style from observation_started_at with no AI
+    drafts shown, then starts drafting once the window elapses. See
+    app/services/whatsapp/repository.py::get_or_create_learning_state for how this gets
+    anchored (retroactively, to existing history, when available)."""
 
     __tablename__ = "whatsapp_learning_state"
 
@@ -449,13 +450,20 @@ class WhatsAppLearningState(Base):
 
 
 class WhatsAppCommitment(Base):
-    """A promise the account owner made to a client in an outbound message ('I'll send
-    you the price list') that hasn't been fulfilled yet. Detected/resolved by
-    classifier.detect_commitment / check_commitment_fulfilled (see
-    WhatsAppService._analyze_commitment); reminded on by
-    WhatsAppService._check_pending_commitments, re-using the same 24h/3-day thresholds
-    as the awaiting-reply check. Only one open commitment is tracked per contact at a
-    time — a new one isn't looked for until the current one is fulfilled."""
+    """A promise made in a WhatsApp message that hasn't been fulfilled yet — either the
+    account owner promising a client something ('I'll send you the price list',
+    direction='owner') or a client promising the account owner something ('I'll send the
+    payment proof in 2 hours', direction='client'). Detected/resolved by
+    classifier.detect_commitment/check_commitment_fulfilled (owner side, see
+    WhatsAppService._analyze_commitment) or classifier.detect_client_commitment/
+    check_client_commitment_fulfilled (client side, see
+    WhatsAppService._analyze_client_commitment). Reminded on by
+    WhatsAppService._check_pending_commitments / _check_pending_client_commitments:
+    deadline_at (resolved from phrases like 'in 2 hours' or 'by Friday') drives when the
+    reminder fires when the message actually gave a timeframe; otherwise it falls back to
+    the generic 24h/3-day thresholds also used by the awaiting-reply check. Only one open
+    commitment per (contact, direction) is tracked at a time — a new one isn't looked for
+    until the current one is fulfilled."""
 
     __tablename__ = "whatsapp_commitments"
 
@@ -463,12 +471,20 @@ class WhatsAppCommitment(Base):
     contact_id: Mapped[int] = mapped_column(
         ForeignKey("whatsapp_contacts.id"), nullable=False, index=True
     )
-    # The outbound message where the promise was made.
+    # The message where the promise was made — outbound for direction='owner', inbound
+    # for direction='client'.
     message_id: Mapped[int | None] = mapped_column(
         ForeignKey("whatsapp_messages.id"), nullable=True
     )
+    # "owner" | "client" — who made the promise.
+    direction: Mapped[str] = mapped_column(
+        String(10), default="owner", nullable=False, index=True
+    )
     commitment_type: Mapped[str] = mapped_column(String(20), nullable=False)
     label: Mapped[str] = mapped_column(String(300), nullable=False)
+    # Resolved absolute deadline from the promise text itself ('in 2 hours' -> now+2h),
+    # null when no timeframe was actually mentioned — see classifier deadline_at extraction.
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

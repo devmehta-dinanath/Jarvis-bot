@@ -618,3 +618,89 @@ def _add_family_plan_to_calendar(
     )
     event["reply_sent"] = False
     return event
+
+
+def _extract_candidate_datetime(details: dict) -> datetime | None:
+    """Best-effort date/time already sitting on a suggestion's details, regardless of
+    category — meeting/timeline extraction uses a 'start' ISO string, family_plan/
+    personal_date/personal_task use separate 'date' (+ optional 'time') fields."""
+    start_dt = _parse_iso(details.get("start"))
+    if start_dt is not None:
+        return start_dt
+
+    date_str = details.get("date") or details.get("deadline_date")
+    if date_str:
+        time_str = details.get("time") or "09:00"
+        return _parse_iso(f"{date_str}T{time_str}:00")
+
+    return None
+
+
+def set_reminder(
+    db: Session,
+    suggestion: models.WhatsAppSuggestion,
+    *,
+    remind_at: str | None = None,
+    title: str | None = None,
+    calendar_id: str | None = None,
+) -> dict:
+    """A personal reminder for ANY suggestion, any category — unlike add_to_calendar this
+    never requires the other side of the conversation to have confirmed anything, never
+    invites the contact, and never sends a WhatsApp message. It's purely a calendar entry
+    (with Google Calendar's own notification) for the account owner. Uses the message's own
+    extracted date/time when one is available (meeting/timeline/family_plan/personal_date/
+    personal_task all already populate one of 'start' or 'date'+'time' in details); falls
+    back to 24 hours from now — "remind me about this tomorrow" — when it isn't (e.g. a
+    payment nudge with no date mentioned at all)."""
+    details = _details_dict(suggestion)
+    if details.get("reminder_event_id"):
+        raise WhatsAppActionError("A reminder is already set for this")
+
+    start_dt = _parse_iso(remind_at) or _extract_candidate_datetime(details)
+    if start_dt is None:
+        start_dt = datetime.utcnow() + timedelta(hours=24)
+    end_dt = start_dt + timedelta(minutes=15)
+
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    contact_name = (contact.profile_name if contact else None) or (
+        contact.wa_id if contact else None
+    )
+    label = (
+        title
+        or details.get("event_label")
+        or details.get("chip_label")
+        or wa_taxonomy.default_chip_label(suggestion.category)
+        or "Reminder"
+    )
+    summary = f"[Reminder] {label}"
+    if contact_name and contact_name.lower() not in summary.lower():
+        summary = f"{summary} — {contact_name}"
+
+    payload = EventCreate(
+        summary=summary,
+        description="Personal reminder set from Personal OS — no message was sent to the contact.",
+        start=EventDateTime(
+            date_time=_to_calendar_iso(start_dt),
+            time_zone=CALENDAR_DEFAULT_TIMEZONE,
+        ),
+        end=EventDateTime(
+            date_time=_to_calendar_iso(end_dt),
+            time_zone=CALENDAR_DEFAULT_TIMEZONE,
+        ),
+        conference=False,
+    )
+    event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
+
+    details["reminder_event_id"] = event.get("id")
+    details["reminder_html_link"] = event.get("htmlLink")
+    details["reminder_at"] = _to_calendar_iso(start_dt)
+    suggestion.details = json.dumps(details)
+    db.commit()
+    db.refresh(suggestion)
+
+    logger.info(
+        "[WHATSAPP] Set reminder (event %s) for suggestion %s at %s",
+        event.get("id"), suggestion.id, start_dt,
+    )
+    event["reminder_at"] = details["reminder_at"]
+    return event

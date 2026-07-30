@@ -58,6 +58,12 @@ WHATSAPP_SUGGESTION_COLUMNS: dict[str, str] = {
 }
 
 
+WHATSAPP_COMMITMENT_COLUMNS: dict[str, str] = {
+    "direction": "VARCHAR(10) NOT NULL DEFAULT 'owner'",
+    "deadline_at": "DATETIME",
+}
+
+
 RECORDING_COLUMNS: dict[str, str] = {
     "source_video_path": "VARCHAR(500)",
     "capture_command": "TEXT",
@@ -99,6 +105,7 @@ def bootstrap_database() -> None:
     _ensure_columns("whatsapp_messages", WHATSAPP_MESSAGE_COLUMNS)
     _ensure_columns("whatsapp_suggestions", WHATSAPP_SUGGESTION_COLUMNS)
     _ensure_columns("whatsapp_feedback", WHATSAPP_FEEDBACK_COLUMNS)
+    _ensure_columns("whatsapp_commitments", WHATSAPP_COMMITMENT_COLUMNS)
     _backfill_whatsapp_group_contacts()
     _seed_default_forwarding_rules()
     MEDIA_ROOT.mkdir(parents=True, exist_ok=True)

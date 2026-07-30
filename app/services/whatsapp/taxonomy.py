@@ -39,7 +39,13 @@ LIFE_CATEGORIES = ("personal_date", "personal_task", "family_plan")
 
 NUDGE_CATEGORIES = ("greeting", "voice_note", "media")
 
-SYSTEM_CATEGORIES = ("personal_silence", "awaiting_reply", "pending_commitment", "group")
+SYSTEM_CATEGORIES = (
+    "personal_silence",
+    "awaiting_reply",
+    "pending_commitment",
+    "client_commitment",
+    "group",
+)
 
 FILTER_CATEGORIES = ("forwarded", "spam")
 
@@ -72,6 +78,7 @@ UI_SECTIONS: tuple[dict[str, Any], ...] = (
             "other",
             "awaiting_reply",
             "pending_commitment",
+            "client_commitment",
         ),
     },
     {
@@ -263,6 +270,12 @@ _CATEGORY_META: dict[str, dict[str, Any]] = {
         "chip_label": "You still owe them something",
         "demo_messages": [],
     },
+    "client_commitment": {
+        "label": "Client hasn't delivered",
+        "lane": "work",
+        "chip_label": "They still owe you something",
+        "demo_messages": [],
+    },
 }
 
 
@@ -296,6 +309,7 @@ def taxonomy_payload() -> dict[str, Any]:
         "personal_silence",
         "awaiting_reply",
         "pending_commitment",
+        "client_commitment",
     ):
         meta = _CATEGORY_META.get(key, {})
         categories.append(
