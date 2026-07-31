@@ -923,9 +923,10 @@ def _tone_instructions_block(instructions: list[str] | None) -> str:
 
 def _voice_examples_block(examples: list[str] | None) -> str:
     """Real messages the user actually sent (see repo.recent_outbound_examples) — the
-    goal is for drafts to sound like the user wrote them, not like an AI. Skipped below
-    a minimum sample size to avoid overfitting a whole voice to one message."""
-    if not examples or len(examples) < 2:
+    goal is for drafts to sound like the user wrote them, not like an AI. A single reply
+    during the silent-observation window is enough to start matching that tone for its
+    category — no need to wait for a second one to accumulate first."""
+    if not examples:
         return ""
     lines = [
         "\n\nTHE USER'S OWN VOICE — recent messages the user actually wrote and sent "

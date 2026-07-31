@@ -727,8 +727,8 @@ def has_reply_precedent(db: Session, category: str, *, min_count: int = 1) -> bo
     — see WhatsAppService._classify_one_unsafe's below_threshold. min_count=1: a single
     prior answer to this category, for anyone, is treated as enough precedent — the
     quality of the draft itself still depends on the contact-scoped tone examples from
-    recent_outbound_examples and classifier._voice_examples_block's own (separate,
-    unchanged) minimum sample size before it actually uses examples in the prompt."""
+    recent_outbound_examples and classifier._voice_examples_block's own (separate)
+    minimum sample size before it actually uses examples in the prompt."""
     contact_ids = [
         row[0]
         for row in db.query(models.WhatsAppMessage.contact_id)
