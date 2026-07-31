@@ -1557,6 +1557,31 @@ a:focus-visible,
   opacity: 0.72;
 }
 
+.whatsapp-card__schedule-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.whatsapp-card__schedule-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.whatsapp-card__schedule-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* ── Meeting Cards ── */
 
 .meeting-list {

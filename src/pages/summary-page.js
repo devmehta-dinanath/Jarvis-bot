@@ -5,6 +5,7 @@ import {
   getPendingSuggestions,
   getWhatsAppCategories,
   refreshPendingInbox,
+  remindMeSuggestion,
   scheduleMeetingSuggestion,
   sendSuggestionFeedback,
   sendSuggestionReply,
@@ -104,13 +105,33 @@ function renderSectionCards(cardList, suggestions, handlers) {
   });
 }
 
-async function handleSchedule(suggestion, button) {
+async function handleRemind(suggestion, button) {
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Setting reminder…";
+
+  try {
+    await remindMeSuggestion(suggestion.id);
+    button.textContent = "Reminder set ✓";
+  } catch (error) {
+    button.textContent = "Try again";
+    button.disabled = false;
+    button.title = String(error.message || error);
+    window.setTimeout(() => {
+      button.textContent = originalLabel;
+      button.title = "";
+    }, 3000);
+    throw error;
+  }
+}
+
+async function handleSchedule(suggestion, button, overrides) {
   button.disabled = true;
   const originalLabel = button.textContent;
   button.textContent = "Scheduling…";
 
   try {
-    const result = await scheduleMeetingSuggestion(suggestion.id);
+    const result = await scheduleMeetingSuggestion(suggestion.id, overrides);
     if (result.reply_sent) {
       button.textContent = "Scheduled & sent ✓";
     } else if (result.reply_error) {
@@ -176,6 +197,7 @@ export function createSummaryPage() {
 
   const handlers = {
     onSchedule: handleSchedule,
+    onRemind: handleRemind,
     onDismiss: async (item) => {
       await dismissSuggestion(item.id);
       await reload();
@@ -188,11 +210,23 @@ export function createSummaryPage() {
       await reload();
     },
     onWrong: async (item, correctResponse) => {
-      // Actually send the corrected reply to the contact, then record it as a correction
-      // so future classification/drafting never repeats the original mistake.
-      await sendSuggestionReply(item.id, { text: correctResponse, mode: "auto" });
+      // Send the corrected reply to the contact, and record it as a correction so future
+      // drafting picks up the owner's tone — but these are independent outcomes. Sending
+      // can fail for reasons that have nothing to do with the correction being worth
+      // learning from (outside the 24h WhatsApp window, a flaky send, etc.); if that
+      // failure aborted the feedback call too, the correction was silently never saved
+      // and drafts kept repeating the same generic wording with no way to tell why.
+      let sendError = null;
+      try {
+        await sendSuggestionReply(item.id, { text: correctResponse, mode: "auto" });
+      } catch (error) {
+        sendError = error;
+      }
       await sendSuggestionFeedback(item.id, { feedbackType: "wrong", correctResponse });
       await reload();
+      if (sendError) {
+        throw sendError;
+      }
     },
     onSent: reload,
     onInteractionChange: (active) => {

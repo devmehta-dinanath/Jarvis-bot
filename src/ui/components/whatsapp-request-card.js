@@ -7,6 +7,7 @@ import {
 import { applyAvatarGradient } from "../../lib/avatar-color.js";
 import {
   buildCategoryMeta,
+  canRemind,
   canSchedule,
   canSendReply,
   categoryLabel,
@@ -27,19 +28,13 @@ function isEnglishLanguage(language) {
 }
 
 function defaultDraft(suggestion) {
-  // 7-day silent observation: never fall back to a canned line here — the whole point is
-  // an empty box so whatever gets sent is genuinely the owner's own wording, not AI-authored.
-  if (suggestion.details?.silent_observation) {
-    return suggestion.draft_text || "";
-  }
   const link = suggestion.details?.meet_link || suggestion.details?.calendar_html_link;
   if (link && resolveCategory(suggestion) === "meeting") {
     return `Yes, happy to connect! Here's the link: ${link}`;
   }
-  return (
-    suggestion.draft_text ||
-    "Thanks for your message — I'll get back to you shortly."
-  );
+  // Never fall back to a canned line — if there's no real AI draft, leave the box empty
+  // so whatever gets sent is genuinely the owner's own wording, not AI-authored.
+  return suggestion.draft_text || "";
 }
 
 function primaryActionLabel(suggestion) {
@@ -53,14 +48,16 @@ function primaryActionLabel(suggestion) {
   return "Send reply";
 }
 
-function scheduleButtonLabel(suggestion) {
-  // Family plans never send a WhatsApp confirmation message — only meetings do.
-  return resolveCategory(suggestion) === "family_plan" ? "Schedule" : "Yes — schedule & send";
+function scheduleButtonLabel(hasConfirmedTime) {
+  // Only "meeting" ever reaches this button now (see canSchedule) — it always sends a
+  // WhatsApp confirmation to the contact along with the calendar invite. Without a time
+  // extracted from the message, tapping it just opens the manual date/time picker first.
+  return hasConfirmedTime ? "Yes — schedule & send" : "Schedule meeting";
 }
 
 export function createWhatsAppRequestCard(
   suggestion,
-  { onSchedule, onDismiss, onSent, onExcludeGroup, onWrong, onInteractionChange }
+  { onSchedule, onRemind, onDismiss, onSent, onExcludeGroup, onWrong, onInteractionChange }
 ) {
   function setInteracting(active) {
     if (typeof onInteractionChange === "function") {
@@ -75,11 +72,16 @@ export function createWhatsAppRequestCard(
   }
 
   const category = resolveCategory(suggestion);
-  const showDraft = canSendReply(suggestion);
-  const showSchedule = canSchedule(suggestion);
   // Rule 13 — smart clarifying questions: no draft yet, just a question + tap options.
   const needsClarification =
     suggestion.kind === "clarify" && suggestion.details?.needs_clarification === true;
+  // The reply box is universal across every category, except while a clarifying question
+  // is still open — the tap options are the whole point of that flow, so a second
+  // freeform way to reply at the same time would just be confusing.
+  const showDraft = canSendReply(suggestion) && !needsClarification;
+  const showSchedule = canSchedule(suggestion);
+  const showRemind = canRemind(suggestion);
+  const hasConfirmedTime = Boolean(suggestion.details?.start);
 
   const header = document.createElement("div");
   header.className = "language-card__header";
@@ -198,11 +200,22 @@ export function createWhatsAppRequestCard(
   draftSection.hidden = !showDraft;
 
   const isSilentObservation = Boolean(suggestion.details?.silent_observation);
+  const isLowConfidence = Boolean(suggestion.details?.low_confidence);
+  const hasMeetingLink =
+    category === "meeting" &&
+    Boolean(suggestion.details?.meet_link || suggestion.details?.calendar_html_link);
+  // No AI draft to show/edit — just an empty box the owner types into directly, no Edit
+  // click needed first. Applies to every category the moment there's no real draft_text.
+  const isOwnReplyOnly = !suggestion.draft_text && !hasMeetingLink;
 
   const draftLabel = document.createElement("p");
   draftLabel.className = "language-card__label";
   draftLabel.textContent = isSilentObservation
     ? "Your reply — learning your tone, no AI draft"
+    : isLowConfidence
+    ? "Low confidence — write your own reply"
+    : isOwnReplyOnly
+    ? "Write your reply"
     : isForeignLanguage
     ? `Draft reply — write in English, sent to them in ${suggestion.message_language}`
     : "Draft reply";
@@ -215,9 +228,9 @@ export function createWhatsAppRequestCard(
   draftInput.className = "whatsapp-card__draft-input";
   draftInput.value = defaultDraft(suggestion);
   draftInput.rows = 3;
-  draftInput.hidden = !isSilentObservation;
+  draftInput.hidden = !isOwnReplyOnly;
   draftInput.setAttribute("aria-label", "Edit draft reply");
-  if (isSilentObservation) {
+  if (isOwnReplyOnly) {
     draftInput.placeholder = "Type your reply…";
     draftText.hidden = true;
   }
@@ -236,13 +249,13 @@ export function createWhatsAppRequestCard(
   const editBtn = document.createElement("button");
   editBtn.type = "button";
   editBtn.className = "btn btn--ghost";
-  editBtn.textContent = isSilentObservation ? "Done" : "Edit";
+  editBtn.textContent = isOwnReplyOnly ? "Done" : "Edit";
   editBtn.hidden = !showDraft;
 
   const scheduleBtn = document.createElement("button");
   scheduleBtn.type = "button";
   scheduleBtn.className = "btn btn--ghost";
-  scheduleBtn.textContent = scheduleButtonLabel(suggestion);
+  scheduleBtn.textContent = scheduleButtonLabel(hasConfirmedTime);
   scheduleBtn.hidden = !showSchedule;
 
   if (suggestion.details?.calendar_event_id) {
@@ -251,6 +264,48 @@ export function createWhatsAppRequestCard(
     if (showDraft) {
       sendBtn.textContent = "Send confirmation";
     }
+  }
+
+  // Manual date/time picker for meetings where no time was extracted from the message —
+  // shown inline under the actions row when the owner taps Schedule without a confirmed time.
+  const schedulePicker = document.createElement("div");
+  schedulePicker.className = "whatsapp-card__schedule-picker";
+  schedulePicker.hidden = true;
+
+  const schedulePickerLabel = document.createElement("p");
+  schedulePickerLabel.className = "language-card__label";
+  schedulePickerLabel.textContent = "Pick a date & time";
+
+  const scheduleTimeInput = document.createElement("input");
+  scheduleTimeInput.type = "datetime-local";
+  scheduleTimeInput.className = "whatsapp-card__schedule-input";
+  scheduleTimeInput.setAttribute("aria-label", "Meeting date and time");
+
+  const schedulePickerActions = document.createElement("div");
+  schedulePickerActions.className = "language-card__actions";
+
+  const scheduleConfirmBtn = document.createElement("button");
+  scheduleConfirmBtn.type = "button";
+  scheduleConfirmBtn.className = "btn btn--primary";
+  scheduleConfirmBtn.textContent = "Confirm & schedule";
+
+  const scheduleCancelBtn = document.createElement("button");
+  scheduleCancelBtn.type = "button";
+  scheduleCancelBtn.className = "btn btn--ghost";
+  scheduleCancelBtn.textContent = "Cancel";
+
+  schedulePickerActions.append(scheduleConfirmBtn, scheduleCancelBtn);
+  schedulePicker.append(schedulePickerLabel, scheduleTimeInput, schedulePickerActions);
+
+  const remindBtn = document.createElement("button");
+  remindBtn.type = "button";
+  remindBtn.className = "btn btn--ghost";
+  remindBtn.textContent = "Remind me";
+  remindBtn.hidden = !showRemind;
+
+  if (suggestion.details?.reminder_event_id) {
+    remindBtn.textContent = "Reminder set ✓";
+    remindBtn.disabled = true;
   }
 
   const dismissBtn = document.createElement("button");
@@ -284,7 +339,7 @@ export function createWhatsAppRequestCard(
   wrongBtn.textContent = "Wrong";
   wrongBtn.hidden = needsClarification;
 
-  actions.append(sendBtn, editBtn, scheduleBtn, forwardBtn, dismissBtn, wrongBtn, stopGroupBtn);
+  actions.append(sendBtn, editBtn, scheduleBtn, remindBtn, forwardBtn, dismissBtn, wrongBtn, stopGroupBtn);
 
   const correctionPanel = document.createElement("div");
   correctionPanel.className = "whatsapp-card__correction";
@@ -383,14 +438,14 @@ export function createWhatsAppRequestCard(
   draftInput.addEventListener("focus", () => setInteracting(true));
   draftInput.addEventListener("blur", () => setInteracting(false));
 
-  scheduleBtn.addEventListener("click", async () => {
+  async function runSchedule(overrides) {
     if (typeof onSchedule !== "function") {
       return;
     }
     scheduleBtn.disabled = true;
     scheduleBtn.textContent = "Scheduling…";
     try {
-      await onSchedule(suggestion, scheduleBtn);
+      await onSchedule(suggestion, scheduleBtn, overrides);
       if (scheduleBtn.textContent.includes("Scheduled")) {
         if (!scheduleBtn.textContent.includes("send reply")) {
           card.classList.add("whatsapp-card--sent");
@@ -402,7 +457,68 @@ export function createWhatsAppRequestCard(
     } finally {
       if (!scheduleBtn.textContent.includes("Scheduled")) {
         scheduleBtn.disabled = false;
-        scheduleBtn.textContent = scheduleButtonLabel(suggestion);
+        scheduleBtn.textContent = scheduleButtonLabel(hasConfirmedTime);
+      }
+    }
+  }
+
+  scheduleBtn.addEventListener("click", async () => {
+    if (!hasConfirmedTime) {
+      // No time extracted from the message yet — open the manual picker instead of
+      // scheduling blind.
+      schedulePicker.hidden = !schedulePicker.hidden;
+      setInteracting(!schedulePicker.hidden);
+      if (!schedulePicker.hidden) {
+        scheduleTimeInput.focus();
+      }
+      return;
+    }
+    await runSchedule();
+  });
+
+  scheduleConfirmBtn.addEventListener("click", async () => {
+    if (!scheduleTimeInput.value) {
+      scheduleConfirmBtn.title = "Pick a date and time first";
+      window.setTimeout(() => {
+        scheduleConfirmBtn.title = "";
+      }, 3000);
+      return;
+    }
+    const startIso = new Date(scheduleTimeInput.value).toISOString();
+    scheduleConfirmBtn.disabled = true;
+    const originalLabel = scheduleConfirmBtn.textContent;
+    scheduleConfirmBtn.textContent = "Scheduling…";
+    try {
+      await runSchedule({ start: startIso });
+      schedulePicker.hidden = true;
+      setInteracting(false);
+    } catch (error) {
+      scheduleConfirmBtn.title = String(error.message || error);
+      window.setTimeout(() => {
+        scheduleConfirmBtn.title = "";
+      }, 3000);
+    } finally {
+      scheduleConfirmBtn.disabled = false;
+      scheduleConfirmBtn.textContent = originalLabel;
+    }
+  });
+
+  scheduleCancelBtn.addEventListener("click", () => {
+    schedulePicker.hidden = true;
+    setInteracting(false);
+  });
+
+  remindBtn.addEventListener("click", async () => {
+    if (typeof onRemind !== "function") {
+      return;
+    }
+    remindBtn.disabled = true;
+    remindBtn.textContent = "Setting reminder…";
+    try {
+      await onRemind(suggestion, remindBtn);
+    } finally {
+      if (!remindBtn.textContent.includes("Reminder set")) {
+        remindBtn.disabled = false;
       }
     }
   });
@@ -476,9 +592,9 @@ export function createWhatsAppRequestCard(
     setInteracting(false);
   });
 
-  correctionSaveBtn.addEventListener("click", async () => {
+  async function saveCorrection() {
     const correctResponse = correctionInput.value.trim();
-    if (!correctResponse) {
+    if (!correctResponse || correctionSaveBtn.disabled) {
       return;
     }
     if (typeof onWrong !== "function") {
@@ -500,8 +616,28 @@ export function createWhatsAppRequestCard(
         correctionSaveBtn.title = "";
       }, 3000);
     }
+  }
+
+  correctionSaveBtn.addEventListener("click", saveCorrection);
+
+  correctionInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    saveCorrection();
   });
 
-  card.append(header, original, originalTranslation, meta, clarifySection, draftSection, actions, correctionPanel);
+  card.append(
+    header,
+    original,
+    originalTranslation,
+    meta,
+    clarifySection,
+    draftSection,
+    actions,
+    schedulePicker,
+    correctionPanel
+  );
   return card;
 }

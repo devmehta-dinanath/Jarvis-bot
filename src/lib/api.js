@@ -141,10 +141,17 @@ export function getScheduledMeetingSuggestions() {
   return fetchJson("/api/v1/whatsapp/suggestions?kind=meeting&status=done", {}, SERVER_API);
 }
 
-export function scheduleMeetingSuggestion(suggestionId) {
+export function scheduleMeetingSuggestion(suggestionId, overrides = {}) {
   return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/add-to-calendar`, {
     method: "POST",
-    body: JSON.stringify({ conference: true, send_confirmation: true })
+    body: JSON.stringify({ conference: true, send_confirmation: true, ...overrides })
+  }, SERVER_API);
+}
+
+export function remindMeSuggestion(suggestionId) {
+  return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/remind`, {
+    method: "POST",
+    body: JSON.stringify({})
   }, SERVER_API);
 }
 
@@ -191,6 +198,20 @@ export function getTodayCalendarEvents() {
     time_min: start.toISOString(),
     time_max: end.toISOString(),
     max_results: "50"
+  });
+
+  return fetchJson(`/api/v1/calendar/events?${params.toString()}`, {}, SERVER_API);
+}
+
+export function getUpcomingCalendarEvents(days = 2) {
+  const start = new Date();
+  const end = new Date();
+  end.setDate(end.getDate() + days);
+
+  const params = new URLSearchParams({
+    time_min: start.toISOString(),
+    time_max: end.toISOString(),
+    max_results: "100"
   });
 
   return fetchJson(`/api/v1/calendar/events?${params.toString()}`, {}, SERVER_API);

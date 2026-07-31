@@ -24,7 +24,7 @@ export const NUDGE_CATEGORIES = ["greeting", "voice_note", "media"];
 
 export const LIFE_NUDGE_CATEGORIES = ["personal_silence"];
 
-export const WORK_NUDGE_CATEGORIES = ["awaiting_reply", "pending_commitment"];
+export const WORK_NUDGE_CATEGORIES = ["awaiting_reply", "pending_commitment", "client_commitment"];
 
 export const ALL_SURFACE_CATEGORIES = [
   ...WORK_CATEGORIES,
@@ -55,7 +55,8 @@ export const CATEGORY_LABELS = {
   media: "Media",
   personal_silence: "Reply reminder",
   awaiting_reply: "Awaiting your reply",
-  pending_commitment: "Pending commitment"
+  pending_commitment: "Pending commitment",
+  client_commitment: "Client hasn't delivered"
 };
 
 /** Merge labels from GET /api/v1/whatsapp/categories (backend taxonomy.py). */
@@ -98,7 +99,8 @@ export const CATEGORY_SECTIONS = [
       "follow_up",
       "other",
       "awaiting_reply",
-      "pending_commitment"
+      "pending_commitment",
+      "client_commitment"
     ]
   },
   {
@@ -116,7 +118,14 @@ export const CATEGORY_SECTIONS = [
 ];
 
 const URGENT_CATEGORIES = new Set(["payment", "complaint"]);
-const SCHEDULE_CATEGORIES = new Set(["meeting", "family_plan"]);
+// Kinds that are already reminders in their own right — "Remind me" on top of a reminder
+// would just be noise.
+const ALREADY_REMINDER_KINDS = new Set([
+  "life_nudge",
+  "followup_nudge",
+  "commitment_reminder",
+  "client_commitment_reminder"
+]);
 
 export function resolveCategory(suggestion) {
   return suggestion.category || suggestion.kind || "other";
@@ -145,21 +154,29 @@ export function isUrgent(suggestion) {
 }
 
 export function canSchedule(suggestion) {
-  // Never show Schedule for a tentative or one-sided plan — only once both sides of the
-  // conversation have clearly confirmed (see classifier.py MUTUAL CONFIRMATION RULE).
-  return (
-    SCHEDULE_CATEGORIES.has(resolveCategory(suggestion)) &&
-    suggestion.details?.confirmed === true
-  );
+  // The owner's own tap on Schedule is the acceptance. The button shows for every
+  // "meeting" suggestion, even before a time was extracted from the message — if there's
+  // no confirmed time yet the card lets the owner pick one manually instead of blocking
+  // the whole action on the classifier having found a date/time in the text.
+  return resolveCategory(suggestion) === "meeting";
 }
 
-export function canSendReply(suggestion) {
-  // No draft means the AI either can't send a reply for this category (voice note,
-  // media, reminders) or deliberately didn't draft one (low-confidence chip) — never
-  // fall back to a generic canned reply in either case. The one exception is the 7-day
-  // silent-observation window: there's still no AI draft, but the box itself should show
-  // so the owner can type and send their own reply from inside the app.
-  return Boolean(suggestion.draft_text) || Boolean(suggestion.details?.silent_observation);
+export function canRemind(suggestion) {
+  // A personal calendar reminder, available on virtually any card — no mutual
+  // confirmation needed since nothing is sent to the contact. Meetings get this too now:
+  // an unconfirmed plan is worth a personal nudge even though it also has its own
+  // Schedule button. The various *_nudge/reminder kinds already are reminders.
+  if (ALREADY_REMINDER_KINDS.has(suggestion.kind)) {
+    return false;
+  }
+  return !suggestion.details?.reminder_event_id;
+}
+
+export function canSendReply() {
+  // The reply box always shows, for every category — populated with the AI's draft when
+  // there is one, empty for the owner to type into when there isn't. Never fall back to a
+  // generic canned line: empty-but-present beats fake-personalized.
+  return true;
 }
 
 export function partitionSuggestions(suggestions) {

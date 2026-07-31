@@ -1,7 +1,8 @@
 import {
   getCalendarStatus,
   getScheduledMeetingSuggestions,
-  getTodayCalendarEvents
+  getTodayCalendarEvents,
+  getUpcomingCalendarEvents
 } from "../lib/api.js";
 import { markUpdated } from "../lib/last-updated.js";
 import { formatClockTime, formatMeetingTime, isToday, meetingDurationMinutes } from "../lib/time.js";
@@ -136,6 +137,50 @@ function bookedDescription(suggestion) {
   return suggestion.message_body || "Booked from WhatsApp";
 }
 
+const REMINDER_WINDOW_DAYS = 2;
+
+// Everything on the calendar for the next REMINDER_WINDOW_DAYS days, not just things
+// booked through Personal OS — a manually-added Google Calendar event belongs here too.
+function mapUpcomingEvent(event) {
+  const startRaw = event.start?.dateTime || event.start?.date;
+  const start = startRaw ? new Date(startRaw) : null;
+
+  return {
+    title: event.summary || "Calendar event",
+    description: startRaw ? formatMeetingTime(startRaw) : "Time not set",
+    link: event.hangoutLink || event.htmlLink || null,
+    calendarEventId: event.id || null,
+    sortKey: start ? start.getTime() : 0
+  };
+}
+
+function isInReminderWindow(event) {
+  const startRaw = event.start?.dateTime || event.start?.date;
+  if (!startRaw) {
+    return true;
+  }
+  const start = new Date(startRaw);
+  if (Number.isNaN(start.getTime())) {
+    return true;
+  }
+  const now = new Date();
+  const windowEnd = new Date();
+  windowEnd.setDate(windowEnd.getDate() + REMINDER_WINDOW_DAYS);
+  return start >= now && start <= windowEnd;
+}
+
+function dedupeEvents(events) {
+  const seen = new Set();
+  return events.filter((event) => {
+    const key = event.calendarEventId || `${event.title}|${event.sortKey}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function dedupeSuggestions(suggestions) {
   const seen = new Set();
   return suggestions.filter((suggestion) => {
@@ -194,8 +239,16 @@ export function createMeetingPage() {
   bookedList.className = "action-list";
   bookedSection.appendChild(bookedList);
 
+  const reminderSection = document.createElement("section");
+  reminderSection.className = "os-section";
+  reminderSection.appendChild(createSectionHeader("Upcoming reminders", "warning"));
+
+  const reminderList = document.createElement("div");
+  reminderList.className = "action-list";
+  reminderSection.appendChild(reminderList);
+
   hero.append(greeting, context, stats);
-  page.append(hero, scheduleSection, bookedSection);
+  page.append(hero, scheduleSection, bookedSection, reminderSection);
 
   async function reload() {
     let meetings = [];
@@ -274,32 +327,74 @@ export function createMeetingPage() {
 
     if (bookedOnly.length === 0) {
       bookedList.replaceChildren(createEmptyState("No WhatsApp meetings booked yet."));
-      markUpdated();
-      return;
+    } else {
+      bookedList.replaceChildren();
+      bookedOnly.forEach((suggestion) => {
+        const details = suggestion.details ?? {};
+        const link = details.calendar_html_link;
+        bookedList.appendChild(
+          createActionCard({
+            title: details.title || `${suggestion.contact_name || "Contact"} meeting`,
+            description: bookedDescription(suggestion),
+            accent: "success",
+            actions: link
+              ? [
+                  {
+                    label: "Open in Calendar",
+                    variant: "primary",
+                    primary: true,
+                    onClick: () => joinCall(link)
+                  }
+                ]
+              : []
+          })
+        );
+      });
     }
 
-    bookedList.replaceChildren();
-    bookedOnly.forEach((suggestion) => {
-      const details = suggestion.details ?? {};
-      const link = details.calendar_html_link;
-      bookedList.appendChild(
-        createActionCard({
-          title: details.title || `${suggestion.contact_name || "Contact"} meeting`,
-          description: bookedDescription(suggestion),
-          accent: "success",
-          actions: link
-            ? [
-                {
-                  label: "Open in Calendar",
-                  variant: "primary",
-                  primary: true,
-                  onClick: () => joinCall(link)
-                }
-              ]
-            : []
-        })
+    let upcomingEvents = [];
+    if (calendarConnected) {
+      try {
+        const data = await getUpcomingCalendarEvents(REMINDER_WINDOW_DAYS);
+        upcomingEvents = dedupeEvents(
+          (data.items ?? []).filter(isInReminderWindow).map(mapUpcomingEvent)
+        );
+        upcomingEvents.sort((a, b) => a.sortKey - b.sortKey);
+      } catch {
+        upcomingEvents = [];
+      }
+    }
+
+    if (!calendarConnected) {
+      reminderList.replaceChildren(
+        createEmptyState("Connect Google Calendar to see everything coming up.")
       );
-    });
+    } else if (upcomingEvents.length === 0) {
+      reminderList.replaceChildren(
+        createEmptyState(`Nothing on your calendar in the next ${REMINDER_WINDOW_DAYS} days.`)
+      );
+    } else {
+      reminderList.replaceChildren();
+      upcomingEvents.forEach((event) => {
+        reminderList.appendChild(
+          createActionCard({
+            title: event.title,
+            description: event.description,
+            accent: "warning",
+            actions: event.link
+              ? [
+                  {
+                    label: "Open in Calendar",
+                    variant: "primary",
+                    primary: true,
+                    onClick: () => joinCall(event.link)
+                  }
+                ]
+              : []
+          })
+        );
+      });
+    }
 
     markUpdated();
   }
