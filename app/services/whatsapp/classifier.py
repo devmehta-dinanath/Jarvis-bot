@@ -352,7 +352,9 @@ def _reply_corrections_block(corrections: list[dict] | None) -> str:
     lines = [
         "\n\nREPLY CORRECTION MEMORY — the user previously marked a reply as WRONG and told us "
         "what it should have said instead. Match that style/content for similar messages; do not "
-        "repeat the wrong approach:\n"
+        "repeat the wrong approach. Listed MOST RECENT FIRST (#1 is the newest) — if entries "
+        "conflict in tone or approach, the user changed their mind since the older one; always "
+        "follow the lower-numbered (more recent) entry, not an earlier one it contradicts:\n"
     ]
     for i, c in enumerate(usable, 1):
         snippet = (c.get("message_snippet") or "").strip()
@@ -363,7 +365,10 @@ def _reply_corrections_block(corrections: list[dict] | None) -> str:
             lines.append(f"{i}. For a message like \"{snippet}\", the correct reply was: \"{correct_response}\"")
         else:
             lines.append(f"{i}. The correct reply in a similar past case was: \"{correct_response}\"")
-    lines.append("\nThese take priority over the default tone guidance above.")
+    lines.append(
+        "\nThese take priority over the default tone guidance above, and #1 takes priority "
+        "over any other numbered entry it conflicts with."
+    )
     return "\n".join(lines)
 
 
