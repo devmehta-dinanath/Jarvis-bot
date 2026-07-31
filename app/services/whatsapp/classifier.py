@@ -292,8 +292,23 @@ def _corrections_block(corrections: list[dict]) -> str:
       - original_category (str)
       - message_snippet (str | None)
       - correct_response (str | None)
+
+    The app's only correction UI is the "Wrong" button, and it always asks "what should
+    the correct response have been" — it never asks the user to name a different
+    category. So every entry it produces carries a correct_response and is really a
+    wording complaint about the DRAFT, not a claim that original_category was mistaken.
+    Treating those as category-mistake evidence here previously taught the classifier to
+    second-guess and lower confidence on that category for every future message,
+    cascading into "not important" -> forced to "greeting" (see classify_message) even
+    for messages that were genuinely e.g. payment. Only a bare "wrong" with no
+    correct_response — which would have to come from some other, non-UI caller — is
+    actual category-mistake signal.
     """
-    wrong_only = [c for c in corrections if c.get("feedback_type", "wrong") == "wrong"]
+    wrong_only = [
+        c
+        for c in corrections
+        if c.get("feedback_type", "wrong") == "wrong" and not (c.get("correct_response") or "").strip()
+    ]
     if not wrong_only:
         return ""
     lines = [
