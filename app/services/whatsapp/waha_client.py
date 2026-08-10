@@ -20,6 +20,9 @@ _lid_to_pn_cache: dict[str, str | None] = {}
 # group JID → group subject cache (a group's name rarely changes mid-session).
 _group_name_cache: dict[str, str | None] = {}
 
+# phone digits → address-book-saved contact name cache (rarely changes mid-session).
+_contact_name_cache: dict[str, str | None] = {}
+
 
 class WahaApiError(Exception):
     """WAHA API call failed."""
@@ -237,6 +240,52 @@ def fetch_group_name(group_id: str) -> str | None:
             "[WAHA] Could not resolve a name for group %s — groups/chats endpoint "
             "returned no name/subject field",
             value,
+        )
+    return name
+
+
+def fetch_contact_name(wa_id: str) -> str | None:
+    """Best-effort fetch of a 1:1 contact's name as saved in the connected phone's own
+    address book, via WAHA's Contacts API.
+
+    This is deliberately separate from ``webhook._waha_profile_name()``, which only ever
+    reads ``pushName``/``notifyName``/etc. off the message envelope — that's the
+    contact's own self-chosen WhatsApp display name, not what the phone's owner has them
+    saved as (e.g. "Mom", "Rahul - Plumber"). WAHA's contact object distinguishes the two
+    via separate ``name`` (address-book) and ``pushname`` (self-declared) fields; only
+    ``name`` is used here. Tries the query-param contacts endpoint first (the documented
+    WAHA shape), then a path-style fallback some engine/version combos expose instead.
+    Only applies to phone-number contacts — groups use ``fetch_group_name``, and LIDs
+    (obscured numbers) aren't looked up. Cached in-memory per process.
+    """
+    value = (wa_id or "").strip()
+    if not value or value.endswith(("@g.us", "@lid")):
+        return None
+    if value in _contact_name_cache:
+        return _contact_name_cache[value]
+
+    try:
+        chat_id = to_chat_id(value)
+    except WahaApiError:
+        return None
+    encoded = quote(chat_id, safe="")
+    name: str | None = None
+
+    data = _get(f"/api/contacts?session={WAHA_SESSION}&contactId={encoded}")
+    if isinstance(data, dict):
+        name = _clean_name(data.get("name")) or _clean_name(data.get("shortName"))
+
+    if not name:
+        data = _get(f"/api/{WAHA_SESSION}/contacts/{encoded}")
+        if isinstance(data, dict):
+            name = _clean_name(data.get("name")) or _clean_name(data.get("shortName"))
+
+    _contact_name_cache[value] = name
+    if name:
+        logger.info("[WAHA] Resolved saved contact name for %s → %s", value, name)
+    else:
+        logger.info(
+            "[WAHA] No address-book name for %s — falling back to pushName", value
         )
     return name
 

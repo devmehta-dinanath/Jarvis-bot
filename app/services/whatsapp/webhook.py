@@ -369,7 +369,14 @@ def _store_waha_message(
 
         profile_name = fetch_group_name(wa_id)
     else:
-        profile_name = _waha_profile_name(body)
+        # Prefer the name as saved in the connected phone's own address book (via WAHA's
+        # Contacts API) over the sender's self-declared pushName — the user wants the
+        # name they actually gave this contact, not whatever the contact calls
+        # themselves. Falls back to pushName when WAHA has no saved name (e.g. a number
+        # that was never added as a contact).
+        from app.services.whatsapp.waha_client import fetch_contact_name
+
+        profile_name = fetch_contact_name(wa_id) or _waha_profile_name(body)
     contact = repo.upsert_contact(
         db, wa_id=wa_id, profile_name=profile_name, is_group=is_group
     )

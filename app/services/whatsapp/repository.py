@@ -893,6 +893,18 @@ def list_suggestions(
         # show, not whether the message/card itself is visible — the card always lists
         # the moment it's classified. See routes._suggestion_response, which hides
         # draft_text until visible_after has passed.
+        if status == "pending":
+            # Exception: greeting/casual messages ("Good morning", "Hello", "Ok sir")
+            # have no reply worth drafting, so there's nothing gained by showing the
+            # card itself before its own delay elapses — the owner asked not to see
+            # these clutter the pending feed the instant they're classified.
+            base = base.filter(
+                or_(
+                    models.WhatsAppSuggestion.category != "greeting",
+                    models.WhatsAppSuggestion.visible_after.is_(None),
+                    models.WhatsAppSuggestion.visible_after <= datetime.utcnow(),
+                )
+            )
     if kind:
         base = base.filter(models.WhatsAppSuggestion.kind == kind)
     if lane:
