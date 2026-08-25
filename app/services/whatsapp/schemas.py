@@ -223,6 +223,13 @@ class FeedbackResponse(BaseModel):
     ok: bool
     feedback_id: int
     feedback_type: str
+    updated_draft: str | None = Field(
+        default=None,
+        description=(
+            "New draft_text after a 'wrong' correction was applied — internal only, "
+            "never sent to the contact automatically."
+        ),
+    )
 
 
 class WhatsAppSendResult(BaseModel):

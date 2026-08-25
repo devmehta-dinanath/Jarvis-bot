@@ -280,6 +280,83 @@ def answer_clarification(
     return suggestion
 
 
+def redraft_with_correction(
+    db: Session,
+    suggestion: models.WhatsAppSuggestion,
+    *,
+    correct_response: str,
+) -> models.WhatsAppSuggestion:
+    """The user tapped Wrong and typed what the reply should have said instead. This is
+    an internal note, never sent to the contact — it only updates the draft shown in the
+    UI (the caller is responsible for persisting the correction to the learning DB via
+    repo.record_feedback). Mirrors answer_clarification's regenerate-in-place pattern."""
+    correct_response = (correct_response or "").strip()
+    if not correct_response:
+        raise WhatsAppActionError("A correction is required")
+
+    if suggestion.message_id is None:
+        raise WhatsAppActionError("Original message not found for this suggestion")
+    message = db.get(models.WhatsAppMessage, suggestion.message_id)
+    if message is None:
+        raise WhatsAppActionError("Original message not found for this suggestion")
+
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    is_personal = bool(contact is not None and contact.contact_type == "personal")
+
+    history = repo.recent_history(
+        db, suggestion.contact_id, limit=WHATSAPP_HISTORY_CONTEXT_LIMIT, before_message_id=message.id
+    )
+    instructions = [i.text for i in repo.list_instructions(db, active_only=True)]
+    corrections = repo.load_corrections_for_prompt(db, limit=WHATSAPP_CORRECTIONS_CONTEXT_LIMIT)
+    voice_examples = repo.recent_outbound_examples(db, personal=is_personal)
+
+    context_hint = (
+        f"The previous draft reply was WRONG. The user said the reply should instead say: "
+        f"\"{correct_response}\". Rewrite the reply to match what the user said — do not "
+        "repeat the old wrong content."
+    )
+
+    try:
+        if suggestion.category == "complaint":
+            draft = classifier.draft_complaint_reply(
+                history,
+                message.body or "",
+                _details_dict(suggestion).get("anger_level"),
+                language=message.language,
+                translation=message.translation,
+                instructions=instructions,
+                corrections=corrections,
+                voice_examples=voice_examples,
+                context_hint=context_hint,
+            )
+        else:
+            draft = classifier.draft_reply(
+                history,
+                message.body or "",
+                suggestion.category or "other",
+                context_hint=context_hint,
+                language=message.language,
+                translation=message.translation,
+                instructions=instructions,
+                corrections=corrections,
+                personal=is_personal,
+                voice_examples=voice_examples,
+            )
+    except classifier.WhatsAppAIError:
+        logger.warning(
+            "[WHATSAPP] Redrafting after correction failed for suggestion %s — keeping "
+            "prior draft and falling back to the user's own wording",
+            suggestion.id,
+        )
+        draft = correct_response
+
+    suggestion.draft_text = draft
+    suggestion.visible_after = None
+    db.commit()
+    db.refresh(suggestion)
+    return suggestion
+
+
 def forward_to_team(db: Session, suggestion: models.WhatsAppSuggestion) -> dict:
     """Rule 14 — one-tap forward of the original client message to the assigned team
     member's WhatsApp, using the same send path as any other outbound message. No

@@ -241,7 +241,10 @@ _CLASSIFY_SYSTEM = (
     "belongs in a different world and must never feel like a work task.\n"
     "- LANGUAGE: messages may arrive in ANY language (French, Arabic, Hindi, Spanish, Portuguese, "
     "etc.) or mixed languages. First detect the language, understand the message natively, then "
-    "classify it into the SAME categories by intent. If the message is not in English, also "
+    "classify it into the SAME categories by intent. If the message is Hindi words written in "
+    "Roman/Latin script, mixed with English (e.g. 'kal meeting hai, confirm kar do'), set "
+    "language='Hinglish' — NOT 'Hindi'. Only use 'Hindi' when the message is actually written in "
+    "Devanagari script. If the message is not in English, also "
     "provide a faithful English translation in the 'translation' field; if it is already English, "
     "set translation=null.\n"
     "Use the recent conversation history for context (e.g. a vague 'any update?' is follow_up "
@@ -691,7 +694,10 @@ def translate_reply_to_language(text: str, target_language: str) -> str:
         "You translate a WhatsApp business reply from English into another language for sending "
         "to a client. Keep the tone, meaning, names, numbers, and links exactly as given — do not "
         "add, remove, or explain anything. Respond with ONLY the translated text, no preamble, "
-        "no quotes, no English."
+        "no quotes, no English. "
+        "If the target language is 'Hinglish', write Hindi words in Roman/Latin script mixed "
+        "naturally with English, the way people actually text (e.g. 'kal 5 baje confirm hai, "
+        "milte hain') — do NOT write in Devanagari script and do NOT write pure formal Hindi."
     )
     user_content = f"Target language: {target_language}\n\nEnglish text:\n{text}\n\nTranslation:"
     return _chat(system, user_content, max_tokens=220, json_mode=False).strip()
@@ -1042,6 +1048,7 @@ def draft_complaint_reply(
     instructions: list[str] | None = None,
     corrections: list[dict] | None = None,
     voice_examples: list[str] | None = None,
+    context_hint: str | None = None,
 ) -> str:
     """Draft an empathetic reply to an unhappy client (acknowledge first, then resolve)."""
     tone = {
@@ -1051,11 +1058,13 @@ def draft_complaint_reply(
     }.get(anger_level or "high", "Acknowledge the issue and apologise sincerely.")
 
     lang_block = _language_context_block(language, translation)
+    hint_block = f"{context_hint}\n\n" if context_hint else ""
     user_content = (
         f"{lang_block}"
         f"Recent conversation:\n{_history_block(history)}\n\n"
         f"Client's latest message:\n{message}\n\n"
         f"Tone guidance: {tone}\n\n"
+        f"{hint_block}"
         "Write the empathetic reply text in English (acknowledge the problem first, then a next step):"
     )
     system = (

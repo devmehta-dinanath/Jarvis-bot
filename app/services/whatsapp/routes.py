@@ -489,10 +489,28 @@ def record_feedback(
         payload.feedback_type,
         suggestion.category,
     )
+
+    # "Wrong" corrections are an internal note, never sent to the contact — regenerate
+    # the draft in place so the card shows the corrected wording immediately.
+    updated_draft: str | None = None
+    if payload.feedback_type == "wrong" and payload.correct_response and suggestion.message_id:
+        try:
+            actions.redraft_with_correction(
+                db, suggestion, correct_response=payload.correct_response
+            )
+            updated_draft = suggestion.draft_text
+        except WhatsAppActionError as exc:
+            logger.warning(
+                "[WHATSAPP] Could not redraft suggestion %s after correction: %s",
+                suggestion_id,
+                exc,
+            )
+
     return FeedbackResponse(
         ok=True,
         feedback_id=feedback.id,
         feedback_type=feedback.feedback_type,
+        updated_draft=updated_draft,
     )
 
 
