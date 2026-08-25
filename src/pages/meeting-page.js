@@ -139,15 +139,40 @@ function bookedDescription(suggestion) {
 
 const REMINDER_WINDOW_DAYS = 2;
 
+// Personal OS reminder events (set_reminder in the backend) pack the "who" into a
+// "With: <contact>" line and the "what" into a "Message: ..." line inside the event
+// description, separated by blank lines, followed by a fixed boilerplate closing line —
+// strip that closing line and join the rest so both survive onto the card.
+function summarizeReminderDescription(description) {
+  if (!description) {
+    return null;
+  }
+  const parts = description
+    .split("\n\n")
+    .map((part) => part.trim())
+    .filter((part) => part && !part.startsWith("Personal reminder set"));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 // Everything on the calendar for the next REMINDER_WINDOW_DAYS days, not just things
 // booked through Personal OS — a manually-added Google Calendar event belongs here too.
 function mapUpcomingEvent(event) {
   const startRaw = event.start?.dateTime || event.start?.date;
   const start = startRaw ? new Date(startRaw) : null;
+  const timeText = startRaw ? formatMeetingTime(startRaw) : "Time not set";
+
+  const attendees = (event.attendees ?? [])
+    .map((attendee) => attendee.displayName || attendee.email)
+    .filter(Boolean);
+
+  const detail =
+    attendees.length > 0
+      ? attendees.join(" · ")
+      : summarizeReminderDescription(event.description) || event.location || null;
 
   return {
     title: event.summary || "Calendar event",
-    description: startRaw ? formatMeetingTime(startRaw) : "Time not set",
+    description: detail ? `${timeText} — ${detail}` : timeText,
     link: event.hangoutLink || event.htmlLink || null,
     calendarEventId: event.id || null,
     sortKey: start ? start.getTime() : 0

@@ -347,9 +347,9 @@ export function createWhatsAppRequestCard(
 
   const correctionLabel = document.createElement("p");
   correctionLabel.className = "language-card__label";
-  correctionLabel.textContent = isForeignLanguage
-    ? `What should the correct response have been? Write in English — it'll be sent to the contact in ${suggestion.message_language} now.`
-    : "What should the correct response have been? This will be sent to the contact now.";
+  correctionLabel.textContent =
+    "What should the correct response have been? This is an internal note only — it is " +
+    "never sent to the contact. It updates the draft above and teaches future drafts.";
 
   const correctionInput = document.createElement("textarea");
   correctionInput.className = "whatsapp-card__correction-input";
@@ -362,7 +362,7 @@ export function createWhatsAppRequestCard(
   const correctionSaveBtn = document.createElement("button");
   correctionSaveBtn.type = "button";
   correctionSaveBtn.className = "btn btn--primary";
-  correctionSaveBtn.textContent = "Send & save correction";
+  correctionSaveBtn.textContent = "Save correction";
 
   const correctionCancelBtn = document.createElement("button");
   correctionCancelBtn.type = "button";
@@ -602,12 +602,24 @@ export function createWhatsAppRequestCard(
     }
     correctionSaveBtn.disabled = true;
     const originalLabel = correctionSaveBtn.textContent;
-    correctionSaveBtn.textContent = "Sending…";
+    correctionSaveBtn.textContent = "Saving…";
     try {
-      await onWrong(suggestion, correctResponse);
-      correctionSaveBtn.textContent = "Sent ✓";
-      card.classList.add("whatsapp-card--sent");
-      setInteracting(false);
+      const result = await onWrong(suggestion, correctResponse);
+      // Never sent to WhatsApp — just refresh the draft shown on the card with the
+      // regenerated wording so the user can review it before tapping Send themselves.
+      const updatedDraft = result?.updated_draft;
+      if (updatedDraft) {
+        suggestion.draft_text = updatedDraft;
+        draftText.textContent = updatedDraft;
+        draftInput.value = updatedDraft;
+      }
+      correctionSaveBtn.textContent = "Saved ✓";
+      window.setTimeout(() => {
+        correctionPanel.hidden = true;
+        correctionSaveBtn.disabled = false;
+        correctionSaveBtn.textContent = originalLabel;
+        setInteracting(false);
+      }, 1200);
     } catch (error) {
       correctionSaveBtn.disabled = false;
       correctionSaveBtn.textContent = originalLabel;
