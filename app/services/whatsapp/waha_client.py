@@ -290,6 +290,47 @@ def fetch_contact_name(wa_id: str) -> str | None:
     return name
 
 
+def fetch_recent_messages(wa_id: str, *, limit: int = 100) -> list[dict[str, str]]:
+    """Best-effort fetch of the last `limit` messages for a contact/chat straight from
+    WAHA (oldest first), independent of anything captured locally via webhook.
+
+    This exists because the webhook only subscribes to the ``message`` event, which
+    doesn't reliably cover messages sent directly from the phone (bypassing this bot) —
+    so a contact's real WhatsApp history can be broader than what's in our own DB. Used
+    as a fallback tone/context source when local history is thin. Returns [] on any
+    failure (WAHA unreachable, session not WORKING, etc.) — callers should treat this as
+    optional, not required.
+    """
+    try:
+        chat_id = to_chat_id(wa_id)
+    except WahaApiError:
+        return []
+    encoded = quote(chat_id, safe="")
+    data = _get(
+        f"/api/{WAHA_SESSION}/chats/{encoded}/messages"
+        f"?limit={int(limit)}&downloadMedia=false"
+    )
+    if not isinstance(data, list):
+        return []
+
+    messages: list[dict[str, str]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        body = _clean_name(item.get("body"))
+        if not body:
+            continue
+        messages.append(
+            {
+                "direction": "outbound" if item.get("fromMe") else "inbound",
+                "body": body,
+            }
+        )
+    # WAHA returns newest-first; flip to chronological order like the rest of the codebase.
+    messages.reverse()
+    return messages[-limit:]
+
+
 def resolve_contact_wa_id(peer: str, body: dict[str, Any] | None = None) -> str:
     """Turn webhook peer JID into the wa_id we store (phone digits preferred)."""
     peer = (peer or "").strip()

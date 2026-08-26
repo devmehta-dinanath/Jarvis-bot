@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import WHATSAPP_CUSTOMER_WINDOW_HOURS
+from app.services.whatsapp import waha_client
 
 logger = logging.getLogger(__name__)
 
@@ -761,7 +762,10 @@ def recent_outbound_examples(
       1. Replies to THIS contact, about THIS category (same category as the inbound
          message immediately preceding the reply).
       2. Any recent reply to THIS contact, regardless of category.
-      3. The original personal-vs-work split (unchanged fallback behavior).
+      3. Real messages to THIS contact fetched live from WAHA — covers replies the user
+         sent directly from their phone, which our webhook may never have captured (see
+         waha_client.fetch_recent_messages).
+      4. The original personal-vs-work split (unchanged fallback behavior).
     """
     examples: list[str] = []
     seen: set[str] = set()
@@ -788,6 +792,20 @@ def recent_outbound_examples(
             .all()
         )
         _add(rows)
+
+    if contact_id is not None and len(examples) < limit:
+        contact = db.get(models.WhatsAppContact, contact_id)
+        if contact is not None and contact.wa_id:
+            live = waha_client.fetch_recent_messages(contact.wa_id, limit=100)
+            for item in live:
+                if item.get("direction") != "outbound":
+                    continue
+                body = (item.get("body") or "").strip()
+                if body and body not in seen:
+                    seen.add(body)
+                    examples.append(body)
+                if len(examples) >= limit:
+                    break
 
     if len(examples) < limit:
         query = (
