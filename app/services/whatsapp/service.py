@@ -18,7 +18,6 @@ from app.config import (
     WHATSAPP_EOD_REMINDER_MINUTE,
     WHATSAPP_FOLLOWUP_FLAG_HOURS,
     WHATSAPP_FOLLOWUP_URGENT_HOURS,
-    WHATSAPP_HISTORY_CONTEXT_LIMIT,
     WHATSAPP_LEAD_FOLLOWUP_HOURS,
     WHATSAPP_NORMAL_SUGGESTION_DELAY_MINUTES,
     WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS,
@@ -570,11 +569,11 @@ class WhatsAppService:
         db.commit()
 
     def _classify_one_unsafe(self, db, message, body: str) -> None:
-        history = repo.recent_history(
-            db,
-            message.contact_id,
-            limit=WHATSAPP_HISTORY_CONTEXT_LIMIT,
-            before_message_id=message.id,
+        # Rule 12 — every inbound message gets its context AND tone from the real WhatsApp
+        # conversation (last 20 messages, fetched live from WAHA), not just what our own DB
+        # happened to capture. Falls back to local DB history if WAHA is unreachable.
+        history = repo.live_chat_context(
+            db, message.contact_id, exclude_body=body, limit=20
         )
 
         is_group = bool(getattr(message, "is_group", False))
@@ -643,18 +642,19 @@ class WhatsAppService:
         lane: str = result.get("lane") or (
             "life" if category in classifier.LIFE_LANE_CATEGORIES else "work"
         )
-        # Rule 12 tone learning — prefer examples of how the owner has replied to THIS
-        # contact about THIS category before, falling back to the broader personal/work
-        # split when there isn't enough of that history yet (see
-        # repo.recent_outbound_examples). What gets typed into the empty reply box during
-        # the silent window becomes exactly this history, so drafting quality after the
-        # window ends improves as more per-person/per-category examples accumulate.
-        voice_examples = repo.recent_outbound_examples(
-            db,
-            personal=is_personal_contact,
-            contact_id=message.contact_id,
-            category=category,
-        )
+        # Rule 12 tone learning — tone examples come from the same live 20-message WAHA
+        # window as `history` above (the owner's own outbound messages in it), so drafting
+        # reflects how the owner actually writes right now, not just what's in our DB. Only
+        # falls back to the older DB-tiered lookup (repo.recent_outbound_examples) when that
+        # window has no outbound messages at all to draw from.
+        voice_examples = repo.voice_examples_from_history(history)
+        if not voice_examples:
+            voice_examples = repo.recent_outbound_examples(
+                db,
+                personal=is_personal_contact,
+                contact_id=message.contact_id,
+                category=category,
+            )
         priority = result.get("priority", "normal")
         if category == "follow_up":
             priority = self._followup_priority(db, message)

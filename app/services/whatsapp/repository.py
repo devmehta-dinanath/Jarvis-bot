@@ -199,6 +199,56 @@ def recent_history(
     return [{"direction": r.direction, "body": r.body or ""} for r in rows]
 
 
+def live_chat_context(
+    db: Session,
+    contact_id: int,
+    *,
+    exclude_body: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, str]]:
+    """Per-message context AND tone source: the last `limit` messages fetched live from
+    WAHA for this contact, so classification/drafting reflects the real WhatsApp
+    conversation — including replies sent directly from the phone that the webhook never
+    captured — instead of only what happens to be saved in our own DB.
+
+    Falls back to local `recent_history` when WAHA is unreachable or the session isn't
+    WORKING, so a WAHA hiccup degrades gracefully instead of leaving a message with no
+    context at all.
+    """
+    contact = db.get(models.WhatsAppContact, contact_id)
+    if contact is not None and contact.wa_id:
+        live = waha_client.fetch_recent_messages(contact.wa_id, limit=limit)
+        if live:
+            # The message being classified right now is often already visible in WAHA's
+            # own history (webhook delivery and this REST read can race) — strip it so
+            # it isn't echoed back into its own context.
+            if (
+                exclude_body
+                and live[-1]["direction"] == "inbound"
+                and live[-1]["body"].strip() == exclude_body.strip()
+            ):
+                live = live[:-1]
+            return live
+    return recent_history(db, contact_id, limit=limit)
+
+
+def voice_examples_from_history(
+    history: list[dict[str, str]], *, limit: int = 8
+) -> list[str]:
+    """Tone examples derived straight from a chat context list (see live_chat_context) —
+    the owner's own outbound messages within that same window, most recent last."""
+    examples: list[str] = []
+    seen: set[str] = set()
+    for item in history:
+        if item.get("direction") != "outbound":
+            continue
+        body = (item.get("body") or "").strip()
+        if body and body not in seen:
+            seen.add(body)
+            examples.append(body)
+    return examples[-limit:]
+
+
 def mark_contact_personal(db: Session, contact_id: int) -> None:
     """Tag a contact as personal if they are not already typed (never overwrites 'work')."""
     contact = db.get(models.WhatsAppContact, contact_id)
