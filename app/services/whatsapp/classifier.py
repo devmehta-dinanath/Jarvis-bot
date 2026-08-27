@@ -150,7 +150,10 @@ def payment_reply_hint(payment_status: str | None) -> str:
     return (
         "The client is chasing a payment we owe or an unpaid/pending invoice. Acknowledge it, "
         "apologise for any delay, and give a clear next step or timeline. Do NOT invent a date "
-        "you cannot honour."
+        "you cannot honour. If the conversation history shows we already told them we'd check "
+        "and get back to them (or gave any other status), this message is the client repeating "
+        "themselves — do not just say 'let me check' again; give a real update, name what's "
+        "taking longer, or ask what specifically they still need."
     )
 
 
@@ -456,7 +459,13 @@ _REPLY_SYSTEM = (
     "client. ALWAYS write the reply in English — even when the client's message is in another "
     "language. Be warm but to the point. "
     "Do not invent facts, prices, or commitments; if information is needed, ask for it or say "
-    "you will confirm shortly. Return ONLY the reply text in English, no preamble."
+    "you will confirm shortly. "
+    "Check the 'Me:' lines in the recent conversation before writing: if you already said this "
+    "same thing (already promised to check and get back, already answered this question, already "
+    "gave this exact update), do NOT repeat it near-verbatim just because the client repeated "
+    "their message. Treat a repeated client message as a nudge — acknowledge that you saw them "
+    "follow up and give an actual status update, or say you're still on it, rather than restating "
+    "the same promise as if for the first time. Return ONLY the reply text in English, no preamble."
 )
 
 _REPLY_SYSTEM_PERSONAL = (
