@@ -455,38 +455,40 @@ def _group_system(user_names: list[str] | None) -> str:
 
 
 _REPLY_SYSTEM = (
-    "You draft a concise, professional WhatsApp reply on behalf of a freelancer/agency to a "
-    "client. ALWAYS write the reply in English — even when the client's message is in another "
-    "language. Be warm but to the point. "
-    "Do not invent facts, prices, or commitments; if information is needed, ask for it or say "
-    "you will confirm shortly. "
-    "Check the 'Me:' lines in the recent conversation before writing: if you already said this "
-    "same thing (already promised to check and get back, already answered this question, already "
-    "gave this exact update), do NOT repeat it near-verbatim just because the client repeated "
-    "their message. Treat a repeated client message as a nudge — acknowledge that you saw them "
-    "follow up and give an actual status update, or say you're still on it, rather than restating "
-    "the same promise as if for the first time. Return ONLY the reply text in English, no preamble."
+    "You draft a WhatsApp reply on behalf of the account owner. "
+    "ADAPTIVE PER-CONTACT TONE & LANGUAGE RULES:\n"
+    "1. DYNAMIC LANGUAGE & SCRIPT: Match the language and script of the conversation. "
+    "If the conversation (or 'Me:' messages) is in Roman Hinglish (e.g. 'aaj meet kre?', 'nahi aaj nahi', 'kal baat karte hain'), "
+    "reply in natural, conversational Hinglish (Roman/Latin script, the way people actually text on WhatsApp — do NOT use Devanagari script). "
+    "If the conversation is in English, reply in English.\n"
+    "2. RELATIONSHIP & TONE MATCHING: Analyze the 'Me:' lines in the recent conversation. "
+    "If 'Me:' speaks informally, uses short punchy texts (e.g. 3-6 words), or casual phrasing with this person, match that exact casual brevity. "
+    "If 'Me:' speaks formally with a corporate client, match that professional tone. "
+    "If there are no past 'Me:' messages yet, mirror the contact's own level of formality, brevity, and language style.\n"
+    "3. CONCISE & NATURAL: WhatsApp messages are conversational. Avoid corporate customer-support fluff (do NOT say 'Thank you for reaching out' or 'I hope this message finds you well' unless the user writes like that).\n"
+    "4. ACCURACY: Do not invent facts, prices, or commitments; if information is needed, ask for it or say you will confirm shortly.\n"
+    "5. NO UNNECESSARY REPETITION: Check the 'Me:' lines in the recent conversation before writing: if you already said this same thing (already promised to check and get back, already gave this exact update), do NOT repeat it near-verbatim. Treat a repeated message as a follow-up nudge — give a fresh status or acknowledge you're still on it.\n"
+    "Return ONLY the plain reply text, no preamble, no quotes."
 )
 
 _REPLY_SYSTEM_PERSONAL = (
-    "You draft a short WhatsApp reply to a family member or close friend, in the user's own "
-    "casual voice — this is NOT a business or client message, so do not use any client-service "
-    "phrasing ('thank you for reaching out', 'lovely to hear from you', 'I appreciate your "
-    "message', etc.). Reply the way a real person quickly texts someone they know back — brief, "
-    "warm, plain, everyday language. ALWAYS write in English even if their message is in another "
-    "language. Return ONLY the reply text, no preamble."
+    "You draft a short WhatsApp reply to a family member or close friend in the user's own casual voice. "
+    "This is NOT a business or client message — never use any customer-service phrasing ('thank you for reaching out', etc.). "
+    "Match the language of the chat (e.g. Roman Hinglish if they talk in Hinglish, English if in English). "
+    "Reply the way a real person quickly texts someone close back — brief, warm, plain, everyday language. "
+    "Return ONLY the reply text, no preamble, no quotes."
 )
 
 _COMPLAINT_SYSTEM = (
-    "You draft a WhatsApp reply to an UNHAPPY client on behalf of a freelancer/agency. "
-    "ALWAYS write the reply in English — even when the client's message is in another language. "
+    "You draft an empathetic WhatsApp reply to an UNHAPPY client on behalf of the account owner. "
+    "Match the language and tone of the conversation (Roman Hinglish if the chat is in Hinglish, English if in English). "
     "You MUST: "
     "(1) acknowledge and empathise with the problem FIRST and take it seriously; "
     "(2) apologise sincerely for the inconvenience; "
     "(3) THEN offer a concrete next step or ask for the detail you need to resolve it. "
-    "Never be dismissive, defensive, or blame the client. Do not invent facts, refunds, or "
-    "commitments you cannot keep. Keep it calm, human, and reassuring. "
-    "Return ONLY the reply text in English, no preamble."
+    "Never be dismissive, defensive, or blame the client. Do not invent facts, refunds, or commitments you cannot keep. "
+    "Keep it calm, human, and reassuring. "
+    "Return ONLY the reply text, no preamble, no quotes."
 )
 
 _FINALISATION_SIGNALS = (
@@ -658,8 +660,9 @@ def check_client_commitment_fulfilled(label: str, message: str) -> bool:
 _CLIENT_NUDGE_SYSTEM = (
     "Write a short, friendly WhatsApp follow-up message from the account owner to a client "
     "who has not yet delivered on something they said they'd do. Reference what they "
-    "promised naturally and briefly ask for an update — do not sound automated, pushy, or "
-    "passive-aggressive. One or two short sentences."
+    "promised naturally and briefly ask for an update in the language and tone of the chat "
+    "(Roman Hinglish if the conversation is in Hinglish, English if in English). "
+    "Do not sound automated, pushy, or passive-aggressive. One or two short sentences."
 )
 
 
@@ -677,7 +680,7 @@ def draft_commitment_nudge(
     who = contact_name or "the client"
     user_content = (
         f"{who} previously said: \"{label}\"\n\n"
-        "They haven't followed through yet. Write the follow-up message in English:"
+        "They haven't followed through yet. Write the follow-up message matching the chat's tone and language:"
     )
     system = (
         _CLIENT_NUDGE_SYSTEM
@@ -697,23 +700,24 @@ _is_english = is_english
 
 
 def translate_reply_to_language(text: str, target_language: str) -> str:
-    """Translate an English reply into the contact's own detected language before sending —
-    the user always writes in English, the contact always receives their own language."""
+    """Translate a reply into the contact's target language if needed."""
+    if not text or not target_language or is_english(target_language):
+        return text
     system = (
-        "You translate a WhatsApp business reply from English into another language for sending "
-        "to a client. Keep the tone, meaning, names, numbers, and links exactly as given — do not "
-        "add, remove, or explain anything. Respond with ONLY the translated text, no preamble, "
-        "no quotes, no English. "
+        "You translate a WhatsApp reply into the target language for sending to a contact. "
+        "If the input text is ALREADY in the target language or natural Hinglish, return it as-is without changing anything. "
+        "Keep the tone, meaning, names, numbers, and links exactly as given — do not add, remove, or explain anything. "
+        "Respond with ONLY the translated text, no preamble, no quotes. "
         "If the target language is 'Hinglish', write Hindi words in Roman/Latin script mixed "
         "naturally with English, the way people actually text (e.g. 'kal 5 baje confirm hai, "
         "milte hain') — do NOT write in Devanagari script and do NOT write pure formal Hindi."
     )
-    user_content = f"Target language: {target_language}\n\nEnglish text:\n{text}\n\nTranslation:"
+    user_content = f"Target language: {target_language}\n\nText:\n{text}\n\nTranslation:"
     return _chat(system, user_content, max_tokens=220, json_mode=False).strip()
 
 
 def _language_context_block(language: str | None, translation: str | None) -> str:
-    """Give the drafter English context when the inbound message is not in English."""
+    """Give the drafter context when the inbound message is not in plain English."""
     if _is_english(language):
         return ""
     lines: list[str] = []
@@ -721,11 +725,9 @@ def _language_context_block(language: str | None, translation: str | None) -> st
         lines.append(f"The client's message is in {language}.")
     if translation:
         lines.append(f"English meaning: {translation}")
-    else:
-        lines.append(
-            "Understand the client's message (translate mentally if needed) and write your reply "
-            "in English."
-        )
+    lines.append(
+        "Match the conversational language of the chat history (if the chat is in Hinglish, write in natural Roman Hinglish; if in English, write in English)."
+    )
     return "\n".join(lines) + "\n\n"
 
 
@@ -964,10 +966,10 @@ def _voice_examples_block(examples: list[str] | None) -> str:
     if not examples:
         return ""
     lines = [
-        "\n\nTHE USER'S OWN VOICE — recent messages the user actually wrote and sent "
-        "themselves (not AI drafts). Match this tone, length, formality, language mix, "
-        "and sign-off style as closely as the situation allows — the goal is for your "
-        "draft to read like the user wrote it personally, not like a generic AI reply:\n"
+        "\n\nTHE USER'S OWN VOICE IN THIS CHAT — recent messages the user actually wrote and sent "
+        "themselves (not AI drafts). Match this exact tone, length, vocabulary, formality, language mix "
+        "(e.g., Hinglish vs English), and texting style as closely as possible — the goal is for your "
+        "draft to read exactly like the user wrote it personally, not like a generic AI reply:\n"
     ]
     for i, text in enumerate(examples, 1):
         snippet = text.strip()
@@ -1036,7 +1038,7 @@ def draft_reply(
         f"Recent conversation:\n{_history_block(history)}\n\n"
         f"{sender_label} latest message:\n{message}\n\n"
         f"Context: {category_hint}\n\n"
-        "Write the reply text in English:"
+        "Write the suggested reply matching the conversation's language and tone:"
     )
     system = (
         (_REPLY_SYSTEM_PERSONAL if personal else _REPLY_SYSTEM)
@@ -1074,7 +1076,7 @@ def draft_complaint_reply(
         f"Client's latest message:\n{message}\n\n"
         f"Tone guidance: {tone}\n\n"
         f"{hint_block}"
-        "Write the empathetic reply text in English (acknowledge the problem first, then a next step):"
+        "Write the empathetic reply text matching the conversation's language and tone (acknowledge the problem first, then a next step):"
     )
     system = (
         _COMPLAINT_SYSTEM
