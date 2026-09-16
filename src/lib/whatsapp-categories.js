@@ -298,5 +298,14 @@ export function buildCategoryMeta(suggestion, { formatMeetingTime }) {
     parts.push("On your calendar");
   }
 
+  // Step 1 — surface auto-created personal reminders on the card meta line.
+  if (suggestion.details?.reminder_event_id) {
+    if (suggestion.details?.reminder_at && formatMeetingTime) {
+      parts.push(`Reminder set for ${formatMeetingTime(suggestion.details.reminder_at)}`);
+    } else {
+      parts.push("Reminder set");
+    }
+  }
+
   return parts.join(" · ");
 }

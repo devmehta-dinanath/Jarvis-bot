@@ -178,4 +178,15 @@ function activateTab(buttons, panels, targetId) {
     panel.classList.toggle("is-active", isActive);
     panel.hidden = !isActive;
   });
+
+  // Summary deep-links use #summary/YYYY-MM-DD. Clear them when leaving that
+  // tab so a hard refresh returns to Inbox instead of jumping back to Summary.
+  if (targetId !== "panel-summary") {
+    const raw = window.location.hash.replace(/^#/, "");
+    if (raw.startsWith("summary/")) {
+      history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    }
+  } else {
+    document.getElementById("panel-summary")?.dispatchEvent(new CustomEvent("jarvis:tab-activated"));
+  }
 }

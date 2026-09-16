@@ -51,6 +51,12 @@ function readDateFromHash() {
 }
 
 function writeDateToHash(isoDateKey) {
+  // Summary page loads in the background even on Inbox. Do not leave a
+  // #summary/... hash behind or hard-reload will open Summary instead of Inbox.
+  const summaryPanel = document.getElementById("panel-summary");
+  if (summaryPanel && (summaryPanel.hidden || !summaryPanel.classList.contains("is-active"))) {
+    return;
+  }
   const next = `${HASH_PREFIX}${isoDateKey}`;
   if (window.location.hash.replace(/^#/, "") !== next) {
     window.location.hash = next;
@@ -495,6 +501,11 @@ export function createDailyInsightsPage() {
   reload();
   const timer = window.setInterval(reload, REFRESH_MS);
   page.addEventListener("jarvis:destroy", () => window.clearInterval(timer));
+  page.addEventListener("jarvis:tab-activated", () => {
+    if (selectedDateKey) {
+      writeDateToHash(selectedDateKey);
+    }
+  });
 
   return page;
 }
