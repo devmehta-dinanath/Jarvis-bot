@@ -113,9 +113,11 @@ async function handleRemind(suggestion, button) {
     await remindMeSuggestion(suggestion.id);
     button.textContent = "Reminder set ✓";
   } catch (error) {
+    const message = String(error.message || error);
     button.textContent = "Try again";
     button.disabled = false;
-    button.title = String(error.message || error);
+    button.title = message;
+    window.alert(`Could not set reminder:\n\n${message}`);
     window.setTimeout(() => {
       button.textContent = originalLabel;
       button.title = "";
