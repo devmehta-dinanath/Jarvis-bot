@@ -162,14 +162,17 @@ export function canSchedule(suggestion) {
 }
 
 export function canRemind(suggestion) {
-  // A personal calendar reminder, available on virtually any card — no mutual
-  // confirmation needed since nothing is sent to the contact. Meetings get this too now:
-  // an unconfirmed plan is worth a personal nudge even though it also has its own
-  // Schedule button. The various *_nudge/reminder kinds already are reminders.
+  // Show Remind me (or Reminder set ✓) on actionable cards. Nudge/reminder kinds are
+  // already reminders themselves. Do NOT hide the control once a reminder exists — the
+  // card must still show "Reminder set ✓" so auto-remind is visible.
   if (ALREADY_REMINDER_KINDS.has(suggestion.kind)) {
     return false;
   }
-  return !suggestion.details?.reminder_event_id;
+  return true;
+}
+
+export function hasReminder(suggestion) {
+  return Boolean(suggestion.details?.reminder_event_id);
 }
 
 export function canSendReply() {

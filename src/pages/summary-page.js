@@ -110,7 +110,18 @@ async function handleRemind(suggestion, button) {
   button.textContent = "Setting reminder…";
 
   try {
-    await remindMeSuggestion(suggestion.id);
+    const result = await remindMeSuggestion(suggestion.id);
+    if (!suggestion.details || typeof suggestion.details !== "object") {
+      suggestion.details = {};
+    }
+    if (result?.reminder_event_id) {
+      suggestion.details.reminder_event_id = result.reminder_event_id;
+    } else {
+      suggestion.details.reminder_event_id = suggestion.details.reminder_event_id || true;
+    }
+    if (result?.reminder_at) {
+      suggestion.details.reminder_at = result.reminder_at;
+    }
     button.textContent = "Reminder set ✓";
   } catch (error) {
     const message = String(error.message || error);
