@@ -773,9 +773,21 @@ class WhatsAppService:
                 "[WHATSAPP] Message %s is a meeting request during the silent observation "
                 "window — surfacing schedule button, no AI draft", message.id,
             )
-            suggestion = self._create_silent_meeting_suggestion(
-                db, message, history, body, priority, lane, confidence
-            )
+            try:
+                suggestion = self._create_silent_meeting_suggestion(
+                    db, message, history, body, priority, lane, confidence
+                )
+            except Exception:
+                logger.exception(
+                    "[WHATSAPP] Silent meeting suggestion failed for message %s — "
+                    "falling back to normal meeting chip",
+                    message.id,
+                )
+                suggestion = None
+            if suggestion is None and not repo.suggestion_exists_for_message(db, message.id):
+                suggestion = self._create_suggestion(
+                    db, message, history, body, result, priority, instructions, corrections, voice_examples
+                )
         elif in_silent_observation and (result["is_important"] or category == "greeting"):
             # Rule 12 — silent tone-learning observation. Checked ahead of Rule 9
             # (known-contact/cooldown gate) and the clarification/confidence gates
@@ -845,6 +857,50 @@ class WhatsAppService:
             # their suggestion internally and always return None here.
             suggestion = repo.get_suggestion_for_message(db, message.id)
 
+        # Safety net: important / meeting messages must always surface an Inbox chip.
+        # Without this, a mid-path failure (calendar remind, draft, silent-window edge)
+        # can leave the message classified with no suggestion — WAHA looks "connected"
+        # but the owner's Inbox stays empty for that chat.
+        if suggestion is None:
+            suggestion = repo.get_suggestion_for_message(db, message.id)
+        if (
+            suggestion is None
+            and category not in classifier.FILTER_LABELS
+            and category != "group"
+            and (result.get("is_important") or category == "meeting")
+            and not repo.suggestion_exists_for_message(db, message.id)
+        ):
+            chip = wa_taxonomy.default_chip_label(category) or (
+                "Meeting requested — schedule?" if category == "meeting"
+                else "Message needs a reply"
+            )
+            logger.warning(
+                "[WHATSAPP] Message %s classified as %s/important but no suggestion was "
+                "created — inserting recovery chip",
+                message.id,
+                category,
+            )
+            suggestion = repo.create_suggestion(
+                db,
+                contact_id=message.contact_id,
+                message_id=message.id,
+                kind="meeting" if category == "meeting" else "nudge",
+                category=category,
+                priority=priority,
+                lane=lane,
+                confidence=confidence,
+                draft_text=None,
+                details={"chip_label": chip, "recovery_chip": True},
+            )
+            if category == "meeting":
+                try:
+                    actions.maybe_auto_set_reminder(db, suggestion)
+                except Exception:
+                    logger.exception(
+                        "[WHATSAPP] Recovery auto-reminder failed for suggestion %s",
+                        suggestion.id,
+                    )
+
         if suggestion is not None:
             suggestion.visible_after = visible_after
             if needs_review_reason is not None:
@@ -852,12 +908,13 @@ class WhatsAppService:
 
         db.commit()
         logger.info(
-            "[WHATSAPP] Classified message %s -> important=%s category=%s priority=%s confidence=%s",
+            "[WHATSAPP] Classified message %s -> important=%s category=%s priority=%s confidence=%s suggestion=%s",
             message.id,
             result["is_important"],
             category,
             priority,
             confidence,
+            suggestion.id if suggestion is not None else None,
         )
 
     def _followup_priority(self, db, message) -> str:

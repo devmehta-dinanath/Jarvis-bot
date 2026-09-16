@@ -99,6 +99,35 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
             service_manager.whatsapp.classify_message_now(db, message)
             reclassified += 1
             logger.info("[WHATSAPP] Reclassified message %s", message.id)
+            # If classify still left no chip, force a recovery suggestion so WAHA
+            # traffic is visible in Inbox immediately.
+            db.refresh(message)
+            from app.services.whatsapp import repository as wa_repo
+
+            if message.is_important and not wa_repo.suggestion_exists_for_message(
+                db, message.id
+            ):
+                chip = (
+                    "Meeting requested — schedule?"
+                    if message.category == "meeting"
+                    else "Message needs a reply"
+                )
+                wa_repo.create_suggestion(
+                    db,
+                    contact_id=message.contact_id,
+                    message_id=message.id,
+                    kind="meeting" if message.category == "meeting" else "nudge",
+                    category=message.category or "other",
+                    priority=message.priority or "normal",
+                    lane="work",
+                    draft_text=None,
+                    details={"chip_label": chip, "recovery_chip": True},
+                )
+                reopened += 1
+                logger.warning(
+                    "[WHATSAPP] Inserted recovery chip for message %s after reclassify",
+                    message.id,
+                )
 
     db.commit()
     status = inbox_status(db)
