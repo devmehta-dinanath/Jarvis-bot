@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query, status
 from googleapiclient.errors import HttpError
 
-from app.config import GOOGLE_CALENDAR_ID
+from app.config import (
+    GOOGLE_CALENDAR_CREDENTIALS_PATH,
+    GOOGLE_CALENDAR_ID,
+    GOOGLE_CALENDAR_REDIRECT_URI,
+    GOOGLE_CALENDAR_SCOPES,
+    GOOGLE_CALENDAR_TOKEN_PATH,
+)
 from app.services.google_calendar.schemas import (
     AuthExchangeRequest,
     AuthStatusResponse,
@@ -21,6 +27,20 @@ from app.services.google_calendar.service import google_calendar_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/calendar", tags=["google-calendar"])
+
+
+def _disconnected_status() -> AuthStatusResponse:
+    """Safe fallback so Settings can still show Connect when token refresh fails."""
+    creds_ok = GOOGLE_CALENDAR_CREDENTIALS_PATH.is_file()
+    return AuthStatusResponse(
+        configured=creds_ok,
+        credentials_file_exists=creds_ok,
+        token_file_exists=GOOGLE_CALENDAR_TOKEN_PATH.is_file(),
+        authorized=False,
+        calendar_id=GOOGLE_CALENDAR_ID,
+        redirect_uri=GOOGLE_CALENDAR_REDIRECT_URI,
+        scopes=GOOGLE_CALENDAR_SCOPES,
+    )
 
 
 def _handle_google_error(exc: HttpError) -> None:
@@ -61,12 +81,9 @@ def _require_authorized() -> None:
 def auth_status() -> AuthStatusResponse:
     try:
         return google_calendar_service.auth_status()
-    except Exception as exc:
-        logger.exception("Calendar auth status failed")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Could not read Google Calendar auth status: {exc}",
-        ) from exc
+    except Exception:
+        logger.exception("Calendar auth status failed — returning disconnected")
+        return _disconnected_status()
 
 
 @router.get("/status", response_model=CalendarStatusResponse)
@@ -75,12 +92,9 @@ def calendar_status() -> CalendarStatusResponse:
         return CalendarStatusResponse(
             google_calendar=google_calendar_service.auth_status(),
         )
-    except Exception as exc:
-        logger.exception("Calendar status failed")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Could not read Google Calendar status: {exc}",
-        ) from exc
+    except Exception:
+        logger.exception("Calendar status failed — returning disconnected")
+        return CalendarStatusResponse(google_calendar=_disconnected_status())
 
 @router.get("/auth/url", response_model=AuthUrlResponse)
 def auth_url() -> AuthUrlResponse:

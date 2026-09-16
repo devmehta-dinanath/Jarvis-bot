@@ -23,11 +23,16 @@ class GoogleCalendarService:
         self.client = GoogleCalendarClient()
 
     def auth_status(self) -> AuthStatusResponse:
+        try:
+            authorized = auth.is_authorized()
+        except Exception:
+            # Never fail status/UI for a bad token refresh — treat as disconnected.
+            authorized = False
         return AuthStatusResponse(
             configured=auth.credentials_configured(),
             credentials_file_exists=GOOGLE_CALENDAR_CREDENTIALS_PATH.is_file(),
             token_file_exists=GOOGLE_CALENDAR_TOKEN_PATH.is_file(),
-            authorized=auth.is_authorized(),
+            authorized=authorized,
             calendar_id=GOOGLE_CALENDAR_ID,
             redirect_uri=GOOGLE_CALENDAR_REDIRECT_URI,
             scopes=GOOGLE_CALENDAR_SCOPES,
