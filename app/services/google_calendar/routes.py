@@ -57,17 +57,30 @@ def _require_authorized() -> None:
         )
 
 
-@router.get("/status", response_model=CalendarStatusResponse)
-def calendar_status() -> CalendarStatusResponse:
-    return CalendarStatusResponse(
-        google_calendar=google_calendar_service.auth_status(),
-    )
-
-
 @router.get("/auth/status", response_model=AuthStatusResponse)
 def auth_status() -> AuthStatusResponse:
-    return google_calendar_service.auth_status()
+    try:
+        return google_calendar_service.auth_status()
+    except Exception as exc:
+        logger.exception("Calendar auth status failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not read Google Calendar auth status: {exc}",
+        ) from exc
 
+
+@router.get("/status", response_model=CalendarStatusResponse)
+def calendar_status() -> CalendarStatusResponse:
+    try:
+        return CalendarStatusResponse(
+            google_calendar=google_calendar_service.auth_status(),
+        )
+    except Exception as exc:
+        logger.exception("Calendar status failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not read Google Calendar status: {exc}",
+        ) from exc
 
 @router.get("/auth/url", response_model=AuthUrlResponse)
 def auth_url() -> AuthUrlResponse:

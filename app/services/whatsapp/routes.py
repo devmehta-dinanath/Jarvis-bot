@@ -447,6 +447,12 @@ def remind_me(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Google Calendar error: {exc}",
         ) from exc
+    except Exception as exc:
+        logger.exception("[WHATSAPP] Remind me failed for suggestion %s", suggestion_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not create reminder: {exc}",
+        ) from exc
     return {
         "ok": True,
         "event_id": event.get("id"),

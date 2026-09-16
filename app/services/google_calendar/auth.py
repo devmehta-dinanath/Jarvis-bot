@@ -45,7 +45,9 @@ def load_credentials() -> Credentials | None:
         try:
             creds.refresh(Request())
             save_credentials(creds)
-        except OSError as exc:
+        except Exception as exc:
+            # RefreshError / network / revoked tokens must not 500 the whole API —
+            # Remind me and /calendar/auth/status call this path on every request.
             logger.warning("Failed to refresh Google Calendar token: %s", exc)
             return None
     return creds if creds and creds.valid else None

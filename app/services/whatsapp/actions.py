@@ -864,6 +864,12 @@ def set_reminder(
     if details.get("reminder_event_id"):
         raise WhatsAppActionError("A reminder is already set for this")
 
+    if not google_calendar_service.auth_status().authorized:
+        raise WhatsAppActionError(
+            "Google Calendar is not connected. Open Settings → connect Google Calendar, "
+            "then try Remind me again."
+        )
+
     start_dt = _parse_iso(remind_at) or _extract_candidate_datetime(details)
     if start_dt is None:
         start_dt = datetime.utcnow() + timedelta(hours=24)
