@@ -1021,24 +1021,8 @@ class WhatsAppService:
                 draft_text=draft,
                 details=meeting,
             )
-            if (
-                confirmed
-                and meeting.get("time_available")
-                and WHATSAPP_AUTO_ADD_CALENDAR
-                and google_calendar_service.auth_status().authorized
-            ):
-                try:
-                    actions.add_to_calendar(db, suggestion, conference=True)
-                    logger.info(
-                        "[WHATSAPP] Auto-booked meeting for suggestion %s",
-                        suggestion.id,
-                    )
-                except Exception:
-                    logger.exception(
-                        "[WHATSAPP] Auto calendar booking failed for suggestion %s",
-                        suggestion.id,
-                    )
-            # Step 1 — personal reminder whenever a meeting time was extracted (confirmed or not).
+            # Step 1 — personal reminder only. Do NOT auto-create a meeting invite /
+            # send confirmation; that waits for the owner's Schedule tap.
             if meeting.get("start") or meeting.get("time_available"):
                 event = actions.maybe_auto_set_reminder(db, suggestion)
                 if event:
