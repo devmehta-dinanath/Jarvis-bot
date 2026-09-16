@@ -705,12 +705,143 @@ def _extract_candidate_datetime(details: dict) -> datetime | None:
     if start_dt is not None:
         return start_dt
 
+    remind_at = _parse_iso(details.get("remind_at")) or _parse_iso(details.get("deadline_at"))
+    if remind_at is not None:
+        return remind_at
+
     date_str = details.get("date") or details.get("deadline_date")
     if date_str:
         time_str = details.get("time") or "09:00"
-        return _parse_iso(f"{date_str}T{time_str}:00")
+        # Accept "09:00" or "09:00:00"
+        if len(time_str) == 5:
+            time_str = f"{time_str}:00"
+        return _parse_iso(f"{date_str}T{time_str}")
 
     return None
+
+
+def maybe_auto_set_reminder(
+    db: Session,
+    suggestion: models.WhatsAppSuggestion,
+    *,
+    remind_at: str | None = None,
+    title: str | None = None,
+    require_datetime: bool = True,
+) -> dict | None:
+    """Step 1 — auto-create a personal Google Calendar reminder when detection found a
+    usable datetime. Silent no-op when Calendar is unauthorized, a reminder already
+    exists, or (when require_datetime) no date/time could be resolved. Never falls back
+    to "tomorrow" for auto paths — that fallback is only for the manual Remind button."""
+    details = _details_dict(suggestion)
+    if details.get("reminder_event_id"):
+        return None
+    if not google_calendar_service.auth_status().authorized:
+        logger.info(
+            "[WHATSAPP] Skipping auto-reminder for suggestion %s — Google Calendar not authorized",
+            suggestion.id,
+        )
+        return None
+
+    resolved = _parse_iso(remind_at) or _extract_candidate_datetime(details)
+    if require_datetime and resolved is None:
+        logger.info(
+            "[WHATSAPP] Skipping auto-reminder for suggestion %s — no datetime extracted",
+            suggestion.id,
+        )
+        return None
+
+    try:
+        return set_reminder(
+            db,
+            suggestion,
+            remind_at=remind_at or (resolved.isoformat() if resolved else None),
+            title=title,
+        )
+    except WhatsAppActionError as exc:
+        logger.warning(
+            "[WHATSAPP] Auto-reminder skipped for suggestion %s: %s",
+            suggestion.id,
+            exc,
+        )
+        return None
+    except Exception:
+        logger.exception(
+            "[WHATSAPP] Auto-reminder failed for suggestion %s",
+            suggestion.id,
+        )
+        return None
+
+
+def create_commitment_reminder(
+    db: Session,
+    commitment: models.WhatsAppCommitment,
+    *,
+    calendar_id: str | None = None,
+) -> dict | None:
+    """Step 1 — when a commitment is detected with a deadline, put a personal calendar
+    reminder on that deadline. Returns the Google event dict, or None if skipped."""
+    if commitment.deadline_at is None:
+        return None
+    if not google_calendar_service.auth_status().authorized:
+        logger.info(
+            "[WHATSAPP] Skipping commitment calendar reminder %s — Google Calendar not authorized",
+            commitment.id,
+        )
+        return None
+
+    contact = db.get(models.WhatsAppContact, commitment.contact_id)
+    contact_name = (contact.profile_name if contact else None) or (
+        contact.wa_id if contact else None
+    )
+    who = "You promised" if commitment.direction == "owner" else "Client promised"
+    summary = f"[Reminder] {who}: {commitment.label}"
+    if contact_name and contact_name.lower() not in summary.lower():
+        summary = f"{summary} — {contact_name}"
+
+    start_dt = commitment.deadline_at
+    if start_dt.tzinfo is not None:
+        start_dt = start_dt.replace(tzinfo=None)
+    end_dt = start_dt + timedelta(minutes=15)
+    description_parts = [
+        f"{who}: {commitment.label}",
+        f"Type: {commitment.commitment_type}",
+    ]
+    if contact_name:
+        description_parts.append(f"With: {contact_name}")
+    description_parts.append(
+        "Personal reminder set from Personal OS when the commitment was detected."
+    )
+
+    try:
+        payload = EventCreate(
+            summary=summary,
+            description="\n\n".join(description_parts),
+            start=EventDateTime(
+                date_time=_to_calendar_iso(start_dt),
+                time_zone=CALENDAR_DEFAULT_TIMEZONE,
+            ),
+            end=EventDateTime(
+                date_time=_to_calendar_iso(end_dt),
+                time_zone=CALENDAR_DEFAULT_TIMEZONE,
+            ),
+            conference=False,
+        )
+        event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
+    except Exception:
+        logger.exception(
+            "[WHATSAPP] Failed to create calendar reminder for commitment %s",
+            commitment.id,
+        )
+        return None
+
+    logger.info(
+        "[WHATSAPP] Commitment calendar reminder (event %s) for commitment %s at %s",
+        event.get("id"),
+        commitment.id,
+        start_dt,
+    )
+    event["reminder_at"] = _to_calendar_iso(start_dt)
+    return event
 
 
 def set_reminder(

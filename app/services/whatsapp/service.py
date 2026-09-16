@@ -496,7 +496,7 @@ class WhatsAppService:
             else:
                 detected = classifier.detect_commitment(body)
                 if detected["is_commitment"]:
-                    repo.create_commitment(
+                    commitment = repo.create_commitment(
                         db,
                         contact_id=message.contact_id,
                         message_id=message.id,
@@ -509,6 +509,17 @@ class WhatsAppService:
                         "[WHATSAPP] New commitment detected for contact %s: %s (deadline=%s)",
                         message.contact_id, detected["label"], detected.get("deadline_at"),
                     )
+                    # Step 1 — calendar reminder at detect time when a deadline was extracted.
+                    if commitment.deadline_at is not None:
+                        event = actions.create_commitment_reminder(db, commitment)
+                        if event:
+                            self._create_commitment_tracked_suggestion(
+                                db,
+                                commitment,
+                                reminder_event_id=event.get("id"),
+                                reminder_html_link=event.get("htmlLink"),
+                                reminder_at=event.get("reminder_at"),
+                            )
         except WhatsAppAIError as exc:
             logger.warning(
                 "[WHATSAPP] OpenAI commitment check failed for message %s: %s",
@@ -547,7 +558,7 @@ class WhatsAppService:
             else:
                 detected = classifier.detect_client_commitment(body)
                 if detected["is_commitment"]:
-                    repo.create_commitment(
+                    commitment = repo.create_commitment(
                         db,
                         contact_id=message.contact_id,
                         message_id=message.id,
@@ -561,6 +572,17 @@ class WhatsAppService:
                         "(deadline=%s)",
                         message.contact_id, detected["label"], detected.get("deadline_at"),
                     )
+                    # Step 1 — calendar reminder at detect time when a deadline was extracted.
+                    if commitment.deadline_at is not None:
+                        event = actions.create_commitment_reminder(db, commitment)
+                        if event:
+                            self._create_commitment_tracked_suggestion(
+                                db,
+                                commitment,
+                                reminder_event_id=event.get("id"),
+                                reminder_html_link=event.get("htmlLink"),
+                                reminder_at=event.get("reminder_at"),
+                            )
         except WhatsAppAIError as exc:
             logger.warning(
                 "[WHATSAPP] OpenAI client-commitment check failed for message %s: %s",
@@ -959,6 +981,14 @@ class WhatsAppService:
                         "[WHATSAPP] Auto calendar booking failed for suggestion %s",
                         suggestion.id,
                     )
+            # Step 1 — personal reminder whenever a meeting time was extracted (confirmed or not).
+            if meeting.get("start") or meeting.get("time_available"):
+                event = actions.maybe_auto_set_reminder(db, suggestion)
+                if event:
+                    logger.info(
+                        "[WHATSAPP] Auto-reminder set for meeting suggestion %s",
+                        suggestion.id,
+                    )
             return suggestion
 
         if category == "timeline":
@@ -1019,7 +1049,7 @@ class WhatsAppService:
                     else f"{deadline['deadline_label']} on {deadline['date']} — add to calendar?"
                 )
 
-            return repo.create_suggestion(
+            suggestion = repo.create_suggestion(
                 db,
                 contact_id=message.contact_id,
                 message_id=message.id,
@@ -1033,10 +1063,29 @@ class WhatsAppService:
                     "chip_label": chip_label,
                     "deadline_label": deadline.get("deadline_label"),
                     "deadline_date": deadline.get("date"),
+                    "date": deadline.get("date"),
                     "calendar_event_id": calendar_event_id,
                     "calendar_html_link": calendar_html_link,
                 },
             )
+            # Step 1 — always try a personal reminder when a deadline date was extracted.
+            if deadline.get("date"):
+                event = actions.maybe_auto_set_reminder(db, suggestion)
+                if event:
+                    try:
+                        details = json.loads(suggestion.details or "{}")
+                    except json.JSONDecodeError:
+                        details = {}
+                    if not isinstance(details, dict):
+                        details = {}
+                    label = deadline.get("deadline_label") or "Deadline"
+                    details["chip_label"] = (
+                        f"{label} — reminder added for {deadline['date']}"
+                    )
+                    suggestion.details = json.dumps(details)
+                    db.commit()
+                    db.refresh(suggestion)
+            return suggestion
 
         draft = _draft_reply_with_budget(
             history,
@@ -1437,7 +1486,7 @@ class WhatsAppService:
         when = _format_meeting_when(meeting)
         meeting["chip_label"] = f"Meeting {when} — schedule?" if when else "Meeting requested — schedule?"
         meeting["silent_observation"] = True
-        return repo.create_suggestion(
+        suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -1449,6 +1498,14 @@ class WhatsAppService:
             draft_text=None,
             details=meeting,
         )
+        if meeting.get("start") or meeting.get("time_available"):
+            event = actions.maybe_auto_set_reminder(db, suggestion)
+            if event:
+                logger.info(
+                    "[WHATSAPP] Auto-reminder set for silent meeting suggestion %s",
+                    suggestion.id,
+                )
+        return suggestion
 
     def _create_clarification_suggestion(
         self,
@@ -1595,9 +1652,6 @@ class WhatsAppService:
             and google_calendar_service.auth_status().authorized
         ):
             try:
-                from datetime import date as _date
-                from zoneinfo import ZoneInfo
-
                 from app.services.google_calendar.schemas import EventCreate, EventDateTime
 
                 event_date = date_info["date"]
@@ -1633,7 +1687,7 @@ class WhatsAppService:
             else f"{label} on {chip_date} — add to calendar?"
         )
 
-        repo.create_suggestion(
+        suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -1650,6 +1704,22 @@ class WhatsAppService:
                 "chip_label": chip_label,
             },
         )
+        # Step 1 — personal reminder on detect when a date was extracted.
+        if date_info.get("date"):
+            event = actions.maybe_auto_set_reminder(
+                db, suggestion, title=date_info.get("reminder_title") or label
+            )
+            if event:
+                try:
+                    details = json.loads(suggestion.details or "{}")
+                except json.JSONDecodeError:
+                    details = {}
+                if not isinstance(details, dict):
+                    details = {}
+                details["chip_label"] = f"{label} reminder added for {chip_date}"
+                suggestion.details = json.dumps(details)
+                db.commit()
+                db.refresh(suggestion)
 
     def _create_personal_task_suggestion(
         self, db, message, history, body, priority,
@@ -1661,9 +1731,17 @@ class WhatsAppService:
             task_info = wa_fallback.extract_personal_task(body)
 
         remind_at = _eod_remind_at()
-        chip_label = f"Reminder added — {task_info['task_summary']}"
+        # Prefer an explicit date/time from extraction when present; else EOD today/tomorrow.
+        if task_info.get("date"):
+            time_str = task_info.get("time") or "09:00"
+            if len(time_str) == 5:
+                time_str = f"{time_str}:00"
+            parsed = _parse_iso(f"{task_info['date']}T{time_str}")
+            if parsed is not None:
+                remind_at = parsed
 
-        repo.create_suggestion(
+        task_summary = task_info.get("task_summary") or "Personal task"
+        suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -1676,9 +1754,30 @@ class WhatsAppService:
             details={
                 **task_info,
                 "remind_at": remind_at.isoformat(),
-                "chip_label": chip_label,
+                "chip_label": f"Reminder pending — {task_summary}",
             },
         )
+        # Step 1 — only claim "Reminder added" after a real calendar write.
+        event = actions.maybe_auto_set_reminder(
+            db,
+            suggestion,
+            remind_at=remind_at.isoformat(),
+            title=task_summary,
+            require_datetime=False,
+        )
+        try:
+            details = json.loads(suggestion.details or "{}")
+        except json.JSONDecodeError:
+            details = {}
+        if not isinstance(details, dict):
+            details = {}
+        if event:
+            details["chip_label"] = f"Reminder added — {task_summary}"
+        else:
+            details["chip_label"] = f"Task noted — {task_summary} (tap Remind me to schedule)"
+        suggestion.details = json.dumps(details)
+        db.commit()
+        db.refresh(suggestion)
 
     def _create_family_plan_suggestion(
         self, db, message, history, body, priority,
@@ -1769,7 +1868,7 @@ class WhatsAppService:
         else:
             chip_label = f"{label} mentioned — no time confirmed yet"
 
-        repo.create_suggestion(
+        suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
             message_id=message.id,
@@ -1785,6 +1884,72 @@ class WhatsAppService:
                 "calendar_html_link": calendar_html_link,
                 "chip_label": chip_label,
                 "is_personal_event": True,
+            },
+        )
+        # Step 1 — personal reminder when a plan date exists (even if not mutually confirmed).
+        if plan.get("date"):
+            event = actions.maybe_auto_set_reminder(db, suggestion, title=label)
+            if event and not calendar_event_id:
+                try:
+                    details = json.loads(suggestion.details or "{}")
+                except json.JSONDecodeError:
+                    details = {}
+                if not isinstance(details, dict):
+                    details = {}
+                suffix = f" {when_str}" if when_str else ""
+                details["chip_label"] = f"{label}{suffix} — reminder set ✓".strip()
+                suggestion.details = json.dumps(details)
+                db.commit()
+                db.refresh(suggestion)
+
+    def _create_commitment_tracked_suggestion(
+        self,
+        db,
+        commitment,
+        *,
+        reminder_event_id: str | None,
+        reminder_html_link: str | None,
+        reminder_at: str | None,
+    ) -> None:
+        """Inbox chip when a commitment with a deadline was detected and a calendar
+        reminder was created. Overdue commitment_reminder chips still fire later."""
+        contact = commitment.contact
+        display_name = (
+            ((contact.profile_name or "").strip() or contact.wa_id) if contact else "contact"
+        )
+        if commitment.direction == "owner":
+            category = "pending_commitment"
+            chip_label = (
+                f"You promised {display_name}: {commitment.label} — reminder set ✓"
+            )
+            kind = "reply"
+        else:
+            category = "client_commitment"
+            chip_label = (
+                f"{display_name} promised: {commitment.label} — reminder set ✓"
+            )
+            kind = "reply"
+
+        repo.create_suggestion(
+            db,
+            contact_id=commitment.contact_id,
+            message_id=commitment.message_id,
+            kind=kind,
+            category=category,
+            priority="high",
+            lane="work",
+            draft_text=None,
+            details={
+                "chip_label": chip_label,
+                "commitment_label": commitment.label,
+                "commitment_type": commitment.commitment_type,
+                "commitment_id": commitment.id,
+                "deadline_at": (
+                    commitment.deadline_at.isoformat() if commitment.deadline_at else None
+                ),
+                "reminder_event_id": reminder_event_id,
+                "reminder_html_link": reminder_html_link,
+                "reminder_at": reminder_at,
             },
         )
 
