@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.config import (
     CALENDAR_DEFAULT_TIMEZONE,
@@ -16,14 +17,17 @@ def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
+    return dt
 
 
 def _to_rfc3339(value: datetime) -> str:
     if value.tzinfo is None:
-        return value.replace(microsecond=0).isoformat() + "Z"
+        value = value.replace(tzinfo=ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
     utc = value.astimezone(timezone.utc).replace(microsecond=0)
     return utc.isoformat().replace("+00:00", "Z")
 

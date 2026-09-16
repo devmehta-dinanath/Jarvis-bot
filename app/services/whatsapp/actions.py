@@ -1,6 +1,8 @@
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -414,9 +416,14 @@ def forward_to_team(db: Session, suggestion: models.WhatsAppSuggestion) -> dict:
     }
 
 
+def _calendar_tz() -> ZoneInfo:
+    return ZoneInfo(CALENDAR_DEFAULT_TIMEZONE)
+
+
 def _to_calendar_iso(value: datetime) -> str:
+    # Naive datetimes are account-local (e.g. Asia/Kolkata), never UTC wall clocks.
     if value.tzinfo is None:
-        return value.replace(microsecond=0).isoformat() + "Z"
+        value = value.replace(tzinfo=_calendar_tz())
     utc = value.astimezone(timezone.utc).replace(microsecond=0)
     return utc.isoformat().replace("+00:00", "Z")
 
@@ -425,9 +432,39 @@ def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_calendar_tz())
+    return dt
+
+
+_CLOCK_IN_TEXT = re.compile(
+    r"\b(?P<h>1[0-2]|0?[1-9])(?::(?P<m>[0-5]\d))?\s*(?P<p>a\.?m\.?|p\.?m\.?)\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_clock_from_text(text: str | None) -> datetime | None:
+    """Resolve '4 pm' / '4:30pm' in the account timezone (today, or tomorrow if past)."""
+    if not text:
+        return None
+    match = _CLOCK_IN_TEXT.search(text)
+    if not match:
+        return None
+    hour = int(match.group("h"))
+    minute = int(match.group("m") or 0)
+    period = match.group("p").lower().replace(".", "")
+    if period.startswith("p") and hour != 12:
+        hour += 12
+    elif period.startswith("a") and hour == 12:
+        hour = 0
+    now = datetime.now(_calendar_tz())
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
 
 
 def _format_meeting_when(start_dt: datetime) -> str:
@@ -743,6 +780,14 @@ def maybe_auto_set_reminder(
         return None
 
     resolved = _parse_iso(remind_at) or _extract_candidate_datetime(details)
+    if resolved is None:
+        original_message = (
+            db.get(models.WhatsAppMessage, suggestion.message_id)
+            if suggestion.message_id is not None
+            else None
+        )
+        body = (original_message.body or "").strip() if original_message is not None else ""
+        resolved = _parse_clock_from_text(body)
     if require_datetime and resolved is None:
         logger.info(
             "[WHATSAPP] Skipping auto-reminder for suggestion %s — no datetime extracted",
@@ -856,10 +901,9 @@ def set_reminder(
     never requires the other side of the conversation to have confirmed anything, never
     invites the contact, and never sends a WhatsApp message. It's purely a calendar entry
     (with Google Calendar's own notification) for the account owner. Uses the message's own
-    extracted date/time when one is available (meeting/timeline/family_plan/personal_date/
-    personal_task all already populate one of 'start' or 'date'+'time' in details); falls
-    back to 24 hours from now — "remind me about this tomorrow" — when it isn't (e.g. a
-    payment nudge with no date mentioned at all)."""
+    extracted date/time when available; otherwise parses bare clock times like '4 pm' in
+    CALENDAR_DEFAULT_TIMEZONE (e.g. Asia/Kolkata); last resort is 24 hours from now in that
+    same timezone — never a UTC wall-clock fallback."""
     details = _details_dict(suggestion)
     if details.get("reminder_event_id"):
         raise WhatsAppActionError("A reminder is already set for this")
@@ -870,15 +914,31 @@ def set_reminder(
             "then try Remind me again."
         )
 
-    start_dt = _parse_iso(remind_at) or _extract_candidate_datetime(details)
-    if start_dt is None:
-        start_dt = datetime.utcnow() + timedelta(hours=24)
-    end_dt = start_dt + timedelta(minutes=15)
-
     contact = db.get(models.WhatsAppContact, suggestion.contact_id)
     contact_name = (contact.profile_name if contact else None) or (
         contact.wa_id if contact else None
     )
+    original_message = (
+        db.get(models.WhatsAppMessage, suggestion.message_id)
+        if suggestion.message_id is not None
+        else None
+    )
+    message_body = (
+        (original_message.body or "").strip() if original_message is not None else ""
+    )
+
+    start_dt = (
+        _parse_iso(remind_at)
+        or _extract_candidate_datetime(details)
+        or _parse_clock_from_text(message_body)
+    )
+    if start_dt is None:
+        # Last resort only — prefer account-local "tomorrow same clock", never utcnow().
+        start_dt = datetime.now(_calendar_tz()) + timedelta(hours=24)
+    elif start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=_calendar_tz())
+    end_dt = start_dt + timedelta(minutes=15)
+
     label = (
         title
         or details.get("event_label")
@@ -889,12 +949,6 @@ def set_reminder(
     summary = f"[Reminder] {label}"
     if contact_name and contact_name.lower() not in summary.lower():
         summary = f"{summary} — {contact_name}"
-
-    original_message = (
-        db.get(models.WhatsAppMessage, suggestion.message_id)
-        if suggestion.message_id is not None
-        else None
-    )
     description_parts = []
     if contact_name:
         description_parts.append(f"With: {contact_name}")
