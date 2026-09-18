@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app import models
 
+from app.services.whatsapp import meeting_scope
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,8 +106,13 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
             db.refresh(message)
             from app.services.whatsapp import repository as wa_repo
 
-            if message.is_important and not wa_repo.suggestion_exists_for_message(
-                db, message.id
+            if (
+                message.is_important
+                and not wa_repo.suggestion_exists_for_message(db, message.id)
+                and (
+                    not meeting_scope.MEETINGS_REMINDERS_ONLY
+                    or meeting_scope.is_meeting_or_reminder(category=message.category)
+                )
             ):
                 chip = (
                     "Meeting requested — schedule?"

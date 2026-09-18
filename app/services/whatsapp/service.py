@@ -32,6 +32,7 @@ from app.services.whatsapp import actions
 from app.services.whatsapp import calendar as wa_calendar
 from app.services.whatsapp import classifier 
 from app.services.whatsapp import fallback as wa_fallback
+from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import repository as repo
 from app.services.whatsapp import taxonomy as wa_taxonomy
 from app.services.whatsapp.classifier import WhatsAppAIError
@@ -762,6 +763,16 @@ class WhatsAppService:
             logger.info(
                 "[WHATSAPP] Message %s silently filtered (category=%s)", message.id, category
             )
+        elif (
+            meeting_scope.MEETINGS_REMINDERS_ONLY
+            and not meeting_scope.is_meeting_or_reminder(category=category)
+        ):
+            # Client scope: only calls/meetings and dated reminders reach Inbox.
+            logger.info(
+                "[WHATSAPP] Message %s skipped — meetings/reminders-only mode (category=%s)",
+                message.id,
+                category,
+            )
         elif in_silent_observation and category == "meeting" and result["is_important"]:
             # Rule 12 exception — a meeting proposal ("let's connect at 5") still needs an
             # actionable schedule button during the silent window: waiting out the window
@@ -868,6 +879,7 @@ class WhatsAppService:
             and category not in classifier.FILTER_LABELS
             and category != "group"
             and (result.get("is_important") or category == "meeting")
+            and meeting_scope.should_surface_chip(category=category, kind="meeting" if category == "meeting" else None)
             and not repo.suggestion_exists_for_message(db, message.id)
         ):
             chip = wa_taxonomy.default_chip_label(category) or (

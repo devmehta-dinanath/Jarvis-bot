@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import WHATSAPP_CUSTOMER_WINDOW_HOURS
+from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import waha_client
 
 logger = logging.getLogger(__name__)
@@ -984,6 +985,18 @@ def list_suggestions(
         # ever present once a reminder has actually been created, so a literal substring
         # match on the JSON key is enough; used by the Upcoming reminders view.
         base = base.filter(models.WhatsAppSuggestion.details.contains('"reminder_event_id"'))
+    if meeting_scope.MEETINGS_REMINDERS_ONLY:
+        allowed_categories = sorted(meeting_scope.MEETING_REMINDER_CATEGORIES)
+        allowed_kinds = sorted(meeting_scope.MEETING_REMINDER_KINDS)
+        base = base.filter(
+            or_(
+                models.WhatsAppSuggestion.category.in_(allowed_categories),
+                models.WhatsAppSuggestion.kind.in_(allowed_kinds),
+                # Never hide distress/safety chips in meetings-only mode.
+                models.WhatsAppSuggestion.details.contains('"safety_concern": true'),
+                models.WhatsAppSuggestion.details.contains('"safety_concern":true'),
+            )
+        )
     total = base.count()
     items = (
         base.order_by(models.WhatsAppSuggestion.created_at.desc())
