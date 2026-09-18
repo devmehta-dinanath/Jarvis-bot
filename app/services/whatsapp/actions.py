@@ -851,9 +851,13 @@ def create_commitment_reminder(
     if contact_name and contact_name.lower() not in summary.lower():
         summary = f"{summary} — {contact_name}"
 
+    # Commitment deadlines are stored as naive UTC (see service._parse_iso). Never strip
+    # tz and re-label as Asia/Kolkata — that turns 5pm IST (11:30 UTC) into 11:30am IST.
     start_dt = commitment.deadline_at
-    if start_dt.tzinfo is not None:
-        start_dt = start_dt.replace(tzinfo=None)
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc).astimezone(_calendar_tz())
+    else:
+        start_dt = start_dt.astimezone(_calendar_tz())
     end_dt = start_dt + timedelta(minutes=15)
     description_parts = [
         f"{who}: {commitment.label}",
