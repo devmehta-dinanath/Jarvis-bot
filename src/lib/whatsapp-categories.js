@@ -34,6 +34,46 @@ export const ALL_SURFACE_CATEGORIES = [
   ...WORK_NUDGE_CATEGORIES
 ];
 
+export const MEETING_REMINDER_CATEGORIES = new Set([
+  "meeting",
+  "personal_date",
+  "personal_task",
+  "family_plan",
+  "timeline",
+  "client_commitment",
+  "pending_commitment"
+]);
+
+export const MEETING_REMINDER_KINDS = new Set([
+  "meeting",
+  "commitment_reminder",
+  "client_commitment_reminder",
+  "personal_reminder",
+  "family_plan",
+  "personal_date",
+  "personal_task"
+]);
+
+/** Inbox product scope: calls/meetings + dated reminders only (matches server default). */
+export const MEETINGS_REMINDERS_ONLY = true;
+
+export function isMeetingOrReminder(suggestion) {
+  if (suggestion?.details?.safety_concern) {
+    return true;
+  }
+  if (MEETING_REMINDER_KINDS.has(suggestion?.kind)) {
+    return true;
+  }
+  return MEETING_REMINDER_CATEGORIES.has(suggestion?.category);
+}
+
+export function filterMeetingReminderSuggestions(suggestions) {
+  if (!MEETINGS_REMINDERS_ONLY) {
+    return suggestions;
+  }
+  return (suggestions || []).filter(isMeetingOrReminder);
+}
+
 export const CATEGORY_LABELS = {
   meeting: "Wants to meet",
   payment: "Payment",
@@ -73,47 +113,23 @@ export function applyTaxonomyFromApi(payload) {
 
 export const CATEGORY_SECTIONS = [
   {
-    id: "urgent",
-    title: "Urgent",
-    accent: "urgent",
-    categories: ["payment", "complaint"]
-  },
-  {
     id: "meetings",
     title: "Wants to meet",
     accent: "info",
     categories: ["meeting"]
   },
   {
-    id: "replies",
-    title: "Client messages",
+    id: "reminders",
+    title: "Reminders & follow-ups",
     accent: "info",
     categories: [
-      "lead",
-      "document",
-      "shipment",
-      "order",
-      "budget",
-      "scope",
       "timeline",
-      "follow_up",
-      "other",
-      "awaiting_reply",
       "pending_commitment",
-      "client_commitment"
+      "client_commitment",
+      "personal_date",
+      "personal_task",
+      "family_plan"
     ]
-  },
-  {
-    id: "nudges",
-    title: "Casual & voice",
-    accent: "success",
-    categories: ["greeting", "voice_note", "media"]
-  },
-  {
-    id: "life",
-    title: "Life",
-    accent: "success",
-    categories: ["personal_date", "personal_task", "family_plan", "personal_silence"]
   }
 ];
 

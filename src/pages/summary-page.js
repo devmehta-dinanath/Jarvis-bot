@@ -13,6 +13,7 @@ import {
 import {
   applyTaxonomyFromApi,
   CATEGORY_SECTIONS,
+  filterMeetingReminderSuggestions,
   partitionSuggestions
 } from "../lib/whatsapp-categories.js";
 import { markUpdated } from "../lib/last-updated.js";
@@ -199,7 +200,7 @@ export function createSummaryPage() {
   }));
 
   const emptyState = createEmptyState(
-    "No pending WhatsApp items right now.",
+    "No meeting or reminder items right now.",
     "Checking inbox…"
   );
   emptyState.hidden = true;
@@ -266,7 +267,9 @@ export function createSummaryPage() {
         getInboxStatus()
       ]);
       inboxStatus = statusData;
-      suggestions = dedupeSuggestions(pendingData.items ?? []);
+      suggestions = filterMeetingReminderSuggestions(
+        dedupeSuggestions(pendingData.items ?? [])
+      );
     } catch (error) {
       sections.forEach((item) => {
         item.cardList.replaceChildren(
@@ -283,18 +286,12 @@ export function createSummaryPage() {
     clearAllBtn.disabled = suggestions.length === 0;
 
     const buckets = partitionSuggestions(suggestions);
-    const urgentCount = buckets.urgent?.length ?? 0;
-    const workCount =
-      (buckets.meetings?.length ?? 0) +
-      (buckets.replies?.length ?? 0) +
-      urgentCount;
-    const lifeCount =
-      (buckets.life?.length ?? 0) + (buckets.nudges?.length ?? 0);
+    const meetingCount = buckets.meetings?.length ?? 0;
+    const reminderCount = buckets.reminders?.length ?? 0;
 
     stats.replaceChildren(
-      createStatChip(urgentCount, "Urgent", urgentCount ? "urgent" : "success"),
-      createStatChip(workCount, "Work", workCount ? "info" : "success"),
-      createStatChip(lifeCount, "Life", lifeCount ? "info" : "success")
+      createStatChip(meetingCount, "Meetings", meetingCount ? "info" : "success"),
+      createStatChip(reminderCount, "Reminders", reminderCount ? "info" : "success")
     );
 
     let visibleSections = 0;
@@ -319,7 +316,7 @@ export function createSummaryPage() {
     if (!emptyState.hidden) {
       emptyState.replaceChildren(
         ...createEmptyState(
-          "No pending WhatsApp items right now.",
+          "No meeting or reminder items right now.",
           formatInboxHint(inboxStatus)
         ).childNodes
       );
