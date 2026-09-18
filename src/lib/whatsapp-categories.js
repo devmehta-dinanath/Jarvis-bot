@@ -313,17 +313,23 @@ export function buildCategoryMeta(suggestion, { formatMeetingTime }) {
     parts.push("Slot looks busy");
   }
 
-  if (suggestion.details?.calendar_html_link && key !== "meeting") {
+  if (suggestion.details?.calendar_html_link && key === "meeting") {
+    parts.push("Meeting on calendar");
+  } else if (suggestion.details?.calendar_html_link && key !== "meeting") {
     parts.push("On your calendar");
   }
 
   // Step 1 — surface auto-created personal reminders on the card meta line.
   if (suggestion.details?.reminder_event_id) {
     if (suggestion.details?.reminder_at && formatMeetingTime) {
-      parts.push(`Reminder set for ${formatMeetingTime(suggestion.details.reminder_at)}`);
+      parts.push(`Reminder confirmed for ${formatMeetingTime(suggestion.details.reminder_at)}`);
     } else {
-      parts.push("Reminder set");
+      parts.push("Reminder confirmed ✓");
     }
+  }
+
+  if (suggestion.details?.meet_link) {
+    parts.push("Google Meet ready");
   }
 
   return parts.join(" · ");

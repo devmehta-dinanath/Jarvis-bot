@@ -16,8 +16,9 @@ import {
   filterMeetingReminderSuggestions,
   partitionSuggestions
 } from "../lib/whatsapp-categories.js";
+import { enhanceWhatsAppCard, openExternal, showInboxToast } from "../lib/whatsapp-card-actions.js";
 import { markUpdated } from "../lib/last-updated.js";
-import { formatDateTime, getGreeting } from "../lib/time.js";
+import { formatDateTime, formatMeetingTime, getGreeting } from "../lib/time.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
 import { createStatChip } from "../ui/components/stat-chip.js";
 import { createWhatsAppRequestCard } from "../ui/components/whatsapp-request-card.js";
@@ -101,7 +102,9 @@ function renderSectionCards(cardList, suggestions, handlers) {
   }
 
   suggestions.forEach((suggestion) => {
-    cardList.appendChild(createWhatsAppRequestCard(suggestion, handlers));
+    const card = createWhatsAppRequestCard(suggestion, handlers);
+    enhanceWhatsAppCard(card, suggestion);
+    cardList.appendChild(card);
   });
 }
 
@@ -115,15 +118,41 @@ async function handleRemind(suggestion, button) {
     if (!suggestion.details || typeof suggestion.details !== "object") {
       suggestion.details = {};
     }
-    if (result?.reminder_event_id) {
-      suggestion.details.reminder_event_id = result.reminder_event_id;
+    const eventId = result?.reminder_event_id || result?.event_id;
+    if (eventId) {
+      suggestion.details.reminder_event_id = eventId;
     } else {
       suggestion.details.reminder_event_id = suggestion.details.reminder_event_id || true;
     }
     if (result?.reminder_at) {
       suggestion.details.reminder_at = result.reminder_at;
     }
+    if (result?.html_link) {
+      suggestion.details.reminder_html_link = result.html_link;
+    }
     button.textContent = "Reminder set ✓";
+    button.disabled = true;
+    button.style.borderColor = "#2e7d32";
+    button.style.color = "#1b5e20";
+
+    const when = result?.reminder_at
+      ? formatMeetingTime(result.reminder_at)
+      : "your Google Calendar";
+    showInboxToast(`Reminder confirmed ✓\nSaved for ${when}`);
+
+    const card = button.closest("article");
+    if (card) {
+      enhanceWhatsAppCard(card, suggestion);
+    }
+
+    if (result?.html_link) {
+      const openCal = window.confirm(
+        `Reminder confirmed for ${when}.\n\nOpen it in Google Calendar?`
+      );
+      if (openCal) {
+        openExternal(result.html_link);
+      }
+    }
   } catch (error) {
     const message = String(error.message || error);
     button.textContent = "Try again";
@@ -145,13 +174,53 @@ async function handleSchedule(suggestion, button, overrides) {
 
   try {
     const result = await scheduleMeetingSuggestion(suggestion.id, overrides);
+    if (!suggestion.details || typeof suggestion.details !== "object") {
+      suggestion.details = {};
+    }
+    if (result?.event_id) {
+      suggestion.details.calendar_event_id = result.event_id;
+    }
+    if (result?.html_link) {
+      suggestion.details.calendar_html_link = result.html_link;
+    }
+    if (result?.meet_link) {
+      suggestion.details.meet_link = result.meet_link;
+    }
+
     if (result.reply_sent) {
       button.textContent = "Scheduled & sent ✓";
     } else if (result.reply_error) {
       button.textContent = "Scheduled — send reply";
       button.title = result.reply_error;
     } else {
-      button.textContent = "Scheduled";
+      button.textContent = "Scheduled ✓";
+    }
+    button.disabled = true;
+
+    const card = button.closest("article");
+    if (card) {
+      enhanceWhatsAppCard(card, suggestion);
+    }
+
+    const meetUrl = result?.meet_link;
+    const isMeet =
+      typeof meetUrl === "string" && /meet\.google\.com/i.test(meetUrl);
+    showInboxToast(
+      isMeet
+        ? "Meeting scheduled ✓\nGoogle Meet link is ready — tap Join Google Meet"
+        : "Meeting scheduled ✓\nOpen the calendar event to join"
+    );
+
+    if (isMeet) {
+      const go = window.confirm("Meeting scheduled.\n\nOpen Google Meet now?");
+      if (go) {
+        openExternal(meetUrl);
+      }
+    } else if (result?.html_link) {
+      const go = window.confirm("Meeting scheduled.\n\nOpen Google Calendar event?");
+      if (go) {
+        openExternal(result.html_link);
+      }
     }
   } catch (error) {
     button.textContent = "Try again";
