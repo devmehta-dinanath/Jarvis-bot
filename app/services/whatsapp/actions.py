@@ -594,9 +594,13 @@ def add_to_calendar(
     )
     event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
 
-    meet_link = event.get("hangoutLink") or event.get("htmlLink")
+    hangout = event.get("hangoutLink")
+    html_link = event.get("htmlLink")
+    meet_link = hangout or (
+        html_link if html_link and "meet.google.com" in html_link else None
+    )
     details["calendar_event_id"] = event.get("id")
-    details["calendar_html_link"] = event.get("htmlLink")
+    details["calendar_html_link"] = html_link
     if meet_link:
         details["meet_link"] = meet_link
     suggestion.details = json.dumps(details)
@@ -607,7 +611,7 @@ def add_to_calendar(
     reply_error: str | None = None
     sent_message_id: int | None = None
     if send_confirmation:
-        confirmation = _meeting_confirmation_text(start_dt, meet_link)
+        confirmation = _meeting_confirmation_text(start_dt, meet_link or html_link)
         suggestion.draft_text = confirmation
         db.commit()
         db.refresh(suggestion)
@@ -617,7 +621,7 @@ def add_to_calendar(
                 suggestion,
                 text=confirmation,
                 start_dt=start_dt,
-                link=meet_link,
+                link=meet_link or html_link,
             )
             reply_sent = True
             sent_message_id = sent.id
@@ -653,6 +657,10 @@ def add_to_calendar(
         event["reply_error"] = reply_error
     if sent_message_id is not None:
         event["sent_message_id"] = sent_message_id
+    if meet_link:
+        event["hangoutLink"] = meet_link
+    if html_link:
+        event["htmlLink"] = html_link
     return event
 
 
