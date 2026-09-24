@@ -1,10 +1,10 @@
-"""Step 1 Inbox scope: meetings/calls + time-based reminders only."""
+"""Step 1 Inbox scope: meeting/call chips only (client product request)."""
 
 from __future__ import annotations
 
 import os
 
-# Default on — client product asks for call/reminder chips only. Set
+# Default on — Inbox shows meeting/call chips only. Set
 # WHATSAPP_MEETINGS_REMINDERS_ONLY=false to restore the full action inbox.
 MEETINGS_REMINDERS_ONLY = os.getenv("WHATSAPP_MEETINGS_REMINDERS_ONLY", "true").lower() in {
     "1",
@@ -12,27 +12,16 @@ MEETINGS_REMINDERS_ONLY = os.getenv("WHATSAPP_MEETINGS_REMINDERS_ONLY", "true").
     "yes",
 }
 
+# Strict allowlist: only WhatsApp messages about scheduling a call/meeting.
 MEETING_REMINDER_CATEGORIES = frozenset(
     {
         "meeting",
-        "personal_date",
-        "personal_task",
-        "family_plan",
-        "timeline",
-        "client_commitment",
-        "pending_commitment",
     }
 )
 
 MEETING_REMINDER_KINDS = frozenset(
     {
         "meeting",
-        "commitment_reminder",
-        "client_commitment_reminder",
-        "personal_reminder",
-        "family_plan",
-        "personal_date",
-        "personal_task",
     }
 )
 
