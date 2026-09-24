@@ -269,7 +269,7 @@ export function createSummaryPage() {
   }));
 
   const emptyState = createEmptyState(
-    "No meeting or reminder items right now.",
+    "No meeting items right now.",
     "Checking inbox…"
   );
   emptyState.hidden = true;
@@ -356,11 +356,9 @@ export function createSummaryPage() {
 
     const buckets = partitionSuggestions(suggestions);
     const meetingCount = buckets.meetings?.length ?? 0;
-    const reminderCount = buckets.reminders?.length ?? 0;
 
     stats.replaceChildren(
-      createStatChip(meetingCount, "Meetings", meetingCount ? "info" : "success"),
-      createStatChip(reminderCount, "Reminders", reminderCount ? "info" : "success")
+      createStatChip(meetingCount, "Meetings", meetingCount ? "info" : "success")
     );
 
     let visibleSections = 0;
@@ -385,7 +383,7 @@ export function createSummaryPage() {
     if (!emptyState.hidden) {
       emptyState.replaceChildren(
         ...createEmptyState(
-          "No meeting or reminder items right now.",
+          "No meeting items right now.",
           formatInboxHint(inboxStatus)
         ).childNodes
       );

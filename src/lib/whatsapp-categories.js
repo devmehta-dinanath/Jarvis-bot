@@ -34,27 +34,11 @@ export const ALL_SURFACE_CATEGORIES = [
   ...WORK_NUDGE_CATEGORIES
 ];
 
-export const MEETING_REMINDER_CATEGORIES = new Set([
-  "meeting",
-  "personal_date",
-  "personal_task",
-  "family_plan",
-  "timeline",
-  "client_commitment",
-  "pending_commitment"
-]);
+export const MEETING_REMINDER_CATEGORIES = new Set(["meeting"]);
 
-export const MEETING_REMINDER_KINDS = new Set([
-  "meeting",
-  "commitment_reminder",
-  "client_commitment_reminder",
-  "personal_reminder",
-  "family_plan",
-  "personal_date",
-  "personal_task"
-]);
+export const MEETING_REMINDER_KINDS = new Set(["meeting"]);
 
-/** Inbox product scope: calls/meetings + dated reminders only (matches server default). */
+/** Inbox product scope: meeting/call chips only (matches server default). */
 export const MEETINGS_REMINDERS_ONLY = true;
 
 export function isMeetingOrReminder(suggestion) {
@@ -117,19 +101,6 @@ export const CATEGORY_SECTIONS = [
     title: "Wants to meet",
     accent: "info",
     categories: ["meeting"]
-  },
-  {
-    id: "reminders",
-    title: "Reminders & follow-ups",
-    accent: "info",
-    categories: [
-      "timeline",
-      "pending_commitment",
-      "client_commitment",
-      "personal_date",
-      "personal_task",
-      "family_plan"
-    ]
   }
 ];
 
