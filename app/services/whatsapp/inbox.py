@@ -93,7 +93,13 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
             )
             continue
 
-        if message.is_important and message.classified_at is not None:
+        # Reclassify: important messages with no chip, OR call/meeting asks that were
+        # previously dropped (e.g. group filter without @mention → category=group).
+        should_reclassify = message.classified_at is not None and (
+            bool(message.is_important)
+            or meeting_scope.looks_like_call_or_meeting_request(message.body)
+        )
+        if should_reclassify:
             message.classified_at = None
             message.category = None
             message.is_important = None
