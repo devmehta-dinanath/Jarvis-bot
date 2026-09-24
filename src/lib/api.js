@@ -134,7 +134,14 @@ export function getWhatsAppCategories() {
 }
 
 export function refreshPendingInbox() {
-  return fetchJson("/api/v1/whatsapp/inbox/refresh-pending", { method: "POST" }, SERVER_API);
+  // Hard cap — origin can spend 30s+ reclassifying; Cloudflare then 524s and Inbox dies.
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 8000);
+  return fetchJson(
+    "/api/v1/whatsapp/inbox/refresh-pending",
+    { method: "POST", signal: controller.signal },
+    SERVER_API
+  ).finally(() => window.clearTimeout(timer));
 }
 
 export function getScheduledMeetingSuggestions() {

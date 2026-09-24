@@ -330,7 +330,11 @@ export function createSummaryPage() {
     let inboxStatus = null;
 
     try {
-      await refreshPendingInbox();
+      // refresh-pending can hang (15s+); never block Inbox on it.
+      void refreshPendingInbox().catch((error) => {
+        console.warn("[jarvis] refresh-pending failed", error);
+      });
+
       const [pendingData, statusData] = await Promise.all([
         getPendingSuggestions(),
         getInboxStatus()
