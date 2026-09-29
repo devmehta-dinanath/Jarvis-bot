@@ -80,6 +80,7 @@ def is_confirmed_plan(suggestion_or_details, *, category: str | None = None) -> 
 
 # Deterministic call/meeting asks — catch phrases the LLM may miscategorize as
 # follow_up/other, or drop in groups when the owner isn't @mentioned.
+# Expand meeting-ask detection so common phrasing / typos still recover chips.
 _CALL_OR_MEETING_REQUEST_RE = re.compile(
     r"""
     \b(
@@ -90,14 +91,16 @@ _CALL_OR_MEETING_REQUEST_RE = re.compile(
         | give\s+me\s+a\s+call
         | ring\s+me
         | phone\s+me
-        | can\s+we\s+(?:talk|speak|connect|meet)(?:\s+now)?
+        | can\s+we\s+(?:talk|speak|connect|meet)\b
+        | hi+\s+can\s+we\s+(?:talk|speak|connect|meet)\b
         | let'?s\s+(?:talk|speak|call|connect|meet)
         | free\s+(?:for\s+a\s+)?(?:call|chat|meet(?:ing)?)
         | schedule\s+a?\s*(?:call|meeting)
+        | connect\s+(?:todat|toaday|today|tomorrow|at)\b
         | (?:mujhe|mere\s+ko)\s+call
         | call\s+kar(?:o|na|oge|engi)?
         | baat\s+karni\s+hai
-    )\b
+    )
     """,
     re.IGNORECASE | re.VERBOSE,
 )
