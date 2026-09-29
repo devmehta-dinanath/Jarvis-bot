@@ -147,25 +147,8 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
         if suggestion is not None:
             if suggestion.status == "pending":
                 continue
-            # User explicitly dismissed — normally keep it gone. Exception: the
-            # contact's latest inbound is still a clear meeting/call ask (or was
-            # classified as meeting). Clear-all / accidental dismiss must not hide
-            # an active "can we connect at 5pm" forever.
+            # Explicit dismiss / Clear all must stick — do not reopen.
             if suggestion.status == "dismissed":
-                call_ask = meeting_scope.looks_like_call_or_meeting_request(message.body)
-                is_meeting = (message.category == "meeting") or (
-                    suggestion.category == "meeting"
-                ) or (suggestion.kind == "meeting")
-                if not (call_ask or is_meeting):
-                    continue
-                suggestion.status = "pending"
-                suggestion.resolved_at = None
-                reopened += 1
-                logger.info(
-                    "[WHATSAPP] Reopened dismissed meeting suggestion %s for message %s",
-                    suggestion.id,
-                    message.id,
-                )
                 continue
             if suggestion.sent_message_id is not None:
                 continue
