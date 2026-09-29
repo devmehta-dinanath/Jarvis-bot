@@ -48,7 +48,11 @@ def _details_as_dict(details) -> dict:
 
 
 def is_unconfirmed_plan(suggestion_or_details, *, category: str | None = None) -> bool:
-    """True when the chip is an unconfirmed meeting/family plan (hide completely)."""
+    """True when a meeting/family plan is not mutually confirmed.
+
+    Unconfirmed plans still appear in Inbox as cards; Schedule / Remind / auto-remind
+    stay blocked until confirmed=true.
+    """
     if hasattr(suggestion_or_details, "category"):
         category = category or getattr(suggestion_or_details, "category", None)
         details = _details_as_dict(getattr(suggestion_or_details, "details", None))
@@ -59,13 +63,15 @@ def is_unconfirmed_plan(suggestion_or_details, *, category: str | None = None) -
         return False
     if details.get("safety_concern"):
         return False
+    if details.get("confirmed") is True:
+        return False
     if details.get("confirmed") is False:
         return True
     chip = str(details.get("chip_label") or "").strip()
     if chip.lower().startswith("unconfirmed"):
         return True
-    # Missing confirmed on a plan chip → treat as not ready for Inbox.
-    return details.get("confirmed") is not True
+    # Missing confirmed on a plan chip → treat as unconfirmed for Schedule/Remind.
+    return True
 
 
 def is_confirmed_plan(suggestion_or_details, *, category: str | None = None) -> bool:

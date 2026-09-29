@@ -997,20 +997,6 @@ def list_suggestions(
                 models.WhatsAppSuggestion.details.contains('"safety_concern":true'),
             )
         )
-    # Inbox / Schedule surface: only mutually confirmed meeting & family plans.
-    # Unconfirmed chips (confirmed=false or "Unconfirmed …" label) stay out of pending.
-    if status == "pending":
-        base = base.filter(
-            or_(
-                ~models.WhatsAppSuggestion.category.in_(
-                    sorted(meeting_scope.PLAN_CATEGORIES_REQUIRING_CONFIRMATION)
-                ),
-                models.WhatsAppSuggestion.details.contains('"confirmed": true'),
-                models.WhatsAppSuggestion.details.contains('"confirmed":true'),
-                models.WhatsAppSuggestion.details.contains('"safety_concern": true'),
-                models.WhatsAppSuggestion.details.contains('"safety_concern":true'),
-            )
-        )
     total = base.count()
     items = (
         base.order_by(models.WhatsAppSuggestion.created_at.desc())

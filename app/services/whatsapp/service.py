@@ -1021,13 +1021,6 @@ class WhatsAppService:
             meeting = wa_calendar.enrich_meeting_details(meeting)
             confirmed = bool(meeting.get("confirmed"))
             meeting["chip_label"] = _meeting_chip_label(meeting, confirmed)
-            # Unconfirmed plans stay out of Inbox / Schedule / Remind entirely.
-            if not confirmed:
-                logger.info(
-                    "[WHATSAPP] Skipping unconfirmed meeting suggestion for message %s",
-                    message.id,
-                )
-                return None
             suggestion = repo.create_suggestion(
                 db,
                 contact_id=message.contact_id,
@@ -1040,9 +1033,8 @@ class WhatsAppService:
                 draft_text=draft,
                 details=meeting,
             )
-            # Step 1 — personal reminder only. Do NOT auto-create a meeting invite /
-            # send confirmation; that waits for the owner's Schedule tap.
-            if meeting.get("start") or meeting.get("time_available"):
+            # Auto-remind only when mutually confirmed; Schedule still waits for owner tap.
+            if confirmed and (meeting.get("start") or meeting.get("time_available")):
                 event = actions.maybe_auto_set_reminder(db, suggestion)
                 if event:
                     logger.info(
@@ -1928,14 +1920,6 @@ class WhatsAppService:
         else:
             chip_label = f"{label} mentioned — no time confirmed yet"
 
-        # Unconfirmed personal plans stay out of Inbox / Schedule / Remind.
-        if not confirmed:
-            logger.info(
-                "[WHATSAPP] Skipping unconfirmed family_plan suggestion for message %s",
-                message.id,
-            )
-            return
-
         suggestion = repo.create_suggestion(
             db,
             contact_id=message.contact_id,
@@ -1954,8 +1938,8 @@ class WhatsAppService:
                 "is_personal_event": True,
             },
         )
-        # Step 1 — personal reminder when a confirmed plan has a date.
-        if plan.get("date"):
+        # Personal reminder only when mutually confirmed and a date exists.
+        if confirmed and plan.get("date"):
             event = actions.maybe_auto_set_reminder(db, suggestion, title=label)
             if event and not calendar_event_id:
                 try:

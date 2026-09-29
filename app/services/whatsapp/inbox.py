@@ -85,7 +85,7 @@ def _insert_recovery_chip(db: Session, message: models.WhatsAppMessage) -> bool:
         priority=message.priority or "normal",
         lane="work",
         draft_text=None,
-        details={"chip_label": chip, "recovery_chip": True, "confirmed": True},
+        details={"chip_label": chip, "recovery_chip": True},
     )
     logger.warning(
         "[WHATSAPP] Inserted recovery chip for message %s (category=%s)",
