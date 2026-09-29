@@ -332,7 +332,8 @@ export function createSummaryPage() {
     clearAllBtn.textContent = "Clearing…";
     try {
       await dismissAllSuggestions();
-      await reload();
+      // Reload without refresh-pending — that path used to reopen meeting chips.
+      await reload({ skipRefresh: true });
     } catch (error) {
       clearAllBtn.title = String(error.message || error);
       window.setTimeout(() => {
@@ -343,15 +344,17 @@ export function createSummaryPage() {
     }
   });
 
-  async function reload() {
+  async function reload({ skipRefresh = false } = {}) {
     let suggestions = [];
     let inboxStatus = null;
 
     try {
       // refresh-pending can hang (15s+); never block Inbox on it.
-      void refreshPendingInbox().catch((error) => {
-        console.warn("[jarvis] refresh-pending failed", error);
-      });
+      if (!skipRefresh) {
+        void refreshPendingInbox().catch((error) => {
+          console.warn("[jarvis] refresh-pending failed", error);
+        });
+      }
 
       const [pendingData, statusData] = await Promise.all([
         getPendingSuggestions(),
