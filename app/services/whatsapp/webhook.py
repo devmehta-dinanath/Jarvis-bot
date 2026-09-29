@@ -284,7 +284,11 @@ def _waha_extract_text(body: dict[str, Any], msg_type: str) -> str | None:
     if msg_type != "text":
         media = body.get("media") or {}
         if isinstance(media, dict):
-            return media.get("filename") or media.get("url")
+            filename = media.get("filename")
+            if isinstance(filename, str) and filename.strip():
+                return filename.strip()
+            # Never persist WAHA download URLs (localhost /api/files/...) as message text.
+            return f"[{msg_type or 'media'}]"
     return None
 
 

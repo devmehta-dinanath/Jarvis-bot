@@ -20,6 +20,22 @@ _REFRESH_TIME_BUDGET_SEC = 8.0
 _REFRESH_MAX_RECLASSIFY = 2
 
 
+def _inbox_preview_text(body: str | None) -> str | None:
+    """Human-readable last-message preview; hide WAHA media/file URLs."""
+    text = (body or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if (
+        "/api/files/" in lowered
+        or "localhost:3000" in lowered
+        or lowered.startswith("http://")
+        or lowered.startswith("https://")
+    ):
+        return None
+    return text[:120]
+
+
 def inbox_status(db: Session) -> dict:
     pending_count = (
         db.query(models.WhatsAppSuggestion.id)
@@ -36,7 +52,7 @@ def inbox_status(db: Session) -> dict:
         "pending_count": pending_count,
         "last_inbound_at": last_inbound.timestamp if last_inbound else None,
         "last_inbound_preview": (
-            (last_inbound.body or "").strip()[:120] if last_inbound and last_inbound.body else None
+            _inbox_preview_text(last_inbound.body) if last_inbound else None
         ),
         "last_inbound_contact_id": last_inbound.contact_id if last_inbound else None,
     }
