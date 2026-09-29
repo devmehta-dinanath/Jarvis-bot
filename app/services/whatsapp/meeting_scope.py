@@ -29,6 +29,49 @@ MEETING_REMINDER_KINDS = frozenset(
 # Always keep these even in meetings-only mode (never hide critical distress).
 ALWAYS_SURFACE_DETAIL_FLAGS = frozenset({"safety_concern"})
 
+# Meeting / family-plan chips that need mutual agreement before Inbox / Schedule / Remind.
+PLAN_CATEGORIES_REQUIRING_CONFIRMATION = frozenset({"meeting", "family_plan"})
+
+
+def _details_as_dict(details) -> dict:
+    if isinstance(details, dict):
+        return details
+    if isinstance(details, str) and details.strip():
+        try:
+            import json
+
+            parsed = json.loads(details)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def is_unconfirmed_plan(suggestion_or_details, *, category: str | None = None) -> bool:
+    """True when the chip is an unconfirmed meeting/family plan (hide completely)."""
+    if hasattr(suggestion_or_details, "category"):
+        category = category or getattr(suggestion_or_details, "category", None)
+        details = _details_as_dict(getattr(suggestion_or_details, "details", None))
+    else:
+        details = _details_as_dict(suggestion_or_details)
+
+    if category not in PLAN_CATEGORIES_REQUIRING_CONFIRMATION:
+        return False
+    if details.get("safety_concern"):
+        return False
+    if details.get("confirmed") is False:
+        return True
+    chip = str(details.get("chip_label") or "").strip()
+    if chip.lower().startswith("unconfirmed"):
+        return True
+    # Missing confirmed on a plan chip → treat as not ready for Inbox.
+    return details.get("confirmed") is not True
+
+
+def is_confirmed_plan(suggestion_or_details, *, category: str | None = None) -> bool:
+    return not is_unconfirmed_plan(suggestion_or_details, category=category)
+
+
 # Deterministic call/meeting asks — catch phrases the LLM may miscategorize as
 # follow_up/other, or drop in groups when the owner isn't @mentioned.
 _CALL_OR_MEETING_REQUEST_RE = re.compile(

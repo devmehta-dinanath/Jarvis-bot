@@ -19,6 +19,7 @@ from app.services.google_calendar.schemas import EventCreate, EventDateTime
 from app.services.google_calendar.service import google_calendar_service
 from app.services.whatsapp import classifier
 from app.services.whatsapp import client as wa_client
+from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import repository as repo
 from app.services.whatsapp import taxonomy as wa_taxonomy
 
@@ -558,6 +559,10 @@ def add_to_calendar(
         return _add_family_plan_to_calendar(db, suggestion, calendar_id=calendar_id)
 
     details = _details_dict(suggestion)
+    if meeting_scope.is_unconfirmed_plan(details, category="meeting"):
+        raise WhatsAppActionError(
+            "This plan is not yet confirmed by both sides of the conversation"
+        )
     if details.get("calendar_event_id"):
         raise WhatsAppActionError("This meeting is already on the calendar")
 
@@ -811,6 +816,12 @@ def maybe_auto_set_reminder(
     details = _details_dict(suggestion)
     if details.get("reminder_event_id"):
         return None
+    if meeting_scope.is_unconfirmed_plan(suggestion):
+        logger.info(
+            "[WHATSAPP] Skipping auto-reminder for suggestion %s — plan not mutually confirmed",
+            suggestion.id,
+        )
+        return None
     if not google_calendar_service.auth_status().authorized:
         logger.info(
             "[WHATSAPP] Skipping auto-reminder for suggestion %s — Google Calendar not authorized",
@@ -940,16 +951,18 @@ def set_reminder(
     title: str | None = None,
     calendar_id: str | None = None,
 ) -> dict:
-    """A personal reminder for ANY suggestion, any category — unlike add_to_calendar this
-    never requires the other side of the conversation to have confirmed anything, never
-    invites the contact, and never sends a WhatsApp message. It's purely a calendar entry
-    (with Google Calendar's own notification) for the account owner. Uses the message's own
-    extracted date/time when available; otherwise parses bare clock times like '4 pm' in
-    CALENDAR_DEFAULT_TIMEZONE (e.g. Asia/Kolkata); last resort is 24 hours from now in that
-    same timezone — never a UTC wall-clock fallback."""
+    """A personal reminder for a suggestion. Meeting / family-plan chips require mutual
+    confirmation first; other categories never invite the contact or send WhatsApp.
+    Uses the message's own extracted date/time when available; otherwise parses bare
+    clock times like '4 pm' in CALENDAR_DEFAULT_TIMEZONE (e.g. Asia/Kolkata); last
+    resort is 24 hours from now in that same timezone — never a UTC wall-clock fallback."""
     details = _details_dict(suggestion)
     if details.get("reminder_event_id"):
         raise WhatsAppActionError("A reminder is already set for this")
+    if meeting_scope.is_unconfirmed_plan(suggestion):
+        raise WhatsAppActionError(
+            "This plan is not yet confirmed by both sides of the conversation"
+        )
 
     if not google_calendar_service.auth_status().authorized:
         raise WhatsAppActionError(
