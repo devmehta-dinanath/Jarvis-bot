@@ -61,7 +61,7 @@ function createWindow() {
     ...bounds,
     minWidth: 380,
     minHeight: 480,
-    maxWidth: Math.round(screen.getPrimaryDisplay().workArea.width * 0.4),
+    // No maxWidth — allow resize / maximize to fill the full screen.
     backgroundColor: "#121420",
     title: "Personal OS",
     webPreferences: {

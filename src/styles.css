@@ -60,10 +60,12 @@ html,
 body {
   margin: 0;
   height: 100%;
+  width: 100%;
 }
 
 body {
   height: 100vh;
+  width: 100vw;
   font-family: var(--font-ui);
   color: var(--text-main);
   background:
@@ -118,12 +120,13 @@ a:focus-visible,
   }
 }
 
-/* ── OS Panel (right-side vertical layout) ── */
+/* ── OS Panel (fills the Electron window) ── */
 
 .os-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100vh;
+  width: 100%;
   overflow: hidden;
   background: var(--bg-base);
 }
@@ -1696,10 +1699,8 @@ a:focus-visible,
 }
 
 /* ── Responsive ──
-   This panel is a resizable, dockable window (main.js: minWidth 320, up to ~40% of
-   the screen — commonly 320–900px). Typography/spacing lean on clamp() to flex
-   continuously across that whole range; the breakpoints below only handle actual
-   layout restructuring that clamp() can't do. */
+   Electron window can resize from minWidth 380 up to full screen.
+   Typography/spacing lean on clamp(); breakpoints below handle layout restructuring. */
 
 @media (max-width: 480px) {
   .language-card__actions {
