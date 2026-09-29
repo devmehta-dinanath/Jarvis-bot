@@ -13,7 +13,9 @@ import {
 import {
   applyTaxonomyFromApi,
   CATEGORY_SECTIONS,
+  filterConfirmedPlans,
   filterMeetingReminderSuggestions,
+  groupSuggestionsByContact,
   partitionSuggestions
 } from "../lib/whatsapp-categories.js";
 import { enhanceWhatsAppCard, openExternal, showInboxToast } from "../lib/whatsapp-card-actions.js";
@@ -21,7 +23,7 @@ import { markUpdated } from "../lib/last-updated.js";
 import { formatDateTime, formatMeetingTime, getGreeting } from "../lib/time.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
 import { createStatChip } from "../ui/components/stat-chip.js";
-import { createWhatsAppRequestCard } from "../ui/components/whatsapp-request-card.js";
+import { createWhatsAppConversationCard } from "../ui/components/whatsapp-conversation-card.js";
 
 const REFRESH_MS = 15000;
 
@@ -101,9 +103,10 @@ function renderSectionCards(cardList, suggestions, handlers) {
     return;
   }
 
-  suggestions.forEach((suggestion) => {
-    const card = createWhatsAppRequestCard(suggestion, handlers);
-    enhanceWhatsAppCard(card, suggestion);
+  // One conversation (contact) → one card; multiple plans become dated items inside.
+  const groups = groupSuggestionsByContact(suggestions);
+  groups.forEach((group) => {
+    const card = createWhatsAppConversationCard(group, handlers);
     cardList.appendChild(card);
   });
 }
@@ -140,9 +143,9 @@ async function handleRemind(suggestion, button) {
       : "your Google Calendar";
     showInboxToast(`Reminder confirmed ✓\nSaved for ${when}`);
 
-    const card = button.closest("article");
-    if (card) {
-      enhanceWhatsAppCard(card, suggestion);
+    const host = button.closest(".whatsapp-card__plan") || button.closest("article");
+    if (host) {
+      enhanceWhatsAppCard(host, suggestion);
     }
 
     if (result?.html_link) {
@@ -197,9 +200,9 @@ async function handleSchedule(suggestion, button, overrides) {
     }
     button.disabled = true;
 
-    const card = button.closest("article");
-    if (card) {
-      enhanceWhatsAppCard(card, suggestion);
+    const host = button.closest(".whatsapp-card__plan") || button.closest("article");
+    if (host) {
+      enhanceWhatsAppCard(host, suggestion);
     }
 
     const meetUrl = result?.meet_link;
@@ -223,9 +226,11 @@ async function handleSchedule(suggestion, button, overrides) {
       }
     }
   } catch (error) {
+    const message = String(error.message || error);
     button.textContent = "Try again";
     button.disabled = false;
-    button.title = String(error.message || error);
+    button.title = message;
+    window.alert(`Could not schedule meeting:\n\n${message}`);
     window.setTimeout(() => {
       button.textContent = originalLabel;
       button.title = "";
@@ -269,7 +274,7 @@ export function createSummaryPage() {
   }));
 
   const emptyState = createEmptyState(
-    "No meeting items right now.",
+    "No confirmed meeting plans right now.",
     "Checking inbox…"
   );
   emptyState.hidden = true;
@@ -340,8 +345,8 @@ export function createSummaryPage() {
         getInboxStatus()
       ]);
       inboxStatus = statusData;
-      suggestions = filterMeetingReminderSuggestions(
-        dedupeSuggestions(pendingData.items ?? [])
+      suggestions = filterConfirmedPlans(
+        filterMeetingReminderSuggestions(dedupeSuggestions(pendingData.items ?? []))
       );
     } catch (error) {
       sections.forEach((item) => {
@@ -360,22 +365,25 @@ export function createSummaryPage() {
 
     const buckets = partitionSuggestions(suggestions);
     const meetingCount = buckets.meetings?.length ?? 0;
+    const conversationCount = groupSuggestionsByContact(buckets.meetings ?? []).length;
 
     stats.replaceChildren(
-      createStatChip(meetingCount, "Meetings", meetingCount ? "info" : "success")
+      createStatChip(conversationCount, "Conversations", conversationCount ? "info" : "success"),
+      createStatChip(meetingCount, "Confirmed plans", meetingCount ? "info" : "success")
     );
 
     let visibleSections = 0;
 
     sections.forEach((item) => {
       const items = buckets[item.config.id] ?? [];
+      const groups = groupSuggestionsByContact(items);
       const countEl = item.header.querySelector(".section-header__count");
       if (countEl) {
-        countEl.textContent = String(items.length);
+        countEl.textContent = String(groups.length);
       }
 
-      item.section.hidden = items.length === 0;
-      if (items.length > 0) {
+      item.section.hidden = groups.length === 0;
+      if (groups.length > 0) {
         visibleSections += 1;
       }
 
@@ -387,7 +395,7 @@ export function createSummaryPage() {
     if (!emptyState.hidden) {
       emptyState.replaceChildren(
         ...createEmptyState(
-          "No meeting items right now.",
+          "No confirmed meeting plans right now.",
           formatInboxHint(inboxStatus)
         ).childNodes
       );

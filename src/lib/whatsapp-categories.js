@@ -58,6 +58,105 @@ export function filterMeetingReminderSuggestions(suggestions) {
   return (suggestions || []).filter(isMeetingOrReminder);
 }
 
+/**
+ * Mutual confirmation only. The classifier sets details.confirmed and the
+ * "Unconfirmed plan — …" chip when both sides have not agreed — those must not
+ * appear in the inbox or go to Schedule / Remind me.
+ */
+export function isUnconfirmedPlan(suggestion) {
+  const details = suggestion?.details;
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+  if (details.confirmed === false) {
+    return true;
+  }
+  const chip = String(details.chip_label || "");
+  if (/^unconfirmed\b/i.test(chip.trim())) {
+    return true;
+  }
+  return false;
+}
+
+export function isConfirmedPlan(suggestion) {
+  // Require an explicit true — missing confirmed (e.g. recovery chips) must not surface.
+  return suggestion?.details?.confirmed === true;
+}
+
+export function filterConfirmedPlans(suggestions) {
+  return (suggestions || []).filter((suggestion) => {
+    if (isUnconfirmedPlan(suggestion)) {
+      return false;
+    }
+    // Meeting / family-plan style chips need mutual confirmation.
+    const category = suggestion?.category || suggestion?.kind;
+    if (category === "meeting" || category === "family_plan") {
+      return isConfirmedPlan(suggestion);
+    }
+    return true;
+  });
+}
+
+/**
+ * One conversation (contact) → one group. Plans sorted soonest-first by start/date.
+ */
+export function groupSuggestionsByContact(suggestions) {
+  const byContact = new Map();
+
+  for (const suggestion of suggestions || []) {
+    const key = suggestion.contact_id ?? suggestion.wa_id ?? suggestion.id;
+    if (!byContact.has(key)) {
+      byContact.set(key, {
+        contact_id: suggestion.contact_id,
+        contact_name: suggestion.contact_name,
+        wa_id: suggestion.wa_id,
+        is_group: Boolean(suggestion.is_group),
+        items: []
+      });
+    }
+    const group = byContact.get(key);
+    group.items.push(suggestion);
+    // Prefer the richest contact label we have seen.
+    if (!group.contact_name && suggestion.contact_name) {
+      group.contact_name = suggestion.contact_name;
+    }
+    if (!group.wa_id && suggestion.wa_id) {
+      group.wa_id = suggestion.wa_id;
+    }
+  }
+
+  const planSortKey = (suggestion) => {
+    const start = suggestion?.details?.start;
+    if (start) {
+      const ms = Date.parse(start);
+      if (!Number.isNaN(ms)) {
+        return ms;
+      }
+    }
+    const date = suggestion?.details?.date;
+    const time = suggestion?.details?.time || "00:00";
+    if (date) {
+      const ms = Date.parse(`${date}T${time}`);
+      if (!Number.isNaN(ms)) {
+        return ms;
+      }
+    }
+    const created = Date.parse(suggestion?.created_at || "");
+    return Number.isNaN(created) ? Number.MAX_SAFE_INTEGER : created;
+  };
+
+  const groups = Array.from(byContact.values());
+  for (const group of groups) {
+    group.items.sort((a, b) => planSortKey(a) - planSortKey(b));
+  }
+  groups.sort((a, b) => {
+    const nameA = (a.contact_name || a.wa_id || "").toLowerCase();
+    const nameB = (b.contact_name || b.wa_id || "").toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+  return groups;
+}
+
 export const CATEGORY_LABELS = {
   meeting: "Wants to meet",
   payment: "Payment",
@@ -141,11 +240,12 @@ export function isUrgent(suggestion) {
 }
 
 export function canSchedule(suggestion) {
-  // The owner's own tap on Schedule is the acceptance. The button shows for every
-  // "meeting" suggestion, even before a time was extracted from the message — if there's
-  // no confirmed time yet the card lets the owner pick one manually instead of blocking
-  // the whole action on the classifier having found a date/time in the text.
-  return resolveCategory(suggestion) === "meeting";
+  // Schedule only for mutually confirmed meeting plans. Unconfirmed plans are filtered
+  // out of the inbox; this is a second gate if one slips through.
+  if (resolveCategory(suggestion) !== "meeting") {
+    return false;
+  }
+  return isConfirmedPlan(suggestion);
 }
 
 export function canRemind(suggestion) {
@@ -154,6 +254,11 @@ export function canRemind(suggestion) {
   // card must still show "Reminder set ✓" so auto-remind is visible.
   if (ALREADY_REMINDER_KINDS.has(suggestion.kind)) {
     return false;
+  }
+  // Meetings / family plans: only mutually confirmed plans get Remind me.
+  const category = resolveCategory(suggestion);
+  if (category === "meeting" || category === "family_plan") {
+    return isConfirmedPlan(suggestion);
   }
   return true;
 }

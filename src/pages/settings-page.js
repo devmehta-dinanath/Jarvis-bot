@@ -115,19 +115,12 @@ function createCalendarSection() {
       const data = await getCalendarStatus();
       status = data.google_calendar;
     } catch (error) {
-      statusLine.textContent = `Could not check calendar status — ${error.message}`;
-      connectBtn.hidden = true;
-      disconnectBtn.hidden = true;
-      refreshBtn.hidden = true;
-      return;
-    }
-
-    if (!status.credentials_file_exists) {
+      // Keep actions visible so a status glitch does not hide the whole connect flow.
       statusLine.textContent =
-        "Google OAuth credentials are not set up on the server yet.";
-      connectBtn.hidden = true;
+        `Could not check calendar status — ${error.message}. You can still try Connect if credentials are installed.`;
+      connectBtn.hidden = false;
       disconnectBtn.hidden = true;
-      refreshBtn.hidden = true;
+      refreshBtn.hidden = false;
       return;
     }
 
@@ -136,6 +129,17 @@ function createCalendarSection() {
       connectBtn.hidden = true;
       disconnectBtn.hidden = false;
       refreshBtn.hidden = true;
+      return;
+    }
+
+    if (!status.credentials_file_exists) {
+      statusLine.textContent =
+        "Google OAuth credentials file is missing on this machine. " +
+        "Place the OAuth client JSON at Jarvis-bot/data/google_calendar_credentials.json, " +
+        "restart the server, then Refresh status. Until that file exists, Connect stays unavailable.";
+      connectBtn.hidden = true;
+      disconnectBtn.hidden = true;
+      refreshBtn.hidden = false;
       return;
     }
 

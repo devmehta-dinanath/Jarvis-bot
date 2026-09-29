@@ -1506,6 +1506,39 @@ a:focus-visible,
   font-size: 0.8rem;
 }
 
+.whatsapp-card--conversation .whatsapp-card__plans {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.whatsapp-card__plan {
+  padding: 12px 12px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.whatsapp-card__plan-when {
+  margin: 0 0 8px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.whatsapp-card__plan-message {
+  margin: 0 0 8px;
+}
+
+.whatsapp-card__plan .whatsapp-card__meta {
+  margin: 0 0 10px;
+}
+
+.whatsapp-card__plan .language-card__actions {
+  margin-top: 4px;
+}
+
 .whatsapp-card__draft-input {
   width: 100%;
   min-height: 84px;
