@@ -548,6 +548,12 @@ def add_to_calendar(
             "Only meeting or family plan suggestions can be added to the calendar"
         )
 
+    if not google_calendar_service.auth_status().authorized:
+        raise WhatsAppActionError(
+            "Google Calendar is not connected. Open Settings → connect Google Calendar, "
+            "then try Schedule again."
+        )
+
     if suggestion.category == "family_plan":
         return _add_family_plan_to_calendar(db, suggestion, calendar_id=calendar_id)
 
@@ -592,7 +598,32 @@ def add_to_calendar(
         ),
         conference=conference,
     )
-    event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
+    try:
+        event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
+    except Exception as exc:
+        # Meet conference creation often fails (Workspace policy / API) even when a
+        # plain calendar event would succeed — fall back so Schedule still works.
+        if conference:
+            logger.warning(
+                "[WHATSAPP] Calendar create with Meet failed (%s); retrying without conference",
+                exc,
+            )
+            payload = EventCreate(
+                summary=event_title,
+                description=event_agenda,
+                start=EventDateTime(
+                    date_time=_to_calendar_iso(start_dt),
+                    time_zone=CALENDAR_DEFAULT_TIMEZONE,
+                ),
+                end=EventDateTime(
+                    date_time=_to_calendar_iso(end_dt),
+                    time_zone=CALENDAR_DEFAULT_TIMEZONE,
+                ),
+                conference=False,
+            )
+            event = google_calendar_service.create_event(payload, calendar_id=calendar_id)
+        else:
+            raise
 
     hangout = event.get("hangoutLink")
     html_link = event.get("htmlLink")

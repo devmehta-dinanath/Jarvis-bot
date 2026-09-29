@@ -1,4 +1,5 @@
 import logging
+import uuid
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -197,9 +198,10 @@ def _event_body_from_create(payload: EventCreate) -> dict[str, Any]:
     if payload.color_id:
         body["colorId"] = payload.color_id
     if payload.conference:
+        # Unique id required by Google; do not derive from summary (special chars / dupes).
         body["conferenceData"] = {
             "createRequest": {
-                "requestId": f"jarvis-{payload.summary[:32]}",
+                "requestId": f"jarvis-{uuid.uuid4().hex}",
                 "conferenceSolutionKey": {"type": "hangoutsMeet"},
             }
         }
