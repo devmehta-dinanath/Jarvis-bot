@@ -155,7 +155,11 @@ def infer_mutual_meeting_confirmation(
     body: str | None,
     meeting: dict | None = None,
 ) -> bool:
-    """One side proposed a time/meet and the other accepted → confirmed."""
+    """One side proposed a meet/time and the other accepted → confirmed.
+
+    Time is optional: "can we connect" + "okay" counts as confirmed intent;
+    the owner then picks the clock time via Schedule.
+    """
     meeting = meeting or {}
     if meeting.get("confirmed") is True:
         return True
@@ -180,19 +184,29 @@ def infer_mutual_meeting_confirmation(
     owner_proposed = any(_message_has_time_or_meet_ask(t) for t in owner_texts)
     client_accepted = any(_message_is_acceptance(t) for t in client_texts)
     owner_accepted = any(_message_is_acceptance(t) for t in owner_texts)
-    has_concrete_time = bool(
-        meeting.get("start")
-        or meeting.get("time")
-        or meeting.get("date")
-        or any(_TIME_HINT_RE.search(t or "") for t in (*client_texts, *owner_texts))
-    )
-    if not has_concrete_time:
-        return False
+
     if client_proposed and owner_accepted:
         return True
     if owner_proposed and client_accepted:
         return True
     return False
+
+
+def latest_time_bearing_text(history: list | None, body: str | None = None) -> str | None:
+    """Newest message that mentions a clock time / day (prefer over older times)."""
+    ordered: list[str] = []
+    for item in history or []:
+        if not isinstance(item, dict):
+            continue
+        text = (item.get("body") or "").strip()
+        if text:
+            ordered.append(text)
+    if (body or "").strip():
+        ordered.append(body.strip())
+    for text in reversed(ordered):
+        if _TIME_HINT_RE.search(text):
+            return text
+    return None
 
 
 _BARE_ACK_RE = re.compile(

@@ -93,7 +93,7 @@ def _meeting_chip_label(meeting: dict, confirmed: bool) -> str:
     if confirmed and when:
         return f"Meeting {when} — add to Google Calendar?"
     if confirmed:
-        return "Meeting requested — add to Google Calendar?"
+        return "Meeting agreed — pick a time to schedule"
     return "Unconfirmed plan — remind me to follow up"
 
 
@@ -1027,6 +1027,17 @@ class WhatsAppService:
         try:
             meeting = classifier.extract_meeting(history, body)
             meeting = wa_calendar.enrich_meeting_details(meeting)
+            latest_time_text = meeting_scope.latest_time_bearing_text(history, body)
+            if latest_time_text:
+                try:
+                    latest = classifier.extract_meeting(history, latest_time_text)
+                    latest = wa_calendar.enrich_meeting_details(latest)
+                    if latest.get("start"):
+                        meeting["start"] = latest.get("start")
+                        if latest.get("end"):
+                            meeting["end"] = latest.get("end")
+                except Exception:
+                    pass
             details.update({k: v for k, v in meeting.items() if v is not None})
         except Exception:
             logger.warning(
@@ -1136,6 +1147,26 @@ class WhatsAppService:
                 voice_examples=voice_examples,
             )
             meeting = wa_calendar.enrich_meeting_details(meeting)
+            # Prefer the newest time mentioned in the thread (e.g. 6pm over an older 5pm).
+            latest_time_text = meeting_scope.latest_time_bearing_text(history, body)
+            if latest_time_text and latest_time_text.strip() != (body or "").strip():
+                try:
+                    latest = classifier.extract_meeting(history, latest_time_text)
+                    latest = wa_calendar.enrich_meeting_details(latest)
+                    if latest.get("start"):
+                        meeting["start"] = latest.get("start")
+                        if latest.get("end"):
+                            meeting["end"] = latest.get("end")
+                except WhatsAppAIError:
+                    try:
+                        latest = wa_fallback.extract_meeting(latest_time_text)
+                        latest = wa_calendar.enrich_meeting_details(latest)
+                        if latest.get("start"):
+                            meeting["start"] = latest.get("start")
+                            if latest.get("end"):
+                                meeting["end"] = latest.get("end")
+                    except Exception:
+                        pass
             if meeting_scope.infer_mutual_meeting_confirmation(history, body, meeting):
                 meeting["confirmed"] = True
             confirmed = bool(meeting.get("confirmed"))
