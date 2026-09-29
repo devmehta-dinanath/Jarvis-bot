@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+release/
 .ci-screenpipe/
 .ci-tmp/
 .DS_Store
@@ -18,3 +19,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Local runtime / packaging artifacts (never commit)
+resources/mac/backend
+resources/mac/screenpipe-lib/
+jarvis-bot-fe@1.0.0
+node
+Untitled

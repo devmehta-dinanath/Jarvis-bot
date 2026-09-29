@@ -55,7 +55,21 @@ export function filterMeetingReminderSuggestions(suggestions) {
   if (!MEETINGS_REMINDERS_ONLY) {
     return suggestions;
   }
-  return (suggestions || []).filter(isMeetingOrReminder);
+  return (suggestions || []).filter((suggestion) => {
+    if (!isMeetingOrReminder(suggestion)) {
+      return false;
+    }
+    const body = String(suggestion.message_body || "").trim();
+    const details = suggestion.details || {};
+    if (details.safety_concern) {
+      return true;
+    }
+    // Drop bare acks mis-tagged as meeting ("Yes", "Ok", "Sure").
+    if (/^(yes|yep|yeah|ok|okay|sure|haan|ha|ji|done|thanks|thank you)[.! ]*$/i.test(body)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 /**
