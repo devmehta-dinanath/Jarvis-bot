@@ -14,6 +14,7 @@ from app.services import service_manager
 from app.services.whatsapp import actions
 from app.services.whatsapp import client as wa_client
 from app.services.whatsapp import inbox as wa_inbox
+from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import repository as repo
 from app.services.whatsapp import taxonomy as wa_taxonomy
 from app.services.whatsapp import webhook as wa_webhook
@@ -281,6 +282,10 @@ def list_suggestions(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> WhatsAppSuggestionListResponse:
+    # Over-fetch a bit when meetings-only so post-filter still fills the page.
+    fetch_limit = limit
+    if meeting_scope.MEETINGS_REMINDERS_ONLY and status == "pending":
+        fetch_limit = min(200, max(limit * 3, limit + 20))
     items, total = repo.list_suggestions(
         db,
         status=status,
@@ -288,9 +293,38 @@ def list_suggestions(
         lane=lane,
         contact_id=contact_id,
         has_reminder=has_reminder,
-        limit=limit,
+        limit=fetch_limit,
         offset=offset,
     )
+    if meeting_scope.MEETINGS_REMINDERS_ONLY and status == "pending":
+        filtered: list = []
+        for suggestion in items:
+            details = {}
+            raw = suggestion.details
+            if isinstance(raw, dict):
+                details = raw
+            elif isinstance(raw, str) and raw.strip():
+                try:
+                    import json
+
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        details = parsed
+                except Exception:
+                    details = {}
+            body = None
+            if suggestion.message_id is not None:
+                message = db.get(models.WhatsAppMessage, suggestion.message_id)
+                body = message.body if message is not None else None
+            if meeting_scope.is_surfaceable_meeting_chip(
+                category=suggestion.category,
+                kind=suggestion.kind,
+                body=body,
+                details=details,
+            ):
+                filtered.append(suggestion)
+        items = filtered[:limit]
+        total = len(filtered) if offset == 0 else max(total, len(filtered))
     return WhatsAppSuggestionListResponse(
         items=[_suggestion_response(s, db) for s in items],
         total=total,

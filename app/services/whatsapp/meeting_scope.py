@@ -114,6 +114,43 @@ def looks_like_call_or_meeting_request(text: str | None) -> bool:
     return bool(_CALL_OR_MEETING_REQUEST_RE.search(body))
 
 
+_BARE_ACK_RE = re.compile(
+    r"^(yes|yep|yeah|ok|okay|sure|haan|ha|ji|done|thanks|thank you)[.! ]*$",
+    re.IGNORECASE,
+)
+
+
+def is_surfaceable_meeting_chip(
+    *,
+    category: str | None = None,
+    kind: str | None = None,
+    body: str | None = None,
+    details: dict | None = None,
+) -> bool:
+    """Meetings-only Inbox: keep real call/meet asks; drop bare acks mislabeled as meeting."""
+    details = details or {}
+    if details.get("safety_concern"):
+        return True
+    if not is_meeting_or_reminder(category=category, kind=kind):
+        return False
+    text = (body or "").strip()
+    if looks_like_call_or_meeting_request(text):
+        return True
+    # Has a concrete proposed time → keep even if phrasing is informal.
+    if details.get("start") or details.get("date") or details.get("time"):
+        # Bare "Yes" / "Ok" with no real schedule cue in the text itself — hide.
+        if text and _BARE_ACK_RE.match(text) and not looks_like_call_or_meeting_request(text):
+            return False
+        return True
+    if text and _BARE_ACK_RE.match(text):
+        return False
+    # Meeting category but no call phrasing and no time — still allow longer texts
+    # (e.g. class/schedule asks the regex may miss).
+    if len(text) >= 24:
+        return True
+    return False
+
+
 def is_meeting_or_reminder(*, category: str | None = None, kind: str | None = None) -> bool:
     if kind and kind in MEETING_REMINDER_KINDS:
         return True
