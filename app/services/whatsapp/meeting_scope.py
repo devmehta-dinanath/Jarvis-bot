@@ -48,11 +48,7 @@ def _details_as_dict(details) -> dict:
 
 
 def is_unconfirmed_plan(suggestion_or_details, *, category: str | None = None) -> bool:
-    """True when a meeting/family plan is not mutually confirmed.
-
-    Unconfirmed plans still appear in Inbox as cards; Schedule / Remind / auto-remind
-    stay blocked until confirmed=true.
-    """
+    """True when a meeting/family plan is not mutually confirmed — hide from Inbox."""
     if hasattr(suggestion_or_details, "category"):
         category = category or getattr(suggestion_or_details, "category", None)
         details = _details_as_dict(getattr(suggestion_or_details, "details", None))
@@ -65,12 +61,6 @@ def is_unconfirmed_plan(suggestion_or_details, *, category: str | None = None) -
         return False
     if details.get("confirmed") is True:
         return False
-    if details.get("confirmed") is False:
-        return True
-    chip = str(details.get("chip_label") or "").strip()
-    if chip.lower().startswith("unconfirmed"):
-        return True
-    # Missing confirmed on a plan chip → treat as unconfirmed for Schedule/Remind.
     return True
 
 
@@ -80,7 +70,6 @@ def is_confirmed_plan(suggestion_or_details, *, category: str | None = None) -> 
 
 # Deterministic call/meeting asks — catch phrases the LLM may miscategorize as
 # follow_up/other, or drop in groups when the owner isn't @mentioned.
-# Expand meeting-ask detection so common phrasing / typos still recover chips.
 _CALL_OR_MEETING_REQUEST_RE = re.compile(
     r"""
     \b(
@@ -105,6 +94,39 @@ _CALL_OR_MEETING_REQUEST_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+_ACCEPTANCE_RE = re.compile(
+    r"""
+    \b(
+        ok(?:ay)?
+        | sure
+        | yes
+        | yeah
+        | yep
+        | perfect
+        | done
+        | confirmed
+        | sounds\s+good
+        | see\s+you
+        | let'?s\s+(?:do\s+it|connect|meet|talk)
+        | ok\s+sure
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_TIME_HINT_RE = re.compile(
+    r"""
+    \b(
+        \d{1,2}\s*[:.]\s*\d{2}\s*(?:am|pm)?
+        | \d{1,2}\s*(?:am|pm)
+        | \d{1,2}\s*(?:o'?clock)
+    )\b
+    |
+    \b(?:today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
 
 def looks_like_call_or_meeting_request(text: str | None) -> bool:
     """True when the body is clearly asking to call / meet / talk now."""
@@ -112,6 +134,65 @@ def looks_like_call_or_meeting_request(text: str | None) -> bool:
     if not body or len(body) > 400:
         return False
     return bool(_CALL_OR_MEETING_REQUEST_RE.search(body))
+
+
+def _message_is_acceptance(text: str | None) -> bool:
+    body = (text or "").strip()
+    if not body or len(body) > 120:
+        return False
+    return bool(_ACCEPTANCE_RE.search(body))
+
+
+def _message_has_time_or_meet_ask(text: str | None) -> bool:
+    body = (text or "").strip()
+    if not body:
+        return False
+    return bool(_TIME_HINT_RE.search(body)) or looks_like_call_or_meeting_request(body)
+
+
+def infer_mutual_meeting_confirmation(
+    history: list | None,
+    body: str | None,
+    meeting: dict | None = None,
+) -> bool:
+    """One side proposed a time/meet and the other accepted → confirmed."""
+    meeting = meeting or {}
+    if meeting.get("confirmed") is True:
+        return True
+
+    client_texts: list[str] = []
+    owner_texts: list[str] = []
+    for item in history or []:
+        if not isinstance(item, dict):
+            continue
+        text = (item.get("body") or "").strip()
+        if not text:
+            continue
+        if (item.get("direction") or "").lower() == "inbound":
+            client_texts.append(text)
+        else:
+            owner_texts.append(text)
+    current = (body or "").strip()
+    if current:
+        client_texts.append(current)
+
+    client_proposed = any(_message_has_time_or_meet_ask(t) for t in client_texts)
+    owner_proposed = any(_message_has_time_or_meet_ask(t) for t in owner_texts)
+    client_accepted = any(_message_is_acceptance(t) for t in client_texts)
+    owner_accepted = any(_message_is_acceptance(t) for t in owner_texts)
+    has_concrete_time = bool(
+        meeting.get("start")
+        or meeting.get("time")
+        or meeting.get("date")
+        or any(_TIME_HINT_RE.search(t or "") for t in (*client_texts, *owner_texts))
+    )
+    if not has_concrete_time:
+        return False
+    if client_proposed and owner_accepted:
+        return True
+    if owner_proposed and client_accepted:
+        return True
+    return False
 
 
 _BARE_ACK_RE = re.compile(
@@ -127,28 +208,19 @@ def is_surfaceable_meeting_chip(
     body: str | None = None,
     details: dict | None = None,
 ) -> bool:
-    """Meetings-only Inbox: keep real call/meet asks; drop bare acks mislabeled as meeting."""
+    """Meetings-only Inbox: only mutually confirmed call/meet plans (plus safety)."""
     details = details or {}
     if details.get("safety_concern"):
         return True
     if not is_meeting_or_reminder(category=category, kind=kind):
         return False
-    text = (body or "").strip()
-    if looks_like_call_or_meeting_request(text):
-        return True
-    # Has a concrete proposed time → keep even if phrasing is informal.
-    if details.get("start") or details.get("date") or details.get("time"):
-        # Bare "Yes" / "Ok" with no real schedule cue in the text itself — hide.
-        if text and _BARE_ACK_RE.match(text) and not looks_like_call_or_meeting_request(text):
-            return False
-        return True
-    if text and _BARE_ACK_RE.match(text):
+    # Product rule: unconfirmed plans must not appear at all.
+    if details.get("confirmed") is not True:
         return False
-    # Meeting category but no call phrasing and no time — still allow longer texts
-    # (e.g. class/schedule asks the regex may miss).
-    if len(text) >= 24:
-        return True
-    return False
+    text = (body or "").strip()
+    if text and _BARE_ACK_RE.match(text) and not details.get("start"):
+        return False
+    return True
 
 
 def is_meeting_or_reminder(*, category: str | None = None, kind: str | None = None) -> bool:

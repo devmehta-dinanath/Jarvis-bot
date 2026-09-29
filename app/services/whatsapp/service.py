@@ -27,6 +27,7 @@ from app.config import (
     WHATSAPP_USER_NAMES,
 )
 from app.database import SessionLocal
+from app import models
 from app.services.google_calendar.service import google_calendar_service
 from app.services.whatsapp import actions
 from app.services.whatsapp import calendar as wa_calendar
@@ -868,10 +869,16 @@ class WhatsAppService:
             # their suggestion internally and always return None here.
             suggestion = repo.get_suggestion_for_message(db, message.id)
 
-        # Safety net: important / meeting messages must always surface an Inbox chip.
-        # Without this, a mid-path failure (calendar remind, draft, silent-window edge)
-        # can leave the message classified with no suggestion — WAHA looks "connected"
-        # but the owner's Inbox stays empty for that chat.
+        # After any inbound (including "Ok"), upgrade a pending meeting chip once
+        # both sides have agreed on a time in history.
+        upgraded = self._upgrade_pending_meeting_confirmation(
+            db, message.contact_id, history, body
+        )
+        if upgraded is not None:
+            suggestion = suggestion or upgraded
+
+        # Safety net: important messages must surface a chip when one is missing.
+        # Meeting chips are confirmed-only — never invent an unconfirmed recovery chip.
         if suggestion is None:
             suggestion = repo.get_suggestion_for_message(db, message.id)
         if (
@@ -879,39 +886,48 @@ class WhatsAppService:
             and category not in classifier.FILTER_LABELS
             and category != "group"
             and (result.get("is_important") or category == "meeting")
-            and meeting_scope.should_surface_chip(category=category, kind="meeting" if category == "meeting" else None)
+            and meeting_scope.should_surface_chip(
+                category=category, kind="meeting" if category == "meeting" else None
+            )
             and not repo.suggestion_exists_for_message(db, message.id)
         ):
-            chip = wa_taxonomy.default_chip_label(category) or (
-                "Meeting requested — schedule?" if category == "meeting"
-                else "Message needs a reply"
+            allow_meeting_recovery = category != "meeting" or (
+                meeting_scope.infer_mutual_meeting_confirmation(history, body, {})
             )
-            logger.warning(
-                "[WHATSAPP] Message %s classified as %s/important but no suggestion was "
-                "created — inserting recovery chip",
-                message.id,
-                category,
-            )
-            suggestion = repo.create_suggestion(
-                db,
-                contact_id=message.contact_id,
-                message_id=message.id,
-                kind="meeting" if category == "meeting" else "nudge",
-                category=category,
-                priority=priority,
-                lane=lane,
-                confidence=confidence,
-                draft_text=None,
-                details={"chip_label": chip, "recovery_chip": True},
-            )
-            if category == "meeting":
-                try:
-                    actions.maybe_auto_set_reminder(db, suggestion)
-                except Exception:
-                    logger.exception(
-                        "[WHATSAPP] Recovery auto-reminder failed for suggestion %s",
-                        suggestion.id,
-                    )
+            if allow_meeting_recovery:
+                chip = wa_taxonomy.default_chip_label(category) or (
+                    "Meeting requested — schedule?" if category == "meeting"
+                    else "Message needs a reply"
+                )
+                logger.warning(
+                    "[WHATSAPP] Message %s classified as %s/important but no suggestion was "
+                    "created — inserting recovery chip",
+                    message.id,
+                    category,
+                )
+                details = {"chip_label": chip, "recovery_chip": True}
+                if category == "meeting":
+                    details["confirmed"] = True
+                suggestion = repo.create_suggestion(
+                    db,
+                    contact_id=message.contact_id,
+                    message_id=message.id,
+                    kind="meeting" if category == "meeting" else "nudge",
+                    category=category,
+                    priority=priority,
+                    lane=lane,
+                    confidence=confidence,
+                    draft_text=None,
+                    details=details,
+                )
+                if category == "meeting":
+                    try:
+                        actions.maybe_auto_set_reminder(db, suggestion)
+                    except Exception:
+                        logger.exception(
+                            "[WHATSAPP] Recovery auto-reminder failed for suggestion %s",
+                            suggestion.id,
+                        )
 
         if suggestion is not None:
             suggestion.visible_after = visible_after
@@ -928,6 +944,107 @@ class WhatsAppService:
             confidence,
             suggestion.id if suggestion is not None else None,
         )
+
+    def _dismiss_unconfirmed_meetings_for_contact(
+        self, db, contact_id: int, *, keep_id: int | None = None
+    ) -> int:
+        """Hide older unconfirmed meeting chips once a confirmed one exists."""
+        import json as _json
+
+        rows = (
+            db.query(models.WhatsAppSuggestion)
+            .filter(
+                models.WhatsAppSuggestion.contact_id == contact_id,
+                models.WhatsAppSuggestion.status == "pending",
+                models.WhatsAppSuggestion.category == "meeting",
+            )
+            .all()
+        )
+        dismissed = 0
+        now = datetime.utcnow()
+        for row in rows:
+            if keep_id is not None and row.id == keep_id:
+                continue
+            details = {}
+            try:
+                parsed = _json.loads(row.details or "{}")
+                if isinstance(parsed, dict):
+                    details = parsed
+            except Exception:
+                details = {}
+            if details.get("confirmed") is True:
+                continue
+            row.status = "dismissed"
+            row.resolved_at = now
+            dismissed += 1
+        if dismissed:
+            db.commit()
+        return dismissed
+
+    def _upgrade_pending_meeting_confirmation(
+        self, db, contact_id: int, history: list, body: str
+    ) -> models.WhatsAppSuggestion | None:
+        """When chat history becomes mutually confirmed, flip the best pending meeting chip."""
+        import json as _json
+
+        if not meeting_scope.infer_mutual_meeting_confirmation(history, body, {}):
+            return None
+        rows = (
+            db.query(models.WhatsAppSuggestion)
+            .filter(
+                models.WhatsAppSuggestion.contact_id == contact_id,
+                models.WhatsAppSuggestion.status == "pending",
+                models.WhatsAppSuggestion.category == "meeting",
+            )
+            .order_by(models.WhatsAppSuggestion.id.desc())
+            .all()
+        )
+        target = None
+        for row in rows:
+            details = {}
+            try:
+                parsed = _json.loads(row.details or "{}")
+                if isinstance(parsed, dict):
+                    details = parsed
+            except Exception:
+                details = {}
+            if details.get("confirmed") is True:
+                return row
+            if details.get("start") or details.get("time") or details.get("date"):
+                target = row
+                break
+            if target is None:
+                target = row
+        if target is None:
+            return None
+        try:
+            details = _json.loads(target.details or "{}")
+            if not isinstance(details, dict):
+                details = {}
+        except Exception:
+            details = {}
+        # Re-extract from history so start time is filled when confirmation arrives.
+        try:
+            meeting = classifier.extract_meeting(history, body)
+            meeting = wa_calendar.enrich_meeting_details(meeting)
+            details.update({k: v for k, v in meeting.items() if v is not None})
+        except Exception:
+            logger.warning(
+                "[WHATSAPP] Could not re-extract meeting while upgrading suggestion %s",
+                target.id,
+            )
+        details["confirmed"] = True
+        details["chip_label"] = _meeting_chip_label(details, True)
+        target.details = _json.dumps(details)
+        db.commit()
+        db.refresh(target)
+        self._dismiss_unconfirmed_meetings_for_contact(db, contact_id, keep_id=target.id)
+        logger.info(
+            "[WHATSAPP] Upgraded meeting suggestion %s to confirmed for contact %s",
+            target.id,
+            contact_id,
+        )
+        return target
 
     def _followup_priority(self, db, message) -> str:
         """Escalate a follow-up by how long the client has waited for our reply."""
@@ -1019,8 +1136,20 @@ class WhatsAppService:
                 voice_examples=voice_examples,
             )
             meeting = wa_calendar.enrich_meeting_details(meeting)
+            if meeting_scope.infer_mutual_meeting_confirmation(history, body, meeting):
+                meeting["confirmed"] = True
             confirmed = bool(meeting.get("confirmed"))
             meeting["chip_label"] = _meeting_chip_label(meeting, confirmed)
+            # Product rule: only mutually confirmed plans reach Inbox / Schedule / Remind.
+            if not confirmed:
+                logger.info(
+                    "[WHATSAPP] Skipping unconfirmed meeting chip for message %s "
+                    "(will surface after both sides agree)",
+                    message.id,
+                )
+                # Still upgrade any older pending chip if history just became mutual.
+                self._upgrade_pending_meeting_confirmation(db, message.contact_id, history, body)
+                return None
             suggestion = repo.create_suggestion(
                 db,
                 contact_id=message.contact_id,
@@ -1033,8 +1162,11 @@ class WhatsAppService:
                 draft_text=draft,
                 details=meeting,
             )
-            # Auto-remind only when mutually confirmed; Schedule still waits for owner tap.
-            if confirmed and (meeting.get("start") or meeting.get("time_available")):
+            # Drop earlier unconfirmed proposals for this contact — one confirmed card.
+            self._dismiss_unconfirmed_meetings_for_contact(
+                db, message.contact_id, keep_id=suggestion.id
+            )
+            if meeting.get("start") or meeting.get("time_available"):
                 event = actions.maybe_auto_set_reminder(db, suggestion)
                 if event:
                     logger.info(
