@@ -59,13 +59,15 @@ export function filterMeetingReminderSuggestions(suggestions) {
 }
 
 /**
- * Mutual confirmation only. The classifier sets details.confirmed and the
- * "Unconfirmed plan — …" chip when both sides have not agreed — those must not
- * appear in the inbox or go to Schedule / Remind me.
+ * Mutual confirmation gates Schedule / Remind me — not Inbox visibility.
+ * Client proposals like "can we connect at 5pm" must still show as cards.
  */
 export function isUnconfirmedPlan(suggestion) {
   const details = suggestion?.details;
   if (!details || typeof details !== "object") {
+    return false;
+  }
+  if (details.confirmed === true) {
     return false;
   }
   if (details.confirmed === false) {
@@ -75,26 +77,20 @@ export function isUnconfirmedPlan(suggestion) {
   if (/^unconfirmed\b/i.test(chip.trim())) {
     return true;
   }
+  const category = suggestion?.category || suggestion?.kind;
+  if (category === "meeting" || category === "family_plan") {
+    return true;
+  }
   return false;
 }
 
 export function isConfirmedPlan(suggestion) {
-  // Require an explicit true — missing confirmed (e.g. recovery chips) must not surface.
   return suggestion?.details?.confirmed === true;
 }
 
+/** Keep meeting/family chips visible; Schedule/Remind still require confirmed. */
 export function filterConfirmedPlans(suggestions) {
-  return (suggestions || []).filter((suggestion) => {
-    if (isUnconfirmedPlan(suggestion)) {
-      return false;
-    }
-    // Meeting / family-plan style chips need mutual confirmation.
-    const category = suggestion?.category || suggestion?.kind;
-    if (category === "meeting" || category === "family_plan") {
-      return isConfirmedPlan(suggestion);
-    }
-    return true;
-  });
+  return suggestions || [];
 }
 
 /**

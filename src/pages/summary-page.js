@@ -287,7 +287,7 @@ export function createSummaryPage() {
   }));
 
   const emptyState = createEmptyState(
-    "No confirmed meeting plans right now.",
+    "No meeting plans right now.",
     "Checking inbox…"
   );
   emptyState.hidden = true;
@@ -382,7 +382,7 @@ export function createSummaryPage() {
 
     stats.replaceChildren(
       createStatChip(conversationCount, "Conversations", conversationCount ? "info" : "success"),
-      createStatChip(meetingCount, "Confirmed plans", meetingCount ? "info" : "success")
+      createStatChip(meetingCount, "Meeting plans", meetingCount ? "info" : "success")
     );
 
     let visibleSections = 0;
@@ -408,7 +408,7 @@ export function createSummaryPage() {
     if (!emptyState.hidden) {
       emptyState.replaceChildren(
         ...createEmptyState(
-          "No confirmed meeting plans right now.",
+          "No meeting plans right now.",
           formatInboxHint(inboxStatus)
         ).childNodes
       );
