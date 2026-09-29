@@ -39,13 +39,26 @@ function dedupeSuggestions(suggestions) {
   });
 }
 
+function isHiddenInboxPreview(text) {
+  const value = String(text || "").trim().toLowerCase();
+  if (!value) return true;
+  return (
+    value.includes("/api/files/") ||
+    value.includes("localhost:3000") ||
+    value.startsWith("http://") ||
+    value.startsWith("https://")
+  );
+}
+
 function formatInboxHint(status) {
   if (!status?.last_inbound_at) {
     return "No client messages received yet. Point the Meta webhook to this server and send a test message from another phone.";
   }
 
   const when = new Date(status.last_inbound_at);
-  const preview = status.last_inbound_preview ? ` — “${status.last_inbound_preview}”` : "";
+  const rawPreview = status.last_inbound_preview;
+  const preview =
+    rawPreview && !isHiddenInboxPreview(rawPreview) ? ` — “${rawPreview}”` : "";
   const ageHours = Math.round((Date.now() - when.getTime()) / 3600000);
 
   const whenLabel = formatDateTime(when, {
