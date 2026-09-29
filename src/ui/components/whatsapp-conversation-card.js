@@ -56,6 +56,9 @@ function createPlanItem(suggestion, handlers) {
   const when = document.createElement("p");
   when.className = "whatsapp-card__plan-when";
   when.textContent = planWhenLabel(suggestion);
+  if (!suggestion.details?.start && !suggestion.details?.date) {
+    when.title = "No time in the chat yet — tap Schedule meeting to pick one";
+  }
 
   const original = document.createElement("blockquote");
   original.className = "language-card__original whatsapp-card__plan-message";
