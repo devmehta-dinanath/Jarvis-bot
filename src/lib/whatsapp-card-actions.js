@@ -149,8 +149,8 @@ export function enhanceWhatsAppCard(card, suggestion) {
     remindBtn.style.borderColor = "#2e7d32";
     remindBtn.style.color = "#1b5e20";
     remindBtn.title = details.reminder_at
-      ? "Confirmed on your calendar"
-      : "Reminder confirmed on your calendar";
+      ? "Saved on Google Calendar — notifications come from Calendar"
+      : "Saved on Google Calendar";
   }
 
   // Show Join whenever a Meet/calendar link exists in details or draft text.
@@ -170,8 +170,8 @@ export function enhanceWhatsAppCard(card, suggestion) {
     openBtn.type = "button";
     openBtn.className = "btn btn--ghost";
     openBtn.dataset.jarvisOpenReminder = "1";
-    openBtn.textContent = "Open reminder";
-    openBtn.title = reminderUrl;
+    openBtn.textContent = "Open in Google Calendar";
+    openBtn.title = reminderUrl || "Open this reminder in Google Calendar";
     openBtn.addEventListener("click", () => openExternal(reminderUrl));
     actions.appendChild(openBtn);
   }

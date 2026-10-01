@@ -55,6 +55,13 @@ export function filterMeetingReminderSuggestions(suggestions) {
   if (!MEETINGS_REMINDERS_ONLY) {
     return suggestions;
   }
+  const immediate =
+    /\b((?:call|talk|speak|connect|meet)\s+(?:me\s+)?(?:now|right\s+now|asap)|(?:yes\s+)?we\s+can\s+connect\s+now|connect\s+now|talk\s+now)\b/i;
+  const planQuestion =
+    /\b((?:which|what)\s+plan|opt\s+for|between\s+.+\s+and\s+|group\s+and\s+one[\s-]?on[\s-]?one|did\s+you\s+decide)\b/i;
+  const delayOnly =
+    /^\s*(allow\s+me\s+\d+\s*(?:min|mins|minute|minutes|hour|hours|hr|hrs)?|give\s+me\s+\d+\s*(?:min|mins|minute|minutes|hour|hours|hr|hrs)|wait\s+\d+\s*(?:min|mins|minute|minutes|hour|hours|hr|hrs))\s*[.!]?\s*$/i;
+
   return (suggestions || []).filter((suggestion) => {
     if (!isMeetingOrReminder(suggestion)) {
       return false;
@@ -64,8 +71,10 @@ export function filterMeetingReminderSuggestions(suggestions) {
     if (details.safety_concern) {
       return true;
     }
-    // Drop bare acks mis-tagged as meeting ("Yes", "Ok", "Sure").
     if (/^(yes|yep|yeah|ok|okay|sure|haan|ha|ji|done|thanks|thank you)[.! ]*$/i.test(body)) {
+      return false;
+    }
+    if (immediate.test(body) || planQuestion.test(body) || delayOnly.test(body)) {
       return false;
     }
     return true;

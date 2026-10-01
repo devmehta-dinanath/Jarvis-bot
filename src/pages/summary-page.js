@@ -154,7 +154,9 @@ async function handleRemind(suggestion, button) {
     const when = result?.reminder_at
       ? formatMeetingTime(result.reminder_at)
       : "your Google Calendar";
-    showInboxToast(`Reminder confirmed ✓\nSaved for ${when}`);
+    showInboxToast(
+      `Reminder saved on Google Calendar ✓\n${when}\nYou'll get Google Calendar's usual notification.`
+    );
 
     const host = button.closest(".whatsapp-card__plan") || button.closest("article");
     if (host) {
@@ -163,11 +165,15 @@ async function handleRemind(suggestion, button) {
 
     if (result?.html_link) {
       const openCal = window.confirm(
-        `Reminder confirmed for ${when}.\n\nOpen it in Google Calendar?`
+        `Reminder is on Google Calendar for ${when}.\n\nOpen Google Calendar now?`
       );
       if (openCal) {
         openExternal(result.html_link);
       }
+    } else {
+      window.alert(
+        `Reminder saved on Google Calendar for ${when}.\n\nOpen Google Calendar (or the Calendar tab) to see it — notifications come from Google Calendar.`
+      );
     }
   } catch (error) {
     const message = String(error.message || error);
