@@ -1132,6 +1132,14 @@ class WhatsAppService:
             )
 
         if category == "meeting":
+            if meeting_scope.should_skip_meeting_inbox(body):
+                logger.info(
+                    "[WHATSAPP] Skipping Inbox meeting chip for message %s — "
+                    "not a schedulable plan (immediate/question/delay): %r",
+                    message.id,
+                    (body or "")[:80],
+                )
+                return None
             try:
                 meeting = classifier.extract_meeting(history, body)
             except WhatsAppAIError:

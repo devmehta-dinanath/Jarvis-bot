@@ -70,11 +70,14 @@ _CATEGORY_PRIORITY = {
 }
 
 _CATEGORY_GUIDE = (
-    "- meeting: the client wants a call or meeting — schedule/confirm, ask availability, "
-    "propose a time/place, OR ask to be called/spoken to now "
-    "(e.g. 'Please call me', 'call me', 'can you call?', 'Let's meet Thursday at 3pm', "
-    "'Are you free tomorrow?', 'Confirming our meeting on Friday'). "
-    "A short ask to call/talk/connect on the phone or Meet is always meeting — not follow_up.\n"
+    "- meeting: the client wants a call or meeting to schedule for later — ask availability, "
+    "propose a future time/place, or confirm a planned call "
+    "('Let's meet Thursday at 3pm', 'Are you free tomorrow?', 'can we connect at 5pm?', "
+    "'Confirming our meeting on Friday', 'let's schedule a call next week'). "
+    "Do NOT use meeting for: (1) product/plan/package choice questions with no call request "
+    "('which plan — group or one on one?', 'did you decide what plan to opt for?'); "
+    "(2) immediate 'connect/talk/call NOW / right now / can connect now' — already in attention, "
+    "not a schedulable Inbox plan; (3) short delay replies like 'allow me 1 hour' with no meet ask.\n"
     "- payment: anything about money changing hands — the client says they paid/transferred an "
     "amount, asks you to check/verify a payment, or chases an unpaid/pending/overdue invoice "
     "('Payment done please check', 'Amount transferred', 'Invoice still pending', "

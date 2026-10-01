@@ -214,6 +214,85 @@ _BARE_ACK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Live attention — already on the owner's screen; do not create Inbox schedule cards.
+_IMMEDIATE_ATTENTION_RE = re.compile(
+    r"""
+    \b(
+        (?:call|talk|speak|connect|meet)\s+(?:me\s+)?(?:now|right\s+now|asap)
+        | (?:can|could|lets?|let'?s)\s+we\s+(?:talk|speak|connect|meet)\s+(?:now|right\s+now)
+        | (?:yes\s+)?we\s+can\s+connect\s+now
+        | connect\s+now
+        | talk\s+now
+        | free\s+(?:for\s+a\s+)?(?:call|chat)\s+now
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Product / plan choice questions — not a call to schedule.
+_NON_MEETING_QUESTION_RE = re.compile(
+    r"""
+    \b(
+        (?:which|what)\s+plan
+        | opt\s+for
+        | between\s+.+\s+and\s+
+        | group\s+and\s+one[\s-]?on[\s-]?one
+        | one[\s-]?on[\s-]?one\s+or\s+group
+        | did\s+you\s+decide
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Delay / hold replies without a meet request.
+_DELAY_ONLY_RE = re.compile(
+    r"""
+    ^\s*(
+        allow\s+me\s+\d+\s*(?:min|mins|minute|minutes|hour|hours|hr|hrs)?
+        | give\s+me\s+\d+\s*(?:min|mins|minute|minutes|hour|hours|hr|hrs)
+        | wait\s+\d+\s*(?:min|mins|minute|minutes|hour|hours|hr|hrs)
+        | \d+\s*(?:min|mins|minute|minutes|hour|hours|hr|hrs)\s*(?:please|pls)?
+    )\s*[.!]?\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def is_immediate_attention_request(text: str | None) -> bool:
+    """True for 'connect/talk now' — already in attention; skip Inbox cards."""
+    body = (text or "").strip()
+    if not body or len(body) > 240:
+        return False
+    return bool(_IMMEDIATE_ATTENTION_RE.search(body))
+
+
+def is_non_meeting_business_question(text: str | None) -> bool:
+    """Product/plan questions that must not become meeting chips."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    if looks_like_call_or_meeting_request(body) and not is_immediate_attention_request(body):
+        # Real schedule ask that also mentions a plan — still a meeting.
+        if _TIME_HINT_RE.search(body):
+            return False
+    return bool(_NON_MEETING_QUESTION_RE.search(body)) and not _TIME_HINT_RE.search(body)
+
+
+def is_delay_only_reply(text: str | None) -> bool:
+    body = (text or "").strip()
+    if not body:
+        return False
+    return bool(_DELAY_ONLY_RE.match(body))
+
+
+def should_skip_meeting_inbox(text: str | None) -> bool:
+    """Messages that must never become Inbox meeting/schedule cards."""
+    return (
+        is_immediate_attention_request(text)
+        or is_non_meeting_business_question(text)
+        or is_delay_only_reply(text)
+    )
+
 
 def is_surfaceable_meeting_chip(
     *,
@@ -222,16 +301,17 @@ def is_surfaceable_meeting_chip(
     body: str | None = None,
     details: dict | None = None,
 ) -> bool:
-    """Meetings-only Inbox: only mutually confirmed call/meet plans (plus safety)."""
+    """Meetings-only Inbox: only mutually confirmed future call/meet plans (plus safety)."""
     details = details or {}
     if details.get("safety_concern"):
         return True
     if not is_meeting_or_reminder(category=category, kind=kind):
         return False
-    # Product rule: unconfirmed plans must not appear at all.
     if details.get("confirmed") is not True:
         return False
     text = (body or "").strip()
+    if should_skip_meeting_inbox(text):
+        return False
     if text and _BARE_ACK_RE.match(text) and not details.get("start"):
         return False
     return True
