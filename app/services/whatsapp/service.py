@@ -757,6 +757,10 @@ class WhatsAppService:
             confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
         ) and not (reads_as_personal and not is_urgent_category) and not has_precedent
 
+        # STEP 2: when AI drafts are on, still draft for low-confidence messages — surface
+        # with a "double-check" flag instead of an empty reply box.
+        suppress_draft_for_confidence = below_threshold and not WHATSAPP_AI_DRAFTS_ENABLED
+
         # Rule 9 — reply timing only now. Used to also gate on "known contact" (prior
         # message history) and a reply-cooldown, silently dropping a non-urgent message
         # entirely if either failed — calibrated for the old 7-day silent window, where a
@@ -766,7 +770,10 @@ class WhatsAppService:
         # complaint/lead ever got through, since those bypass it) — removed at the user's
         # request. Payment/complaint/lead/life-lane still surface instantly; everything
         # else just waits out its normal delay below instead of being suppressed.
-        bypasses_reply_rules = is_urgent_category or is_life_lane
+        # STEP 2: with AI drafts enabled, show drafts immediately (no 30min / 4-6h hold).
+        bypasses_reply_rules = (
+            is_urgent_category or is_life_lane or WHATSAPP_AI_DRAFTS_ENABLED
+        )
 
         if bypasses_reply_rules:
             delay = timedelta(0)
@@ -810,36 +817,37 @@ class WhatsAppService:
             # the time exactly like the normal flow, but — like every other silent-window
             # suggestion — sets no AI-drafted reply text; the owner's own tap on the
             # schedule button is the acceptance, not AI wording.
-            logger.info(
-                "[WHATSAPP] Message %s is a meeting request during the silent observation "
-                "window — surfacing schedule button, no AI draft", message.id,
-            )
-            try:
-                suggestion = self._create_silent_meeting_suggestion(
-                    db, message, history, body, priority, lane, confidence
-                )
-            except Exception:
-                logger.exception(
-                    "[WHATSAPP] Silent meeting suggestion failed for message %s — "
-                    "falling back to normal meeting chip",
-                    message.id,
-                )
-                suggestion = None
-            if suggestion is None and not repo.suggestion_exists_for_message(db, message.id):
+            # STEP 2: with AI drafts on, fall through to a normal drafted meeting chip.
+            if WHATSAPP_AI_DRAFTS_ENABLED:
                 suggestion = self._create_suggestion(
                     db, message, history, body, result, priority, instructions, corrections, voice_examples
                 )
-        elif in_silent_observation and (result["is_important"] or category == "greeting"):
-            # Rule 12 — silent tone-learning observation. Checked ahead of Rule 9
-            # (known-contact/cooldown gate) and the clarification/confidence gates
-            # deliberately: those all exist to decide whether an AI draft is trustworthy
-            # enough to show, but during this window there is no AI draft at all — every
-            # is_important/greeting message, including a brand-new contact's very first
-            # message, gets the same empty reply box. The point is to learn the owner's own
-            # tone, not contaminate it with AI wording, and to capture exactly the
-            # first-contact replies that matter most for that. Their own reply is saved as
-            # a normal outbound message either way, which is what feeds
-            # recent_outbound_examples/voice learning afterwards.
+            else:
+                logger.info(
+                    "[WHATSAPP] Message %s is a meeting request during the silent observation "
+                    "window — surfacing schedule button, no AI draft", message.id,
+                )
+                try:
+                    suggestion = self._create_silent_meeting_suggestion(
+                        db, message, history, body, priority, lane, confidence
+                    )
+                except Exception:
+                    logger.exception(
+                        "[WHATSAPP] Silent meeting suggestion failed for message %s — "
+                        "falling back to normal meeting chip",
+                        message.id,
+                    )
+                    suggestion = None
+                if suggestion is None and not repo.suggestion_exists_for_message(db, message.id):
+                    suggestion = self._create_suggestion(
+                        db, message, history, body, result, priority, instructions, corrections, voice_examples
+                    )
+        elif (
+            in_silent_observation
+            and (result["is_important"] or category == "greeting")
+            and not WHATSAPP_AI_DRAFTS_ENABLED
+        ):
+            # Rule 12 — silent tone-learning observation (only when AI drafts are off).
             logger.info(
                 "[WHATSAPP] Message %s in silent observation window (started %s, "
                 "category=%s) — surfacing with no AI draft for manual reply",
@@ -872,7 +880,7 @@ class WhatsAppService:
                     db, message, category, priority, confidence, lane,
                     result["clarifying_question"], result["clarifying_options"],
                 )
-        elif below_threshold:
+        elif suppress_draft_for_confidence:
             # No reply precedent for this contact+category and the AI itself isn't
             # confident about the category either — genuinely don't know how to respond,
             # so no draft (see has_reply_precedent above for what exempts this).
@@ -884,10 +892,12 @@ class WhatsAppService:
             suggestion = self._create_unconfident_suggestion(
                 db, message, category, priority, confidence, lane
             )
-        elif result["is_important"]:
+        elif result["is_important"] or (below_threshold and WHATSAPP_AI_DRAFTS_ENABLED):
             suggestion = self._create_suggestion(
                 db, message, history, body, result, priority, instructions, corrections, voice_examples
             )
+            if below_threshold and WHATSAPP_AI_DRAFTS_ENABLED:
+                needs_review_reason = "Low confidence — please double-check before sending"
         elif category == "greeting":
             suggestion = self._create_greeting_suggestion(
                 db, message, history, body, result, instructions, corrections, voice_examples
