@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from app.config import (
     CALENDAR_DEFAULT_TIMEZONE,
     OPENAI_API_KEY,
-    WHATSAPP_AI_DRAFTS_ENABLED,
     WHATSAPP_AUTO_ADD_CALENDAR,
     WHATSAPP_CASUAL_SUGGESTION_DELAY_MAX_HOURS,
     WHATSAPP_CASUAL_SUGGESTION_DELAY_MIN_HOURS,
@@ -27,15 +26,18 @@ from app.config import (
     WHATSAPP_USER_NAMES,
 )
 from app.database import SessionLocal
+from app import models
 from app.services.google_calendar.service import google_calendar_service
 from app.services.whatsapp import actions
 from app.services.whatsapp import calendar as wa_calendar
-from app.services.whatsapp import classifier 
+from app.services.whatsapp import classifier
 from app.services.whatsapp import fallback as wa_fallback
 from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import repository as repo
+from app.services.whatsapp import settings as wa_settings
 from app.services.whatsapp import taxonomy as wa_taxonomy
 from app.services.whatsapp.classifier import WhatsAppAIError
+from app.services.whatsapp.settings import WHATSAPP_AI_DRAFTS_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +94,7 @@ def _meeting_chip_label(meeting: dict, confirmed: bool) -> str:
     if confirmed and when:
         return f"Meeting {when} — add to Google Calendar?"
     if confirmed:
-        return "Meeting requested — add to Google Calendar?"
+        return "Meeting agreed — pick a time to schedule"
     return "Unconfirmed plan — remind me to follow up"
 
 
@@ -288,6 +290,7 @@ class WhatsAppService:
             return
         if self._thread and self._thread.is_alive():
             return
+        self._bootstrap_waha_session()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -296,9 +299,32 @@ class WhatsAppService:
         )
         self._thread.start()
         logger.info(
-            "[WHATSAPP] Worker started (poll=%s s)",
+            "[WHATSAPP] Worker started (poll=%s s, meetings_only=%s, ai_drafts=%s)",
             self.poll_interval_seconds,
+            meeting_scope.MEETINGS_REMINDERS_ONLY,
+            WHATSAPP_AI_DRAFTS_ENABLED,
         )
+
+    def _bootstrap_waha_session(self) -> None:
+        """Ensure message.any webhooks + optional history backfill (best-effort)."""
+        try:
+            from app.services.whatsapp import waha_client
+            from app.config import WHATSAPP_PROVIDER
+
+            if WHATSAPP_PROVIDER != "waha" or not waha_client.is_configured():
+                return
+            if wa_settings.WAHA_ENSURE_WEBHOOK_EVENTS:
+                waha_client.ensure_session_webhooks()
+            if wa_settings.WHATSAPP_HISTORY_BACKFILL_ON_START:
+                from app.services.whatsapp import history_backfill
+
+                db = SessionLocal()
+                try:
+                    history_backfill.backfill_recent_history(db)
+                finally:
+                    db.close()
+        except Exception:
+            logger.exception("[WHATSAPP] WAHA bootstrap (webhook/backfill) failed")
 
     def stop(self) -> None:
         if not self.is_enabled:
@@ -333,6 +359,10 @@ class WhatsAppService:
                     self._check_pending_client_commitments()
                 except Exception:
                     logger.exception("[WHATSAPP] Pending client commitments check failed")
+                try:
+                    self._check_owner_outbound_followups()
+                except Exception:
+                    logger.exception("[WHATSAPP] Owner→them follow-up check failed")
                 interval_s = WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS * 3600
                 self._next_silence_check_at = datetime.utcnow() + timedelta(seconds=interval_s)
 
@@ -868,10 +898,16 @@ class WhatsAppService:
             # their suggestion internally and always return None here.
             suggestion = repo.get_suggestion_for_message(db, message.id)
 
-        # Safety net: important / meeting messages must always surface an Inbox chip.
-        # Without this, a mid-path failure (calendar remind, draft, silent-window edge)
-        # can leave the message classified with no suggestion — WAHA looks "connected"
-        # but the owner's Inbox stays empty for that chat.
+        # After any inbound (including "Ok"), upgrade a pending meeting chip once
+        # both sides have agreed on a time in history.
+        upgraded = self._upgrade_pending_meeting_confirmation(
+            db, message.contact_id, history, body
+        )
+        if upgraded is not None:
+            suggestion = suggestion or upgraded
+
+        # Safety net: important messages must surface a chip when one is missing.
+        # Meeting chips are confirmed-only — never invent an unconfirmed recovery chip.
         if suggestion is None:
             suggestion = repo.get_suggestion_for_message(db, message.id)
         if (
@@ -879,44 +915,64 @@ class WhatsAppService:
             and category not in classifier.FILTER_LABELS
             and category != "group"
             and (result.get("is_important") or category == "meeting")
-            and meeting_scope.should_surface_chip(category=category, kind="meeting" if category == "meeting" else None)
+            and meeting_scope.should_surface_chip(
+                category=category, kind="meeting" if category == "meeting" else None
+            )
             and not repo.suggestion_exists_for_message(db, message.id)
         ):
-            chip = wa_taxonomy.default_chip_label(category) or (
-                "Meeting requested — schedule?" if category == "meeting"
-                else "Message needs a reply"
+            allow_meeting_recovery = category != "meeting" or (
+                meeting_scope.infer_mutual_meeting_confirmation(history, body, {})
             )
-            logger.warning(
-                "[WHATSAPP] Message %s classified as %s/important but no suggestion was "
-                "created — inserting recovery chip",
-                message.id,
-                category,
-            )
-            suggestion = repo.create_suggestion(
-                db,
-                contact_id=message.contact_id,
-                message_id=message.id,
-                kind="meeting" if category == "meeting" else "nudge",
-                category=category,
-                priority=priority,
-                lane=lane,
-                confidence=confidence,
-                draft_text=None,
-                details={"chip_label": chip, "recovery_chip": True},
-            )
-            if category == "meeting":
-                try:
-                    actions.maybe_auto_set_reminder(db, suggestion)
-                except Exception:
-                    logger.exception(
-                        "[WHATSAPP] Recovery auto-reminder failed for suggestion %s",
-                        suggestion.id,
-                    )
+            if allow_meeting_recovery:
+                chip = wa_taxonomy.default_chip_label(category) or (
+                    "Meeting requested — schedule?" if category == "meeting"
+                    else "Message needs a reply"
+                )
+                logger.warning(
+                    "[WHATSAPP] Message %s classified as %s/important but no suggestion was "
+                    "created — inserting recovery chip",
+                    message.id,
+                    category,
+                )
+                details = {"chip_label": chip, "recovery_chip": True}
+                if category == "meeting":
+                    details["confirmed"] = True
+                suggestion = repo.create_suggestion(
+                    db,
+                    contact_id=message.contact_id,
+                    message_id=message.id,
+                    kind="meeting" if category == "meeting" else "nudge",
+                    category=category,
+                    priority=priority,
+                    lane=lane,
+                    confidence=confidence,
+                    draft_text=None,
+                    details=details,
+                )
+                if category == "meeting":
+                    try:
+                        actions.maybe_auto_set_reminder(db, suggestion)
+                    except Exception:
+                        logger.exception(
+                            "[WHATSAPP] Recovery auto-reminder failed for suggestion %s",
+                            suggestion.id,
+                        )
 
         if suggestion is not None:
             suggestion.visible_after = visible_after
             if needs_review_reason is not None:
                 self._flag_needs_review(db, suggestion, needs_review_reason)
+            # One card per contact for reply/nudge chips — drop superseded pending.
+            if suggestion.kind != "meeting" and suggestion.category != "meeting":
+                cleared = repo.dismiss_superseded_pending_for_contact(
+                    db, message.contact_id, keep_id=suggestion.id
+                )
+                if cleared:
+                    logger.info(
+                        "[WHATSAPP] Dismissed %s superseded pending chip(s) for contact %s",
+                        cleared,
+                        message.contact_id,
+                    )
 
         db.commit()
         logger.info(
@@ -928,6 +984,118 @@ class WhatsAppService:
             confidence,
             suggestion.id if suggestion is not None else None,
         )
+
+    def _dismiss_unconfirmed_meetings_for_contact(
+        self, db, contact_id: int, *, keep_id: int | None = None
+    ) -> int:
+        """Hide older unconfirmed meeting chips once a confirmed one exists."""
+        import json as _json
+
+        rows = (
+            db.query(models.WhatsAppSuggestion)
+            .filter(
+                models.WhatsAppSuggestion.contact_id == contact_id,
+                models.WhatsAppSuggestion.status == "pending",
+                models.WhatsAppSuggestion.category == "meeting",
+            )
+            .all()
+        )
+        dismissed = 0
+        now = datetime.utcnow()
+        for row in rows:
+            if keep_id is not None and row.id == keep_id:
+                continue
+            details = {}
+            try:
+                parsed = _json.loads(row.details or "{}")
+                if isinstance(parsed, dict):
+                    details = parsed
+            except Exception:
+                details = {}
+            if details.get("confirmed") is True:
+                continue
+            row.status = "dismissed"
+            row.resolved_at = now
+            dismissed += 1
+        if dismissed:
+            db.commit()
+        return dismissed
+
+    def _upgrade_pending_meeting_confirmation(
+        self, db, contact_id: int, history: list, body: str
+    ) -> models.WhatsAppSuggestion | None:
+        """When chat history becomes mutually confirmed, flip the best pending meeting chip."""
+        import json as _json
+
+        if not meeting_scope.infer_mutual_meeting_confirmation(history, body, {}):
+            return None
+        rows = (
+            db.query(models.WhatsAppSuggestion)
+            .filter(
+                models.WhatsAppSuggestion.contact_id == contact_id,
+                models.WhatsAppSuggestion.status == "pending",
+                models.WhatsAppSuggestion.category == "meeting",
+            )
+            .order_by(models.WhatsAppSuggestion.id.desc())
+            .all()
+        )
+        target = None
+        for row in rows:
+            details = {}
+            try:
+                parsed = _json.loads(row.details or "{}")
+                if isinstance(parsed, dict):
+                    details = parsed
+            except Exception:
+                details = {}
+            if details.get("confirmed") is True:
+                return row
+            if details.get("start") or details.get("time") or details.get("date"):
+                target = row
+                break
+            if target is None:
+                target = row
+        if target is None:
+            return None
+        try:
+            details = _json.loads(target.details or "{}")
+            if not isinstance(details, dict):
+                details = {}
+        except Exception:
+            details = {}
+        # Re-extract from history so start time is filled when confirmation arrives.
+        try:
+            meeting = classifier.extract_meeting(history, body)
+            meeting = wa_calendar.enrich_meeting_details(meeting)
+            latest_time_text = meeting_scope.latest_time_bearing_text(history, body)
+            if latest_time_text:
+                try:
+                    latest = classifier.extract_meeting(history, latest_time_text)
+                    latest = wa_calendar.enrich_meeting_details(latest)
+                    if latest.get("start"):
+                        meeting["start"] = latest.get("start")
+                        if latest.get("end"):
+                            meeting["end"] = latest.get("end")
+                except Exception:
+                    pass
+            details.update({k: v for k, v in meeting.items() if v is not None})
+        except Exception:
+            logger.warning(
+                "[WHATSAPP] Could not re-extract meeting while upgrading suggestion %s",
+                target.id,
+            )
+        details["confirmed"] = True
+        details["chip_label"] = _meeting_chip_label(details, True)
+        target.details = _json.dumps(details)
+        db.commit()
+        db.refresh(target)
+        self._dismiss_unconfirmed_meetings_for_contact(db, contact_id, keep_id=target.id)
+        logger.info(
+            "[WHATSAPP] Upgraded meeting suggestion %s to confirmed for contact %s",
+            target.id,
+            contact_id,
+        )
+        return target
 
     def _followup_priority(self, db, message) -> str:
         """Escalate a follow-up by how long the client has waited for our reply."""
@@ -1004,6 +1172,14 @@ class WhatsAppService:
             )
 
         if category == "meeting":
+            if meeting_scope.should_skip_meeting_inbox(body):
+                logger.info(
+                    "[WHATSAPP] Skipping Inbox meeting chip for message %s — "
+                    "not a schedulable plan (immediate/question/delay): %r",
+                    message.id,
+                    (body or "")[:80],
+                )
+                return None
             try:
                 meeting = classifier.extract_meeting(history, body)
             except WhatsAppAIError:
@@ -1019,8 +1195,40 @@ class WhatsAppService:
                 voice_examples=voice_examples,
             )
             meeting = wa_calendar.enrich_meeting_details(meeting)
+            # Prefer the newest time mentioned in the thread (e.g. 6pm over an older 5pm).
+            latest_time_text = meeting_scope.latest_time_bearing_text(history, body)
+            if latest_time_text and latest_time_text.strip() != (body or "").strip():
+                try:
+                    latest = classifier.extract_meeting(history, latest_time_text)
+                    latest = wa_calendar.enrich_meeting_details(latest)
+                    if latest.get("start"):
+                        meeting["start"] = latest.get("start")
+                        if latest.get("end"):
+                            meeting["end"] = latest.get("end")
+                except WhatsAppAIError:
+                    try:
+                        latest = wa_fallback.extract_meeting(latest_time_text)
+                        latest = wa_calendar.enrich_meeting_details(latest)
+                        if latest.get("start"):
+                            meeting["start"] = latest.get("start")
+                            if latest.get("end"):
+                                meeting["end"] = latest.get("end")
+                    except Exception:
+                        pass
+            if meeting_scope.infer_mutual_meeting_confirmation(history, body, meeting):
+                meeting["confirmed"] = True
             confirmed = bool(meeting.get("confirmed"))
             meeting["chip_label"] = _meeting_chip_label(meeting, confirmed)
+            # Product rule: only mutually confirmed plans reach Inbox / Schedule / Remind.
+            if not confirmed:
+                logger.info(
+                    "[WHATSAPP] Skipping unconfirmed meeting chip for message %s "
+                    "(will surface after both sides agree)",
+                    message.id,
+                )
+                # Still upgrade any older pending chip if history just became mutual.
+                self._upgrade_pending_meeting_confirmation(db, message.contact_id, history, body)
+                return None
             suggestion = repo.create_suggestion(
                 db,
                 contact_id=message.contact_id,
@@ -1033,8 +1241,11 @@ class WhatsAppService:
                 draft_text=draft,
                 details=meeting,
             )
-            # Auto-remind only when mutually confirmed; Schedule still waits for owner tap.
-            if confirmed and (meeting.get("start") or meeting.get("time_available")):
+            # Drop earlier unconfirmed proposals for this contact — one confirmed card.
+            self._dismiss_unconfirmed_meetings_for_contact(
+                db, message.contact_id, keep_id=suggestion.id
+            )
+            if meeting.get("start") or meeting.get("time_available"):
                 event = actions.maybe_auto_set_reminder(db, suggestion)
                 if event:
                     logger.info(
@@ -1409,6 +1620,14 @@ class WhatsAppService:
         if repo.suggestion_exists_for_message(db, message.id):
             return None
         if repo.pending_nudge_exists(db, message.contact_id):
+            return None
+        # Tighten small-talk: bare yes/ok/thanks without substance stay quiet.
+        text = (body or "").strip()
+        if meeting_scope.is_bare_ack(text):
+            logger.info(
+                "[WHATSAPP] Skipping greeting chip for message %s — bare ack/small-talk",
+                message.id,
+            )
             return None
 
         # A contact already established as personal (from a prior clean personal_date/
@@ -2232,6 +2451,85 @@ class WhatsAppService:
                     hours_overdue,
                     priority,
                     commitment.label,
+                )
+        finally:
+            db.close()
+
+    def _check_owner_outbound_followups(self) -> None:
+        """You sent a quote/doc/question; they went silent — remind + draft a nudge."""
+        import re
+
+        db = SessionLocal()
+        try:
+            pattern = re.compile(wa_settings.OWNER_FOLLOWUP_BODY_RE)
+            candidates = repo.work_contacts_awaiting_their_reply(
+                db, flag_hours=wa_settings.WHATSAPP_OWNER_FOLLOWUP_FLAG_HOURS
+            )
+            for contact, outbound in candidates:
+                body = (outbound.body or "").strip()
+                if not pattern.search(body):
+                    continue
+                hours_waiting = (
+                    datetime.utcnow() - (outbound.timestamp or contact.last_replied_at)
+                ).total_seconds() / 3600
+                is_urgent_wait = (
+                    hours_waiting >= wa_settings.WHATSAPP_OWNER_FOLLOWUP_URGENT_HOURS
+                )
+                priority = "very_high" if is_urgent_wait else "high"
+                days = max(1, int(hours_waiting / 24))
+                day_word = "day" if days == 1 else "days"
+                display_name = (contact.profile_name or "").strip() or contact.wa_id
+                preview = body if len(body) <= 80 else body[:77].rstrip() + "..."
+                chip_label = (
+                    f"{display_name} hasn't replied to your message in {days} {day_word} — urgent"
+                    if is_urgent_wait
+                    else f"Follow up with {display_name}? No reply in {days} {day_word}"
+                )
+                instructions = [i.text for i in repo.list_instructions(db, active_only=True)]
+                voice_examples = repo.recent_outbound_examples(
+                    db, personal=False, contact_id=contact.id, category="follow_up"
+                )
+                history = repo.live_chat_context(db, contact.id, limit=12)
+                try:
+                    draft = classifier.draft_reply(
+                        history,
+                        f"(Follow up — they haven't replied to: {preview})",
+                        "follow_up",
+                        context_hint=(
+                            "You previously messaged them and they went silent. Write a short, "
+                            "polite follow-up that references what you sent without repeating it "
+                            "verbatim. Match the chat language."
+                        ),
+                        language=None,
+                        instructions=instructions or None,
+                        voice_examples=voice_examples or None,
+                    )
+                except WhatsAppAIError:
+                    draft = (
+                        f"Hi, just checking in on my last message — any update when you get a chance?"
+                    )
+                repo.create_suggestion(
+                    db,
+                    contact_id=contact.id,
+                    message_id=outbound.id,
+                    kind="owner_followup_nudge",
+                    category="follow_up",
+                    priority=priority,
+                    lane="work",
+                    draft_text=draft,
+                    details={
+                        "chip_label": chip_label,
+                        "hours_waiting": round(hours_waiting, 1),
+                        "contact_name": display_name,
+                        "owner_outbound_preview": preview,
+                        "owner_followup": True,
+                    },
+                )
+                db.commit()
+                logger.info(
+                    "[WHATSAPP] Owner→them follow-up raised for contact %s (%.1f hours)",
+                    contact.id,
+                    hours_waiting,
                 )
         finally:
             db.close()

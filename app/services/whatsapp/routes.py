@@ -325,6 +325,64 @@ def list_suggestions(
                 filtered.append(suggestion)
         items = filtered[:limit]
         total = len(filtered) if offset == 0 else max(total, len(filtered))
+    elif status == "pending":
+        # Hide reply/nudge chips once the owner's latest message is outbound (already replied).
+        # Keep meeting chips and owner→them follow-ups (those exist *because* latest is outbound).
+        preserve_kinds = {
+            "meeting",
+            "owner_followup_nudge",
+            "commitment_reminder",
+            "client_commitment_reminder",
+            "life_nudge",
+        }
+        reply_kinds = {
+            "reply",
+            "nudge",
+            "greeting",
+            "clarify",
+            "followup_nudge",
+            "payment",
+            "lead",
+            "document",
+            "complaint",
+            "shipment",
+            "order",
+            "timeline",
+            "budget",
+            "scope",
+            "other",
+            "blank",
+            "unconfident",
+        }
+        kept: list = []
+        for suggestion in items:
+            if suggestion.kind in preserve_kinds or suggestion.category in (
+                "meeting",
+                "family_plan",
+                "personal_date",
+                "personal_task",
+                "pending_commitment",
+                "client_commitment",
+            ):
+                kept.append(suggestion)
+                continue
+            if suggestion.kind in reply_kinds or (
+                suggestion.category
+                and suggestion.category
+                not in (
+                    "meeting",
+                    "family_plan",
+                    "personal_date",
+                    "personal_task",
+                    "awaiting_reply",
+                )
+                and suggestion.kind != "meeting"
+            ):
+                if repo.contact_latest_is_outbound(db, suggestion.contact_id):
+                    continue
+            kept.append(suggestion)
+        items = kept
+        total = len(kept) if offset == 0 else total
     return WhatsAppSuggestionListResponse(
         items=[_suggestion_response(s, db) for s in items],
         total=total,
@@ -342,6 +400,34 @@ def refresh_pending_inbox(
     db: Session = Depends(get_db),
 ) -> RefreshPendingResponse:
     return RefreshPendingResponse(**wa_inbox.refresh_pending_suggestions(db, lookback_hours=lookback_hours))
+
+
+@router.post("/inbox/backfill-history")
+def backfill_chat_history(
+    chat_limit: int = Query(default=40, ge=1, le=200),
+    messages_per_chat: int = Query(default=40, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Pull recent WAHA chats into jarvis.db for draft context (no new Inbox chips)."""
+    from app.services.whatsapp import history_backfill
+
+    try:
+        return history_backfill.backfill_recent_history(
+            db, chat_limit=chat_limit, messages_per_chat=messages_per_chat
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+
+
+@router.post("/inbox/ensure-waha-webhooks")
+def ensure_waha_webhooks() -> dict:
+    """Ensure WAHA session webhook includes message + message.any."""
+    from app.services.whatsapp import waha_client
+
+    ok = waha_client.ensure_session_webhooks()
+    return {"ok": ok, "webhook_url": __import__("os").getenv("WAHA_WEBHOOK_URL") or None}
 
 @router.post("/suggestions/{suggestion_id}/send-reply", response_model=WhatsAppSendResult)
 def send_reply(
