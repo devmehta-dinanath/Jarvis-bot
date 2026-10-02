@@ -466,10 +466,14 @@ def _group_system(user_names: list[str] | None) -> str:
 _REPLY_SYSTEM = (
     "You draft a WhatsApp reply on behalf of the account owner. "
     "ADAPTIVE PER-CONTACT TONE & LANGUAGE RULES:\n"
-    "1. DYNAMIC LANGUAGE & SCRIPT: Match the language and script of the conversation. "
-    "If the conversation (or 'Me:' messages) is in Roman Hinglish (e.g. 'aaj meet kre?', 'nahi aaj nahi', 'kal baat karte hain'), "
-    "reply in natural, conversational Hinglish (Roman/Latin script, the way people actually text on WhatsApp — do NOT use Devanagari script). "
-    "If the conversation is in English, reply in English.\n"
+    "1. HARD LANGUAGE MATCH (highest priority): Match the language/script of the OTHER "
+    "PERSON'S LATEST message (the 'Client:' / latest inbound line), not your own past 'Me:' lines. "
+    "If their latest message is English, reply in English — even if older history is Hinglish. "
+    "If their latest message is Roman Hinglish (e.g. 'aaj meet kre?', 'nahi aaj nahi'), "
+    "reply in natural Roman Hinglish (Latin script — do NOT use Devanagari). "
+    "If their latest message is Devanagari Hindi, reply in Hindi. "
+    "Short acks like 'Ok'/'Yes' in English → keep the reply in English unless the rest of "
+    "that same message is clearly Hinglish.\n"
     "2. RELATIONSHIP & TONE MATCHING: Analyze the 'Me:' lines in the recent conversation. "
     "If 'Me:' speaks informally, uses short punchy texts (e.g. 3-6 words), or casual phrasing with this person, match that exact casual brevity. "
     "If 'Me:' speaks formally with a corporate client, match that professional tone. "
@@ -483,14 +487,14 @@ _REPLY_SYSTEM = (
 _REPLY_SYSTEM_PERSONAL = (
     "You draft a short WhatsApp reply to a family member or close friend in the user's own casual voice. "
     "This is NOT a business or client message — never use any customer-service phrasing ('thank you for reaching out', etc.). "
-    "Match the language of the chat (e.g. Roman Hinglish if they talk in Hinglish, English if in English). "
+    "HARD RULE: match the language of THEIR latest message (English→English, Roman Hinglish→Roman Hinglish). "
     "Reply the way a real person quickly texts someone close back — brief, warm, plain, everyday language. "
     "Return ONLY the reply text, no preamble, no quotes."
 )
 
 _COMPLAINT_SYSTEM = (
     "You draft an empathetic WhatsApp reply to an UNHAPPY client on behalf of the account owner. "
-    "Match the language and tone of the conversation (Roman Hinglish if the chat is in Hinglish, English if in English). "
+    "HARD RULE: match the language of THEIR latest message (English→English, Roman Hinglish→Roman Hinglish). "
     "You MUST: "
     "(1) acknowledge and empathise with the problem FIRST and take it seriously; "
     "(2) apologise sincerely for the inconvenience; "
@@ -737,17 +741,18 @@ def translate_reply_to_language(text: str, target_language: str) -> str:
 
 
 def _language_context_block(language: str | None, translation: str | None) -> str:
-    """Give the drafter context when the inbound message is not in plain English."""
-    if _is_english(language):
-        return ""
-    lines: list[str] = []
-    if language:
-        lines.append(f"The client's message is in {language}.")
-    if translation:
-        lines.append(f"English meaning: {translation}")
-    lines.append(
-        "Match the conversational language of the chat history (if the chat is in Hinglish, write in natural Roman Hinglish; if in English, write in English)."
-    )
+    """Force the drafter to match the latest inbound language, not overall chat drift."""
+    lines: list[str] = [
+        "LANGUAGE LOCK: Reply in the same language as the client's LATEST message below.",
+        "Do not switch to Hinglish if that latest message is English. "
+        "Do not switch to English if that latest message is Hinglish/Hindi.",
+    ]
+    if language and not _is_english(language):
+        lines.append(f"Detected language of their latest message: {language}.")
+        if translation:
+            lines.append(f"English meaning: {translation}")
+    elif language:
+        lines.append("Detected language of their latest message: English.")
     return "\n".join(lines) + "\n\n"
 
 
@@ -1063,9 +1068,9 @@ def draft_reply(
     user_content = (
         f"{lang_block}"
         f"Recent conversation:\n{_history_block(history)}\n\n"
-        f"{sender_label} latest message:\n{message}\n\n"
+        f"{sender_label} latest message (MATCH THIS LANGUAGE):\n{message}\n\n"
         f"Context: {category_hint}\n\n"
-        "Write the suggested reply matching the conversation's language and tone:"
+        "Write the suggested reply matching their latest message's language and the chat's tone:"
     )
     system = (
         (_REPLY_SYSTEM_PERSONAL if personal else _REPLY_SYSTEM)
@@ -1100,10 +1105,10 @@ def draft_complaint_reply(
     user_content = (
         f"{lang_block}"
         f"Recent conversation:\n{_history_block(history)}\n\n"
-        f"Client's latest message:\n{message}\n\n"
+        f"Client's latest message (MATCH THIS LANGUAGE):\n{message}\n\n"
         f"Tone guidance: {tone}\n\n"
         f"{hint_block}"
-        "Write the empathetic reply text matching the conversation's language and tone (acknowledge the problem first, then a next step):"
+        "Write the empathetic reply matching their latest message's language (acknowledge first, then a next step):"
     )
     system = (
         _COMPLAINT_SYSTEM

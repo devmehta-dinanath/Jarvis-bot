@@ -9,6 +9,7 @@ import httpx
 from urllib.parse import quote
 
 from app.config import WAHA_API_KEY, WAHA_BASE_URL, WAHA_SESSION
+from app.services.whatsapp import settings as wa_settings
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,34 @@ def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     if response.status_code >= 400:
         logger.error("[WAHA] error %s: %s", response.status_code, response.text)
+        raise WahaApiError(f"{response.status_code}: {response.text}")
+
+    if not response.content:
+        return {}
+    try:
+        data = response.json()
+    except ValueError:
+        return {"raw": response.text}
+    return data if isinstance(data, dict) else {"data": data}
+
+
+def _put(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not is_configured():
+        raise WahaApiError("WAHA not configured — set WAHA_BASE_URL and WAHA_SESSION")
+    url = f"{WAHA_BASE_URL}{path}"
+    try:
+        response = httpx.put(
+            url,
+            json=payload,
+            headers=_headers(),
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        logger.error("[WAHA] PUT failed: %s", exc)
+        raise WahaApiError(str(exc)) from exc
+
+    if response.status_code >= 400:
+        logger.error("[WAHA] PUT error %s: %s", response.status_code, response.text)
         raise WahaApiError(f"{response.status_code}: {response.text}")
 
     if not response.content:
@@ -294,12 +323,9 @@ def fetch_recent_messages(wa_id: str, *, limit: int = 100) -> list[dict[str, str
     """Best-effort fetch of the last `limit` messages for a contact/chat straight from
     WAHA (oldest first), independent of anything captured locally via webhook.
 
-    This exists because the webhook only subscribes to the ``message`` event, which
-    doesn't reliably cover messages sent directly from the phone (bypassing this bot) —
-    so a contact's real WhatsApp history can be broader than what's in our own DB. Used
-    as a fallback tone/context source when local history is thin. Returns [] on any
-    failure (WAHA unreachable, session not WORKING, etc.) — callers should treat this as
-    optional, not required.
+    Prefer subscribing the session to ``message.any`` (see ``ensure_session_webhooks``)
+    so phone-sent outbound messages land in the local DB; this fetch remains a fallback
+    for tone/context when local history is thin. Returns [] on any failure.
     """
     try:
         chat_id = to_chat_id(wa_id)
@@ -320,15 +346,109 @@ def fetch_recent_messages(wa_id: str, *, limit: int = 100) -> list[dict[str, str
         body = _clean_name(item.get("body"))
         if not body:
             continue
-        messages.append(
-            {
-                "direction": "outbound" if item.get("fromMe") else "inbound",
-                "body": body,
-            }
-        )
+        entry: dict[str, str] = {
+            "direction": "outbound" if item.get("fromMe") else "inbound",
+            "body": body,
+        }
+        mid = item.get("id")
+        if mid:
+            entry["wa_message_id"] = str(mid)
+        ts = item.get("timestamp")
+        if ts is not None:
+            entry["timestamp"] = str(ts)
+        messages.append(entry)
     # WAHA returns newest-first; flip to chronological order like the rest of the codebase.
     messages.reverse()
     return messages[-limit:]
+
+
+_REQUIRED_WEBHOOK_EVENTS = ("message", "message.any", "message.ack", "session.status")
+
+
+def ensure_session_webhooks(*, webhook_url: str | None = None) -> bool:
+    """Ensure the WAHA session posts ``message`` + ``message.any`` to Jarvis.
+
+    Without ``message.any``, phone-typed outbound replies may never hit our DB, so
+    pending Inbox chips stay open after you reply on the phone.
+    """
+    url = (webhook_url or wa_settings.WAHA_WEBHOOK_URL or "").strip()
+    if not url:
+        logger.warning(
+            "[WAHA] WAHA_WEBHOOK_URL not set — cannot auto-configure message.any webhooks. "
+            "Set WAHA_WEBHOOK_URL to your public Jarvis webhook "
+            "(e.g. https://host/api/v1/whatsapp/webhook) or configure WAHA_HOOK_EVENTS "
+            "on the WAHA container to include message.any."
+        )
+        return False
+    if not is_configured():
+        return False
+
+    session = _get(f"/api/sessions/{quote(WAHA_SESSION, safe='')}")
+    config: dict[str, Any] = {}
+    if isinstance(session, dict):
+        existing = session.get("config")
+        if isinstance(existing, dict):
+            config = dict(existing)
+
+    webhooks = list(config.get("webhooks") or [])
+    if not isinstance(webhooks, list):
+        webhooks = []
+
+    target = None
+    for hook in webhooks:
+        if isinstance(hook, dict) and str(hook.get("url") or "").rstrip("/") == url.rstrip("/"):
+            target = hook
+            break
+
+    events = list(_REQUIRED_WEBHOOK_EVENTS)
+    if target is None:
+        hook_cfg: dict[str, Any] = {"url": url, "events": events}
+        try:
+            from app.config import WAHA_HMAC_KEY
+
+            if WAHA_HMAC_KEY:
+                hook_cfg["hmac"] = {"key": WAHA_HMAC_KEY}
+        except Exception:
+            pass
+        webhooks.append(hook_cfg)
+    else:
+        current = list(target.get("events") or [])
+        merged = list(dict.fromkeys([*current, *events]))
+        for i, h in enumerate(webhooks):
+            if isinstance(h, dict) and str(h.get("url") or "").rstrip("/") == url.rstrip("/"):
+                webhooks[i] = {**h, "events": merged}
+                break
+
+    config["webhooks"] = webhooks
+    try:
+        _put(f"/api/sessions/{quote(WAHA_SESSION, safe='')}", {"config": config})
+        logger.info(
+            "[WAHA] Session %s webhooks ensured for %s events=%s",
+            WAHA_SESSION,
+            url,
+            events,
+        )
+        return True
+    except WahaApiError as exc:
+        logger.warning("[WAHA] Failed to update session webhooks: %s", exc)
+        return False
+
+
+def list_chats(*, limit: int = 40) -> list[dict[str, Any]]:
+    """Recent chats overview from WAHA (newest activity first when supported)."""
+    data = _get(
+        f"/api/{WAHA_SESSION}/chats/overview?limit={int(limit)}&offset=0"
+    )
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    # Fallback to full chats list
+    data = _get(
+        f"/api/{WAHA_SESSION}/chats?limit={int(limit)}&offset=0"
+        f"&sortBy=messageTimestamp&sortOrder=desc"
+    )
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
 
 
 def resolve_contact_wa_id(peer: str, body: dict[str, Any] | None = None) -> str:

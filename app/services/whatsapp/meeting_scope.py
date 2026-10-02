@@ -1,13 +1,13 @@
-"""Step 1 Inbox scope: meeting/call chips only (client product request)."""
+"""Inbox scope helpers: meetings-only filter (optional) + meeting confirmation gates."""
 
 from __future__ import annotations
 
 import os
 import re
 
-# Default on — Inbox shows meeting/call chips only. Set
-# WHATSAPP_MEETINGS_REMINDERS_ONLY=false to restore the full action inbox.
-MEETINGS_REMINDERS_ONLY = os.getenv("WHATSAPP_MEETINGS_REMINDERS_ONLY", "true").lower() in {
+# Default off — full action inbox (STEP 2). Set
+# WHATSAPP_MEETINGS_REMINDERS_ONLY=true to restrict Inbox to meeting/call chips only.
+MEETINGS_REMINDERS_ONLY = os.getenv("WHATSAPP_MEETINGS_REMINDERS_ONLY", "false").lower() in {
     "1",
     "true",
     "yes",
@@ -292,6 +292,11 @@ def should_skip_meeting_inbox(text: str | None) -> bool:
         or is_non_meeting_business_question(text)
         or is_delay_only_reply(text)
     )
+
+
+def is_bare_ack(text: str | None) -> bool:
+    """True for short confirmations like Yes/Ok/Sure with no schedulable content."""
+    return bool(text and _BARE_ACK_RE.match(text.strip()))
 
 
 def is_surfaceable_meeting_chip(

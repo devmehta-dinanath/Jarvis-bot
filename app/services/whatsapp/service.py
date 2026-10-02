@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from app.config import (
     CALENDAR_DEFAULT_TIMEZONE,
     OPENAI_API_KEY,
-    WHATSAPP_AI_DRAFTS_ENABLED,
     WHATSAPP_AUTO_ADD_CALENDAR,
     WHATSAPP_CASUAL_SUGGESTION_DELAY_MAX_HOURS,
     WHATSAPP_CASUAL_SUGGESTION_DELAY_MIN_HOURS,
@@ -31,12 +30,14 @@ from app import models
 from app.services.google_calendar.service import google_calendar_service
 from app.services.whatsapp import actions
 from app.services.whatsapp import calendar as wa_calendar
-from app.services.whatsapp import classifier 
+from app.services.whatsapp import classifier
 from app.services.whatsapp import fallback as wa_fallback
 from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import repository as repo
+from app.services.whatsapp import settings as wa_settings
 from app.services.whatsapp import taxonomy as wa_taxonomy
 from app.services.whatsapp.classifier import WhatsAppAIError
+from app.services.whatsapp.settings import WHATSAPP_AI_DRAFTS_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,7 @@ class WhatsAppService:
             return
         if self._thread and self._thread.is_alive():
             return
+        self._bootstrap_waha_session()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -297,9 +299,32 @@ class WhatsAppService:
         )
         self._thread.start()
         logger.info(
-            "[WHATSAPP] Worker started (poll=%s s)",
+            "[WHATSAPP] Worker started (poll=%s s, meetings_only=%s, ai_drafts=%s)",
             self.poll_interval_seconds,
+            meeting_scope.MEETINGS_REMINDERS_ONLY,
+            WHATSAPP_AI_DRAFTS_ENABLED,
         )
+
+    def _bootstrap_waha_session(self) -> None:
+        """Ensure message.any webhooks + optional history backfill (best-effort)."""
+        try:
+            from app.services.whatsapp import waha_client
+            from app.config import WHATSAPP_PROVIDER
+
+            if WHATSAPP_PROVIDER != "waha" or not waha_client.is_configured():
+                return
+            if wa_settings.WAHA_ENSURE_WEBHOOK_EVENTS:
+                waha_client.ensure_session_webhooks()
+            if wa_settings.WHATSAPP_HISTORY_BACKFILL_ON_START:
+                from app.services.whatsapp import history_backfill
+
+                db = SessionLocal()
+                try:
+                    history_backfill.backfill_recent_history(db)
+                finally:
+                    db.close()
+        except Exception:
+            logger.exception("[WHATSAPP] WAHA bootstrap (webhook/backfill) failed")
 
     def stop(self) -> None:
         if not self.is_enabled:
@@ -334,6 +359,10 @@ class WhatsAppService:
                     self._check_pending_client_commitments()
                 except Exception:
                     logger.exception("[WHATSAPP] Pending client commitments check failed")
+                try:
+                    self._check_owner_outbound_followups()
+                except Exception:
+                    logger.exception("[WHATSAPP] Owner→them follow-up check failed")
                 interval_s = WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS * 3600
                 self._next_silence_check_at = datetime.utcnow() + timedelta(seconds=interval_s)
 
@@ -933,6 +962,17 @@ class WhatsAppService:
             suggestion.visible_after = visible_after
             if needs_review_reason is not None:
                 self._flag_needs_review(db, suggestion, needs_review_reason)
+            # One card per contact for reply/nudge chips — drop superseded pending.
+            if suggestion.kind != "meeting" and suggestion.category != "meeting":
+                cleared = repo.dismiss_superseded_pending_for_contact(
+                    db, message.contact_id, keep_id=suggestion.id
+                )
+                if cleared:
+                    logger.info(
+                        "[WHATSAPP] Dismissed %s superseded pending chip(s) for contact %s",
+                        cleared,
+                        message.contact_id,
+                    )
 
         db.commit()
         logger.info(
@@ -1580,6 +1620,14 @@ class WhatsAppService:
         if repo.suggestion_exists_for_message(db, message.id):
             return None
         if repo.pending_nudge_exists(db, message.contact_id):
+            return None
+        # Tighten small-talk: bare yes/ok/thanks without substance stay quiet.
+        text = (body or "").strip()
+        if meeting_scope.is_bare_ack(text):
+            logger.info(
+                "[WHATSAPP] Skipping greeting chip for message %s — bare ack/small-talk",
+                message.id,
+            )
             return None
 
         # A contact already established as personal (from a prior clean personal_date/
@@ -2403,6 +2451,85 @@ class WhatsAppService:
                     hours_overdue,
                     priority,
                     commitment.label,
+                )
+        finally:
+            db.close()
+
+    def _check_owner_outbound_followups(self) -> None:
+        """You sent a quote/doc/question; they went silent — remind + draft a nudge."""
+        import re
+
+        db = SessionLocal()
+        try:
+            pattern = re.compile(wa_settings.OWNER_FOLLOWUP_BODY_RE)
+            candidates = repo.work_contacts_awaiting_their_reply(
+                db, flag_hours=wa_settings.WHATSAPP_OWNER_FOLLOWUP_FLAG_HOURS
+            )
+            for contact, outbound in candidates:
+                body = (outbound.body or "").strip()
+                if not pattern.search(body):
+                    continue
+                hours_waiting = (
+                    datetime.utcnow() - (outbound.timestamp or contact.last_replied_at)
+                ).total_seconds() / 3600
+                is_urgent_wait = (
+                    hours_waiting >= wa_settings.WHATSAPP_OWNER_FOLLOWUP_URGENT_HOURS
+                )
+                priority = "very_high" if is_urgent_wait else "high"
+                days = max(1, int(hours_waiting / 24))
+                day_word = "day" if days == 1 else "days"
+                display_name = (contact.profile_name or "").strip() or contact.wa_id
+                preview = body if len(body) <= 80 else body[:77].rstrip() + "..."
+                chip_label = (
+                    f"{display_name} hasn't replied to your message in {days} {day_word} — urgent"
+                    if is_urgent_wait
+                    else f"Follow up with {display_name}? No reply in {days} {day_word}"
+                )
+                instructions = [i.text for i in repo.list_instructions(db, active_only=True)]
+                voice_examples = repo.recent_outbound_examples(
+                    db, personal=False, contact_id=contact.id, category="follow_up"
+                )
+                history = repo.live_chat_context(db, contact.id, limit=12)
+                try:
+                    draft = classifier.draft_reply(
+                        history,
+                        f"(Follow up — they haven't replied to: {preview})",
+                        "follow_up",
+                        context_hint=(
+                            "You previously messaged them and they went silent. Write a short, "
+                            "polite follow-up that references what you sent without repeating it "
+                            "verbatim. Match the chat language."
+                        ),
+                        language=None,
+                        instructions=instructions or None,
+                        voice_examples=voice_examples or None,
+                    )
+                except WhatsAppAIError:
+                    draft = (
+                        f"Hi, just checking in on my last message — any update when you get a chance?"
+                    )
+                repo.create_suggestion(
+                    db,
+                    contact_id=contact.id,
+                    message_id=outbound.id,
+                    kind="owner_followup_nudge",
+                    category="follow_up",
+                    priority=priority,
+                    lane="work",
+                    draft_text=draft,
+                    details={
+                        "chip_label": chip_label,
+                        "hours_waiting": round(hours_waiting, 1),
+                        "contact_name": display_name,
+                        "owner_outbound_preview": preview,
+                        "owner_followup": True,
+                    },
+                )
+                db.commit()
+                logger.info(
+                    "[WHATSAPP] Owner→them follow-up raised for contact %s (%.1f hours)",
+                    contact.id,
+                    hours_waiting,
                 )
         finally:
             db.close()

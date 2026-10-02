@@ -348,6 +348,153 @@ def pending_followup_nudge_exists(db: Session, contact_id: int) -> bool:
     return query.first() is not None
 
 
+def pending_owner_followup_exists(db: Session, contact_id: int) -> bool:
+    """One owner→them ghost follow-up per silence window since last_replied_at."""
+    contact = db.get(models.WhatsAppContact, contact_id)
+    query = db.query(models.WhatsAppSuggestion.id).filter(
+        models.WhatsAppSuggestion.contact_id == contact_id,
+        models.WhatsAppSuggestion.kind == "owner_followup_nudge",
+    )
+    if contact is not None and contact.last_replied_at is not None:
+        query = query.filter(
+            models.WhatsAppSuggestion.created_at >= contact.last_replied_at
+        )
+    return query.first() is not None
+
+
+def latest_message_for_contact(
+    db: Session, contact_id: int
+) -> models.WhatsAppMessage | None:
+    return (
+        db.query(models.WhatsAppMessage)
+        .filter(models.WhatsAppMessage.contact_id == contact_id)
+        .order_by(
+            models.WhatsAppMessage.timestamp.desc().nullslast(),
+            models.WhatsAppMessage.id.desc(),
+        )
+        .first()
+    )
+
+
+def contact_latest_is_outbound(db: Session, contact_id: int) -> bool:
+    """True when the newest stored message for this contact is from the owner."""
+    latest = latest_message_for_contact(db, contact_id)
+    return latest is not None and latest.direction == "outbound"
+
+
+# Reply / nudge chips that should collapse to one per contact when a newer inbound arrives.
+_SUPERSEDEABLE_KINDS = frozenset(
+    {
+        "reply",
+        "nudge",
+        "greeting",
+        "clarify",
+        "followup_nudge",
+        "owner_followup_nudge",
+        "life_nudge",
+        "blank",
+        "unconfident",
+        "payment",
+        "lead",
+        "document",
+        "complaint",
+        "shipment",
+        "order",
+        "timeline",
+        "budget",
+        "scope",
+        "other",
+        "safety",
+    }
+)
+
+
+def dismiss_superseded_pending_for_contact(
+    db: Session,
+    contact_id: int,
+    *,
+    keep_id: int | None = None,
+) -> int:
+    """Drop older reply/nudge chips for a contact so Inbox shows one fresh card.
+
+    Confirmed meeting chips are kept (conversation card can list multiple plans).
+    """
+    now = datetime.utcnow()
+    query = db.query(models.WhatsAppSuggestion).filter(
+        models.WhatsAppSuggestion.contact_id == contact_id,
+        models.WhatsAppSuggestion.status == "pending",
+        models.WhatsAppSuggestion.kind.in_(sorted(_SUPERSEDEABLE_KINDS)),
+    )
+    if keep_id is not None:
+        query = query.filter(models.WhatsAppSuggestion.id != keep_id)
+    updated = 0
+    for suggestion in query.all():
+        suggestion.status = "dismissed"
+        suggestion.resolved_at = now
+        updated += 1
+    if updated:
+        db.flush()
+    return updated
+
+
+def last_important_outbound(
+    db: Session, contact_id: int
+) -> models.WhatsAppMessage | None:
+    """Most recent outbound text message for a contact (for owner→them follow-ups)."""
+    return (
+        db.query(models.WhatsAppMessage)
+        .filter(
+            models.WhatsAppMessage.contact_id == contact_id,
+            models.WhatsAppMessage.direction == "outbound",
+            models.WhatsAppMessage.msg_type == "text",
+            models.WhatsAppMessage.body.isnot(None),
+        )
+        .order_by(models.WhatsAppMessage.timestamp.desc().nullslast())
+        .first()
+    )
+
+
+def work_contacts_awaiting_their_reply(
+    db: Session,
+    *,
+    flag_hours: float,
+    active_within_days: int = 30,
+) -> list[tuple[models.WhatsAppContact, models.WhatsAppMessage]]:
+    """Owner sent last; they have not replied for flag_hours (ghost follow-up candidates)."""
+    cutoff = datetime.utcnow() - timedelta(hours=flag_hours)
+    active_since = datetime.utcnow() - timedelta(days=active_within_days)
+    contacts = (
+        db.query(models.WhatsAppContact)
+        .filter(
+            or_(
+                models.WhatsAppContact.contact_type.is_(None),
+                models.WhatsAppContact.contact_type != "personal",
+            ),
+            models.WhatsAppContact.is_group.is_(False),
+            models.WhatsAppContact.is_excluded.is_(False),
+            models.WhatsAppContact.last_replied_at.isnot(None),
+            models.WhatsAppContact.last_replied_at >= active_since,
+            models.WhatsAppContact.last_replied_at <= cutoff,
+            (
+                models.WhatsAppContact.last_inbound_at.is_(None)
+                | (models.WhatsAppContact.last_inbound_at < models.WhatsAppContact.last_replied_at)
+            ),
+        )
+        .all()
+    )
+    results: list[tuple[models.WhatsAppContact, models.WhatsAppMessage]] = []
+    for contact in contacts:
+        if pending_owner_followup_exists(db, contact.id):
+            continue
+        if not contact_latest_is_outbound(db, contact.id):
+            continue
+        outbound = last_important_outbound(db, contact.id)
+        if outbound is None or not (outbound.body or "").strip():
+            continue
+        results.append((contact, outbound))
+    return results
+
+
 def pending_commitment_for_contact(
     db: Session, contact_id: int, *, direction: str = "owner"
 ) -> models.WhatsAppCommitment | None:
