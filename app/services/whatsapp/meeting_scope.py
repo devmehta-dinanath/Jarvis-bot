@@ -136,6 +136,7 @@ def looks_like_call_or_meeting_request(text: str | None) -> bool:
     return bool(_CALL_OR_MEETING_REQUEST_RE.search(body))
 
 
+<<<<<<< HEAD
 def message_addresses_owner(text: str | None, user_names: list[str] | None) -> bool:
     """True when the message @tags or clearly names the account owner.
 
@@ -164,6 +165,8 @@ def message_addresses_owner(text: str | None, user_names: list[str] | None) -> b
     return False
 
 
+=======
+>>>>>>> 20ba0ea (Unlock full WhatsApp action inbox and harden STEP 2 reply quality.)
 def _message_is_acceptance(text: str | None) -> bool:
     body = (text or "").strip()
     if not body or len(body) > 120:
