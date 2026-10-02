@@ -38,8 +38,8 @@ export const MEETING_REMINDER_CATEGORIES = new Set(["meeting"]);
 
 export const MEETING_REMINDER_KINDS = new Set(["meeting"]);
 
-/** Inbox product scope: meeting/call chips only (matches server default). */
-export const MEETINGS_REMINDERS_ONLY = true;
+/** Inbox product scope: false = full action inbox (STEP 2). */
+export const MEETINGS_REMINDERS_ONLY = false;
 
 export function isMeetingOrReminder(suggestion) {
   if (suggestion?.details?.safety_concern) {
@@ -229,10 +229,47 @@ export function applyTaxonomyFromApi(payload) {
 
 export const CATEGORY_SECTIONS = [
   {
+    id: "urgent",
+    title: "Urgent",
+    accent: "urgent",
+    categories: ["payment", "complaint"]
+  },
+  {
     id: "meetings",
     title: "Wants to meet",
     accent: "info",
     categories: ["meeting"]
+  },
+  {
+    id: "replies",
+    title: "Client messages",
+    accent: "info",
+    categories: [
+      "lead",
+      "document",
+      "shipment",
+      "order",
+      "budget",
+      "scope",
+      "timeline",
+      "follow_up",
+      "other",
+      "awaiting_reply",
+      "pending_commitment",
+      "client_commitment"
+    ]
+  },
+  {
+    id: "nudges",
+    title: "Casual & voice",
+    accent: "success",
+    categories: ["greeting", "voice_note", "media"]
+  },
+  {
+    id: "life",
+    title: "Life",
+    accent: "success",
+    categories: ["personal_date", "personal_task", "family_plan", "personal_silence"]
   }
 ];
 

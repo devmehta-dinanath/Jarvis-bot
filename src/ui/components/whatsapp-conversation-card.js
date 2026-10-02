@@ -27,6 +27,10 @@ function planWhenLabel(suggestion) {
   if (details.date) {
     return details.date;
   }
+  const category = suggestion?.category || suggestion?.kind;
+  if (category && category !== "meeting" && category !== "family_plan") {
+    return categoryLabel(suggestion);
+  }
   return "Time not set yet";
 }
 

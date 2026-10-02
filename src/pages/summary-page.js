@@ -16,6 +16,7 @@ import {
   filterConfirmedPlans,
   filterMeetingReminderSuggestions,
   groupSuggestionsByContact,
+  MEETINGS_REMINDERS_ONLY,
   partitionSuggestions
 } from "../lib/whatsapp-categories.js";
 import { enhanceWhatsAppCard, openExternal, showInboxToast } from "../lib/whatsapp-card-actions.js";
@@ -24,6 +25,7 @@ import { formatDateTime, formatMeetingTime, getGreeting } from "../lib/time.js";
 import { createSectionHeader } from "../ui/components/section-header.js";
 import { createStatChip } from "../ui/components/stat-chip.js";
 import { createWhatsAppConversationCard } from "../ui/components/whatsapp-conversation-card.js";
+import { createWhatsAppRequestCard } from "../ui/components/whatsapp-request-card.js";
 
 const REFRESH_MS = 15000;
 
@@ -110,16 +112,24 @@ function createSuggestionSection({ title, accent }) {
   return { section, header, cardList };
 }
 
-function renderSectionCards(cardList, suggestions, handlers) {
+function renderSectionCards(cardList, suggestions, handlers, sectionId) {
   cardList.replaceChildren();
   if (suggestions.length === 0) {
     return;
   }
 
-  // One conversation (contact) → one card; multiple plans become dated items inside.
-  const groups = groupSuggestionsByContact(suggestions);
-  groups.forEach((group) => {
-    const card = createWhatsAppConversationCard(group, handlers);
+  // Meetings: one conversation card with dated plans. Other sections: reply cards.
+  if (sectionId === "meetings") {
+    const groups = groupSuggestionsByContact(suggestions);
+    groups.forEach((group) => {
+      const card = createWhatsAppConversationCard(group, handlers);
+      cardList.appendChild(card);
+    });
+    return;
+  }
+
+  suggestions.forEach((suggestion) => {
+    const card = createWhatsAppRequestCard(suggestion, handlers);
     cardList.appendChild(card);
   });
 }
@@ -293,7 +303,9 @@ export function createSummaryPage() {
   }));
 
   const emptyState = createEmptyState(
-    "No confirmed meeting plans right now.",
+    MEETINGS_REMINDERS_ONLY
+      ? "No confirmed meeting plans right now."
+      : "Inbox is clear — nothing needs a reply right now.",
     "Checking inbox…"
   );
   emptyState.hidden = true;
@@ -387,37 +399,56 @@ export function createSummaryPage() {
 
     const buckets = partitionSuggestions(suggestions);
     const meetingCount = buckets.meetings?.length ?? 0;
+    const urgentCount = buckets.urgent?.length ?? 0;
+    const repliesCount = buckets.replies?.length ?? 0;
+    const totalActionable = suggestions.length;
     const conversationCount = groupSuggestionsByContact(buckets.meetings ?? []).length;
 
-    stats.replaceChildren(
-      createStatChip(conversationCount, "Conversations", conversationCount ? "info" : "success"),
-      createStatChip(meetingCount, "Confirmed plans", meetingCount ? "info" : "success")
-    );
+    if (MEETINGS_REMINDERS_ONLY) {
+      stats.replaceChildren(
+        createStatChip(conversationCount, "Conversations", conversationCount ? "info" : "success"),
+        createStatChip(meetingCount, "Confirmed plans", meetingCount ? "info" : "success")
+      );
+    } else {
+      stats.replaceChildren(
+        createStatChip(totalActionable, "Needs action", totalActionable ? "info" : "success"),
+        createStatChip(urgentCount, "Urgent", urgentCount ? "urgent" : "success"),
+        createStatChip(meetingCount, "Meetings", meetingCount ? "info" : "success"),
+        createStatChip(repliesCount, "Replies", repliesCount ? "info" : "success")
+      );
+    }
 
     let visibleSections = 0;
 
     sections.forEach((item) => {
       const items = buckets[item.config.id] ?? [];
-      const groups = groupSuggestionsByContact(items);
+      const groups =
+        item.config.id === "meetings"
+          ? groupSuggestionsByContact(items)
+          : items.map((suggestion) => ({ items: [suggestion], ...suggestion }));
       const countEl = item.header.querySelector(".section-header__count");
       if (countEl) {
-        countEl.textContent = String(groups.length);
+        countEl.textContent = String(
+          item.config.id === "meetings" ? groups.length : items.length
+        );
       }
 
-      item.section.hidden = groups.length === 0;
-      if (groups.length > 0) {
+      item.section.hidden = items.length === 0;
+      if (items.length > 0) {
         visibleSections += 1;
       }
 
       item.cardList.replaceChildren();
-      renderSectionCards(item.cardList, items, handlers);
+      renderSectionCards(item.cardList, items, handlers, item.config.id);
     });
 
     emptyState.hidden = visibleSections > 0;
     if (!emptyState.hidden) {
       emptyState.replaceChildren(
         ...createEmptyState(
-          "No confirmed meeting plans right now.",
+          MEETINGS_REMINDERS_ONLY
+            ? "No confirmed meeting plans right now."
+            : "Inbox is clear — nothing needs a reply right now.",
           formatInboxHint(inboxStatus)
         ).childNodes
       );
