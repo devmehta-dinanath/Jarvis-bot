@@ -182,23 +182,20 @@ def _apply_forwarded_fallback(result: dict) -> dict:
     return classifier._silent_filter_result("forwarded", result.get("language"))
 
 
-def _apply_group_fallback(result: dict) -> dict:
+def _apply_group_fallback(
+    result: dict,
+    *,
+    body: str | None = None,
+    user_names: list[str] | None = None,
+) -> dict:
+    # Tag/name only — never surface untagged group meeting/payment/complaint via fallback.
+    if not meeting_scope.message_addresses_owner(body, user_names):
+        return classifier._silent_filter_result("group", result.get("language"))
     if result.get("category") in _GROUP_FALLBACK_SURFACE and result.get("is_important"):
         result = dict(result)
         result["priority"] = "high"
         return result
-    return {
-        "is_important": False,
-        "category": "group",
-        "priority": "low",
-        "payment_status": None,
-        "document_type": None,
-        "anger_level": None,
-        "shipment_status": None,
-        "language": result.get("language"),
-        "translation": None,
-        "summary": None,
-    }
+    return classifier._silent_filter_result("group", result.get("language"))
 
 
 def _short_date(value: datetime | None) -> str | None:
@@ -629,15 +626,20 @@ class WhatsAppService:
             db, message.contact_id, exclude_body=body, limit=20
         )
 
-        is_group = bool(getattr(message, "is_group", False))
+        contact = message.contact
+        is_group = meeting_scope.is_group_context(
+            message_is_group=bool(getattr(message, "is_group", False)),
+            contact_is_group=bool(contact.is_group) if contact is not None else False,
+            contact_wa_id=contact.wa_id if contact is not None else None,
+        )
         is_forwarded = bool(getattr(message, "is_forwarded", False))
         prior_count = repo.contact_prior_message_count(
             db, message.contact_id, exclude_message_id=message.id
         )
-        contact_name = message.contact.profile_name if message.contact is not None else None
+        contact_name = contact.profile_name if contact is not None else None
         is_known_sender = contact_name is not None
         is_personal_contact = bool(
-            message.contact is not None and message.contact.contact_type == "personal"
+            contact is not None and contact.contact_type == "personal"
         )
         instructions = [
             i.text for i in repo.list_instructions(db, active_only=True)
@@ -689,7 +691,18 @@ class WhatsAppService:
                 if is_forwarded:
                     result = _apply_forwarded_fallback(result)
                 elif is_group:
-                    result = _apply_group_fallback(result)
+                    result = _apply_group_fallback(
+                        result, body=body, user_names=WHATSAPP_USER_NAMES
+                    )
+
+        # Belt-and-suspenders: never create Inbox chips for untagged group messages,
+        # even if an older classifier path or fallback marked them important.
+        if (
+            is_group
+            and not result.get("safety_concern")
+            and not meeting_scope.message_addresses_owner(body, WHATSAPP_USER_NAMES)
+        ):
+            result = classifier._silent_filter_result("group", result.get("language"))
 
         category = result["category"]
         lane: str = result.get("lane") or (

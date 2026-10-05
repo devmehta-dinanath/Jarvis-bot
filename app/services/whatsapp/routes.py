@@ -382,7 +382,14 @@ def list_suggestions(
                     continue
             kept.append(suggestion)
         items = kept
-        total = len(kept) if offset == 0 else total
+
+    # Groups: only @tag / name mentions — hide leftover untagged chips from older builds.
+    if status == "pending" and items:
+        items = [
+            s for s in items if not wa_inbox._is_untagged_group_suggestion(db, s)
+        ]
+        if offset == 0:
+            total = len(items)
     return WhatsAppSuggestionListResponse(
         items=[_suggestion_response(s, db) for s in items],
         total=total,

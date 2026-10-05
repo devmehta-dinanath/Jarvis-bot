@@ -250,6 +250,7 @@ class RefreshPendingResponse(InboxStatusResponse):
     ok: bool
     reopened: int
     reclassified: int
+    dismissed_untagged_group: int = 0
 
 
 class UserInstructionResponse(BaseModel):

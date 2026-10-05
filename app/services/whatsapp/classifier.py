@@ -899,14 +899,9 @@ def classify_message(
     # not as an irrelevant group message, not as an instruction-skip. It always surfaces.
     safety_concern = bool(data.get("safety_concern", False))
     call_request = meeting_scope.looks_like_call_or_meeting_request(message)
-    # Prefer deterministic @name / name match when WHATSAPP_USER_NAMES is set so the
-    # LLM cannot reopen untagged group chatter via group_relevant=true.
-    if user_names:
-        owner_addressed = meeting_scope.message_addresses_owner(message, user_names)
-    else:
-        owner_addressed = bool(data.get("group_relevant", False)) or bool(
-            data.get("addressed", False)
-        )
+    # Deterministic @name / name match only — never trust the LLM's group_relevant
+    # or addressed flags for Inbox surfacing (they reopen untagged chatter).
+    owner_addressed = meeting_scope.message_addresses_owner(message, user_names)
 
     if instructions and bool(data.get("instruction_skip", False)) and not safety_concern:
         category = "instruction_skip"

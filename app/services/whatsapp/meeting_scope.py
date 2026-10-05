@@ -136,11 +136,12 @@ def looks_like_call_or_meeting_request(text: str | None) -> bool:
     return bool(_CALL_OR_MEETING_REQUEST_RE.search(body))
 
 
-<<<<<<< HEAD
 def message_addresses_owner(text: str | None, user_names: list[str] | None) -> bool:
     """True when the message @tags or clearly names the account owner.
 
     Used for group Inbox gating: only tagged/named messages surface (product rule).
+    Returns False when no aliases are configured — fail closed so untagged group
+    chatter cannot leak through an empty WHATSAPP_USER_NAMES.
     """
     body = (text or "").strip()
     if not body:
@@ -165,8 +166,31 @@ def message_addresses_owner(text: str | None, user_names: list[str] | None) -> b
     return False
 
 
-=======
->>>>>>> 20ba0ea (Unlock full WhatsApp action inbox and harden STEP 2 reply quality.)
+def is_group_context(
+    *,
+    message_is_group: bool = False,
+    contact_is_group: bool = False,
+    contact_wa_id: str | None = None,
+) -> bool:
+    """Resolve group-ness from message, contact, or WhatsApp JID."""
+    if message_is_group or contact_is_group:
+        return True
+    wa = (contact_wa_id or "").strip().lower()
+    return wa.endswith("@g.us") or wa.endswith("@newsletter")
+
+
+def group_chip_allowed(
+    text: str | None,
+    user_names: list[str] | None,
+    *,
+    safety_concern: bool = False,
+) -> bool:
+    """Whether a group message may create / remain as an Inbox chip."""
+    if safety_concern:
+        return True
+    return message_addresses_owner(text, user_names)
+
+
 def _message_is_acceptance(text: str | None) -> bool:
     body = (text or "").strip()
     if not body or len(body) > 120:
