@@ -382,7 +382,14 @@ def list_suggestions(
                     continue
             kept.append(suggestion)
         items = kept
-        total = len(kept) if offset == 0 else total
+
+    # Groups: only @tag / name mentions — hide leftover untagged chips from older builds.
+    if status == "pending" and items:
+        items = [
+            s for s in items if not wa_inbox._is_untagged_group_suggestion(db, s)
+        ]
+        if offset == 0:
+            total = len(items)
     return WhatsAppSuggestionListResponse(
         items=[_suggestion_response(s, db) for s in items],
         total=total,
@@ -723,12 +730,15 @@ def _suggestion_response(suggestion, db: Session | None = None) -> WhatsAppSugge
                 message_translation = message.translation
                 message_language = message.language
 
-    # Rule 9 timing (instant/30min/4-6h) governs when the DRAFTED REPLY is ready to show —
-    # the card/message itself is always listed as soon as it's classified (list_suggestions
-    # no longer filters on visible_after). Until the timer passes, hide draft_text so the UI
-    # renders it exactly like the existing "no draft yet" state (same as a low-confidence
-    # nudge) rather than inventing a new one.
-    draft_ready = suggestion.visible_after is None or suggestion.visible_after <= datetime.utcnow()
+    # Rule 9 timing used to hide draft_text until visible_after. With AI drafts enabled
+    # (STEP 2), always return the draft so Inbox shows a suggestion immediately.
+    from app.services.whatsapp.settings import WHATSAPP_AI_DRAFTS_ENABLED as _drafts_on
+
+    draft_ready = (
+        _drafts_on
+        or suggestion.visible_after is None
+        or suggestion.visible_after <= datetime.utcnow()
+    )
     draft_text = suggestion.draft_text if draft_ready else None
 
     # Rule 14 — Forward to team: show a one-tap Forward button only when an active rule

@@ -60,6 +60,7 @@ def inbox_status(db: Session) -> dict:
 
 def _insert_recovery_chip(db: Session, message: models.WhatsAppMessage) -> bool:
     """Create a meeting/nudge chip without re-running the LLM."""
+    from app.config import WHATSAPP_USER_NAMES
     from app.services.whatsapp import repository as wa_repo
 
     if not message.is_important:
@@ -68,6 +69,17 @@ def _insert_recovery_chip(db: Session, message: models.WhatsAppMessage) -> bool:
         return False
     if meeting_scope.MEETINGS_REMINDERS_ONLY and not meeting_scope.is_meeting_or_reminder(
         category=message.category
+    ):
+        return False
+    contact = message.contact
+    is_group = meeting_scope.is_group_context(
+        message_is_group=bool(getattr(message, "is_group", False)),
+        contact_is_group=bool(contact.is_group) if contact is not None else False,
+        contact_wa_id=contact.wa_id if contact is not None else None,
+    )
+    # Groups: never recover chips for untagged messages.
+    if is_group and not meeting_scope.message_addresses_owner(
+        message.body, WHATSAPP_USER_NAMES
     ):
         return False
 
@@ -95,6 +107,52 @@ def _insert_recovery_chip(db: Session, message: models.WhatsAppMessage) -> bool:
     return True
 
 
+def _is_untagged_group_suggestion(
+    db: Session, suggestion: models.WhatsAppSuggestion
+) -> bool:
+    """True when this pending chip is from a group and does not @tag / name the owner."""
+    from app.config import WHATSAPP_USER_NAMES
+
+    contact = db.get(models.WhatsAppContact, suggestion.contact_id)
+    if contact is None:
+        return False
+    is_group = meeting_scope.is_group_context(
+        contact_is_group=bool(contact.is_group),
+        contact_wa_id=contact.wa_id,
+    )
+    if not is_group:
+        return False
+    body = None
+    if suggestion.message_id is not None:
+        message = db.get(models.WhatsAppMessage, suggestion.message_id)
+        if message is not None:
+            body = message.body
+    return not meeting_scope.group_chip_allowed(body, WHATSAPP_USER_NAMES)
+
+
+def dismiss_untagged_group_pending(db: Session) -> int:
+    """Dismiss existing pending Inbox chips for untagged group messages."""
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(models.WhatsAppSuggestion.status == "pending")
+        .all()
+    )
+    now = datetime.utcnow()
+    dismissed = 0
+    for suggestion in pending:
+        if not _is_untagged_group_suggestion(db, suggestion):
+            continue
+        suggestion.status = "dismissed"
+        suggestion.resolved_at = now
+        dismissed += 1
+    if dismissed:
+        logger.info(
+            "[WHATSAPP] Auto-dismissed %s untagged group pending suggestion(s)",
+            dismissed,
+        )
+    return dismissed
+
+
 def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> dict:
     """Recover actionable cards that were marked done without a sent reply.
 
@@ -108,6 +166,8 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
     cutoff = datetime.utcnow() - timedelta(hours=lookback_hours)
     reopened = 0
     reclassified = 0
+    # Clear old untagged group chips left over before the tag-only rule shipped.
+    dismissed_untagged = dismiss_untagged_group_pending(db)
 
     latest_rows = (
         db.query(
@@ -151,6 +211,9 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
             if suggestion.status == "dismissed":
                 continue
             if suggestion.sent_message_id is not None:
+                continue
+            # Never reopen untagged group chips.
+            if _is_untagged_group_suggestion(db, suggestion):
                 continue
             # Only reopen "done" / other non-pending states that never sent a reply.
             suggestion.status = "pending"
@@ -205,5 +268,6 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
         "ok": True,
         "reopened": reopened,
         "reclassified": reclassified,
+        "dismissed_untagged_group": dismissed_untagged,
         **status,
     }

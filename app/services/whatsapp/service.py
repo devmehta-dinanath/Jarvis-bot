@@ -182,23 +182,20 @@ def _apply_forwarded_fallback(result: dict) -> dict:
     return classifier._silent_filter_result("forwarded", result.get("language"))
 
 
-def _apply_group_fallback(result: dict) -> dict:
+def _apply_group_fallback(
+    result: dict,
+    *,
+    body: str | None = None,
+    user_names: list[str] | None = None,
+) -> dict:
+    # Tag/name only — never surface untagged group meeting/payment/complaint via fallback.
+    if not meeting_scope.message_addresses_owner(body, user_names):
+        return classifier._silent_filter_result("group", result.get("language"))
     if result.get("category") in _GROUP_FALLBACK_SURFACE and result.get("is_important"):
         result = dict(result)
         result["priority"] = "high"
         return result
-    return {
-        "is_important": False,
-        "category": "group",
-        "priority": "low",
-        "payment_status": None,
-        "document_type": None,
-        "anger_level": None,
-        "shipment_status": None,
-        "language": result.get("language"),
-        "translation": None,
-        "summary": None,
-    }
+    return classifier._silent_filter_result("group", result.get("language"))
 
 
 def _short_date(value: datetime | None) -> str | None:
@@ -629,15 +626,20 @@ class WhatsAppService:
             db, message.contact_id, exclude_body=body, limit=20
         )
 
-        is_group = bool(getattr(message, "is_group", False))
+        contact = message.contact
+        is_group = meeting_scope.is_group_context(
+            message_is_group=bool(getattr(message, "is_group", False)),
+            contact_is_group=bool(contact.is_group) if contact is not None else False,
+            contact_wa_id=contact.wa_id if contact is not None else None,
+        )
         is_forwarded = bool(getattr(message, "is_forwarded", False))
         prior_count = repo.contact_prior_message_count(
             db, message.contact_id, exclude_message_id=message.id
         )
-        contact_name = message.contact.profile_name if message.contact is not None else None
+        contact_name = contact.profile_name if contact is not None else None
         is_known_sender = contact_name is not None
         is_personal_contact = bool(
-            message.contact is not None and message.contact.contact_type == "personal"
+            contact is not None and contact.contact_type == "personal"
         )
         instructions = [
             i.text for i in repo.list_instructions(db, active_only=True)
@@ -689,7 +691,18 @@ class WhatsAppService:
                 if is_forwarded:
                     result = _apply_forwarded_fallback(result)
                 elif is_group:
-                    result = _apply_group_fallback(result)
+                    result = _apply_group_fallback(
+                        result, body=body, user_names=WHATSAPP_USER_NAMES
+                    )
+
+        # Belt-and-suspenders: never create Inbox chips for untagged group messages,
+        # even if an older classifier path or fallback marked them important.
+        if (
+            is_group
+            and not result.get("safety_concern")
+            and not meeting_scope.message_addresses_owner(body, WHATSAPP_USER_NAMES)
+        ):
+            result = classifier._silent_filter_result("group", result.get("language"))
 
         category = result["category"]
         lane: str = result.get("lane") or (
@@ -757,6 +770,10 @@ class WhatsAppService:
             confidence is None or confidence < WHATSAPP_CHIP_CONFIDENCE_MIN
         ) and not (reads_as_personal and not is_urgent_category) and not has_precedent
 
+        # STEP 2: when AI drafts are on, still draft for low-confidence messages — surface
+        # with a "double-check" flag instead of an empty reply box.
+        suppress_draft_for_confidence = below_threshold and not WHATSAPP_AI_DRAFTS_ENABLED
+
         # Rule 9 — reply timing only now. Used to also gate on "known contact" (prior
         # message history) and a reply-cooldown, silently dropping a non-urgent message
         # entirely if either failed — calibrated for the old 7-day silent window, where a
@@ -766,7 +783,10 @@ class WhatsAppService:
         # complaint/lead ever got through, since those bypass it) — removed at the user's
         # request. Payment/complaint/lead/life-lane still surface instantly; everything
         # else just waits out its normal delay below instead of being suppressed.
-        bypasses_reply_rules = is_urgent_category or is_life_lane
+        # STEP 2: with AI drafts enabled, show drafts immediately (no 30min / 4-6h hold).
+        bypasses_reply_rules = (
+            is_urgent_category or is_life_lane or WHATSAPP_AI_DRAFTS_ENABLED
+        )
 
         if bypasses_reply_rules:
             delay = timedelta(0)
@@ -810,36 +830,37 @@ class WhatsAppService:
             # the time exactly like the normal flow, but — like every other silent-window
             # suggestion — sets no AI-drafted reply text; the owner's own tap on the
             # schedule button is the acceptance, not AI wording.
-            logger.info(
-                "[WHATSAPP] Message %s is a meeting request during the silent observation "
-                "window — surfacing schedule button, no AI draft", message.id,
-            )
-            try:
-                suggestion = self._create_silent_meeting_suggestion(
-                    db, message, history, body, priority, lane, confidence
-                )
-            except Exception:
-                logger.exception(
-                    "[WHATSAPP] Silent meeting suggestion failed for message %s — "
-                    "falling back to normal meeting chip",
-                    message.id,
-                )
-                suggestion = None
-            if suggestion is None and not repo.suggestion_exists_for_message(db, message.id):
+            # STEP 2: with AI drafts on, fall through to a normal drafted meeting chip.
+            if WHATSAPP_AI_DRAFTS_ENABLED:
                 suggestion = self._create_suggestion(
                     db, message, history, body, result, priority, instructions, corrections, voice_examples
                 )
-        elif in_silent_observation and (result["is_important"] or category == "greeting"):
-            # Rule 12 — silent tone-learning observation. Checked ahead of Rule 9
-            # (known-contact/cooldown gate) and the clarification/confidence gates
-            # deliberately: those all exist to decide whether an AI draft is trustworthy
-            # enough to show, but during this window there is no AI draft at all — every
-            # is_important/greeting message, including a brand-new contact's very first
-            # message, gets the same empty reply box. The point is to learn the owner's own
-            # tone, not contaminate it with AI wording, and to capture exactly the
-            # first-contact replies that matter most for that. Their own reply is saved as
-            # a normal outbound message either way, which is what feeds
-            # recent_outbound_examples/voice learning afterwards.
+            else:
+                logger.info(
+                    "[WHATSAPP] Message %s is a meeting request during the silent observation "
+                    "window — surfacing schedule button, no AI draft", message.id,
+                )
+                try:
+                    suggestion = self._create_silent_meeting_suggestion(
+                        db, message, history, body, priority, lane, confidence
+                    )
+                except Exception:
+                    logger.exception(
+                        "[WHATSAPP] Silent meeting suggestion failed for message %s — "
+                        "falling back to normal meeting chip",
+                        message.id,
+                    )
+                    suggestion = None
+                if suggestion is None and not repo.suggestion_exists_for_message(db, message.id):
+                    suggestion = self._create_suggestion(
+                        db, message, history, body, result, priority, instructions, corrections, voice_examples
+                    )
+        elif (
+            in_silent_observation
+            and (result["is_important"] or category == "greeting")
+            and not WHATSAPP_AI_DRAFTS_ENABLED
+        ):
+            # Rule 12 — silent tone-learning observation (only when AI drafts are off).
             logger.info(
                 "[WHATSAPP] Message %s in silent observation window (started %s, "
                 "category=%s) — surfacing with no AI draft for manual reply",
@@ -872,7 +893,7 @@ class WhatsAppService:
                     db, message, category, priority, confidence, lane,
                     result["clarifying_question"], result["clarifying_options"],
                 )
-        elif below_threshold:
+        elif suppress_draft_for_confidence:
             # No reply precedent for this contact+category and the AI itself isn't
             # confident about the category either — genuinely don't know how to respond,
             # so no draft (see has_reply_precedent above for what exempts this).
@@ -884,10 +905,12 @@ class WhatsAppService:
             suggestion = self._create_unconfident_suggestion(
                 db, message, category, priority, confidence, lane
             )
-        elif result["is_important"]:
+        elif result["is_important"] or (below_threshold and WHATSAPP_AI_DRAFTS_ENABLED):
             suggestion = self._create_suggestion(
                 db, message, history, body, result, priority, instructions, corrections, voice_examples
             )
+            if below_threshold and WHATSAPP_AI_DRAFTS_ENABLED:
+                needs_review_reason = "Low confidence — please double-check before sending"
         elif category == "greeting":
             suggestion = self._create_greeting_suggestion(
                 db, message, history, body, result, instructions, corrections, voice_examples
@@ -2348,6 +2371,34 @@ class WhatsAppService:
                     if is_urgent_wait
                     else f"Reminder: you said you'd send {display_name} — {commitment.label}"
                 )
+                draft = None
+                if WHATSAPP_AI_DRAFTS_ENABLED:
+                    instructions = [
+                        i.text for i in repo.list_instructions(db, active_only=True)
+                    ]
+                    voice_examples = repo.recent_outbound_examples(
+                        db,
+                        personal=False,
+                        contact_id=commitment.contact_id,
+                        category="follow_up",
+                    )
+                    try:
+                        draft = classifier.draft_owner_commitment_message(
+                            commitment.label,
+                            contact_name=display_name,
+                            instructions=instructions or None,
+                            voice_examples=voice_examples or None,
+                        )
+                    except WhatsAppAIError:
+                        logger.warning(
+                            "[WHATSAPP] OpenAI draft failed for owner commitment %s — "
+                            "using fallback text",
+                            commitment.id,
+                        )
+                        draft = (
+                            f"Hi — following up on {commitment.label.lower()} I mentioned. "
+                            f"Sharing an update shortly."
+                        )
                 repo.create_suggestion(
                     db,
                     contact_id=commitment.contact_id,
@@ -2356,7 +2407,7 @@ class WhatsAppService:
                     category="pending_commitment",
                     priority=priority,
                     lane="work",
-                    draft_text=None,
+                    draft_text=draft,
                     details={
                         "chip_label": chip_label,
                         "commitment_label": commitment.label,

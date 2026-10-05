@@ -447,18 +447,15 @@ def _group_system(user_names: list[str] | None) -> str:
     return (
         _CLASSIFY_SYSTEM
         + "\n\nGROUP CHAT MODE: This message arrived in a WhatsApp GROUP, not a direct chat. "
-        "Apply STRICT filtering. Set group_relevant=true if EITHER: "
-        f"(1) the message directly names/addresses the account owner ({names}) — e.g. '@{names}', "
-        f"'hey {names}', or a reply/question clearly directed at them by name; OR "
-        "(2) the message is a clear call/meeting request aimed at someone who can act "
-        "(e.g. 'Please call me', 'call me', 'can we talk?', 'let's meet', 'schedule a call') — "
-        "treat those as group_relevant=true and category=meeting even without an @mention. "
-        "A payment or other urgent topic without naming the owner or a call/meeting ask is "
-        "NOT enough — set group_relevant=false. "
-        "For all other group chatter (general discussion, news, banter, messages aimed at other "
-        "people), set group_relevant=false and is_important=false. "
-        "Also set addressed=true if the owner is directly named/mentioned OR it is a call/"
-        "meeting request as above, else false — group_relevant must equal addressed exactly. "
+        "Apply STRICT tag-only filtering. Set group_relevant=true ONLY if the message "
+        f"directly tags or names the account owner ({names}) — e.g. '@{names}', "
+        f"'hey {names}', or a question clearly directed at them by name/mention. "
+        "Call/meeting asks, payments, RFQs, and other topics WITHOUT naming/tagging the "
+        "owner are NOT enough — set group_relevant=false and is_important=false. "
+        "For all other group chatter (general discussion, news, banter, messages aimed at "
+        "other people), set group_relevant=false and is_important=false. "
+        "Also set addressed=true only when the owner is directly named/mentioned; "
+        "group_relevant must equal addressed exactly. "
         "Add both keys 'group_relevant' (boolean) and 'addressed' (boolean) to the JSON."
     )
 
@@ -689,6 +686,16 @@ _CLIENT_NUDGE_SYSTEM = (
     "Do not sound automated, pushy, or passive-aggressive. One or two short sentences."
 )
 
+_OWNER_COMMITMENT_DRAFT_SYSTEM = (
+    "You draft a short WhatsApp message the account owner can send to a client about "
+    "something the OWNER previously promised to send or do (e.g. packing list, quote, "
+    "document, pricing). Write as if the owner is following through or giving a quick "
+    "status update — natural, concise, WhatsApp tone. Match Roman Hinglish vs English "
+    "from typical B2B WhatsApp style when unsure. Do not invent that a file is attached "
+    "unless the promise itself is only a verbal update. One or two short sentences. "
+    "Return ONLY the message text, no preamble, no quotes."
+)
+
 
 def draft_commitment_nudge(
     label: str,
@@ -708,6 +715,28 @@ def draft_commitment_nudge(
     )
     system = (
         _CLIENT_NUDGE_SYSTEM
+        + _tone_instructions_block(instructions)
+        + _voice_examples_block(voice_examples)
+    )
+    return _chat(system, user_content, max_tokens=120, json_mode=False).strip()
+
+
+def draft_owner_commitment_message(
+    label: str,
+    *,
+    contact_name: str | None = None,
+    instructions: list[str] | None = None,
+    voice_examples: list[str] | None = None,
+) -> str:
+    """Draft the owner can send when reminded about their own open promise
+    (WhatsAppCommitment.direction == 'owner')."""
+    who = contact_name or "the client"
+    user_content = (
+        f"You previously told {who} you'd handle: \"{label}\"\n\n"
+        "Write the WhatsApp message to send them now (follow-through or short status):"
+    )
+    system = (
+        _OWNER_COMMITMENT_DRAFT_SYSTEM
         + _tone_instructions_block(instructions)
         + _voice_examples_block(voice_examples)
     )
@@ -870,6 +899,9 @@ def classify_message(
     # not as an irrelevant group message, not as an instruction-skip. It always surfaces.
     safety_concern = bool(data.get("safety_concern", False))
     call_request = meeting_scope.looks_like_call_or_meeting_request(message)
+    # Deterministic @name / name match only — never trust the LLM's group_relevant
+    # or addressed flags for Inbox surfacing (they reopen untagged chatter).
+    owner_addressed = meeting_scope.message_addresses_owner(message, user_names)
 
     if instructions and bool(data.get("instruction_skip", False)) and not safety_concern:
         category = "instruction_skip"
@@ -881,21 +913,22 @@ def classify_message(
         if category in FILTER_LABELS:
             return _silent_filter_result(category, detected_language)
 
-        # Clear "please call me" / call asks still surface in groups even without @mention.
+        # Groups: tag/name only. Untagged call/meet/RFQ chatter stays silent.
+        if is_group and not owner_addressed:
+            return _silent_filter_result("group", detected_language)
+
         if call_request:
             category = "meeting"
-        elif is_group and not bool(data.get("group_relevant", False)):
-            return _silent_filter_result("group", detected_language)
 
     is_important = bool(data.get("is_important", False))
     if safety_concern:
         is_important = True
-    if call_request:
+    if call_request and (not is_group or owner_addressed):
         is_important = True
         category = "meeting"
     if category in ALWAYS_IMPORTANT and category in CATEGORIES:
         is_important = True
-    if is_group:
+    if is_group and owner_addressed:
         is_important = True
     if not is_important:
         category = "greeting"
