@@ -136,6 +136,34 @@ def looks_like_call_or_meeting_request(text: str | None) -> bool:
     return bool(_CALL_OR_MEETING_REQUEST_RE.search(body))
 
 
+def message_addresses_owner(text: str | None, user_names: list[str] | None) -> bool:
+    """True when the message @tags or clearly names the account owner.
+
+    Used for group Inbox gating: only tagged/named messages surface (product rule).
+    """
+    body = (text or "").strip()
+    if not body:
+        return False
+    names = [str(n).strip() for n in (user_names or []) if str(n).strip()]
+    if not names:
+        return False
+    for raw in names:
+        token = raw.lstrip("@").strip()
+        if not token:
+            continue
+        # Phone / digit-only aliases
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if len(digits) >= 8 and digits in "".join(ch for ch in body if ch.isdigit()):
+            return True
+        # @Name or Name as a whole word (case-insensitive)
+        escaped = re.escape(token)
+        if re.search(rf"(?i)(?:^|[^\w])@{escaped}\b", body):
+            return True
+        if re.search(rf"(?i)(?:^|[^\w]){escaped}(?:[^\w]|$)", body):
+            return True
+    return False
+
+
 def _message_is_acceptance(text: str | None) -> bool:
     body = (text or "").strip()
     if not body or len(body) > 120:

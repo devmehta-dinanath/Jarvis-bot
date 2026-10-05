@@ -60,6 +60,7 @@ def inbox_status(db: Session) -> dict:
 
 def _insert_recovery_chip(db: Session, message: models.WhatsAppMessage) -> bool:
     """Create a meeting/nudge chip without re-running the LLM."""
+    from app.config import WHATSAPP_USER_NAMES
     from app.services.whatsapp import repository as wa_repo
 
     if not message.is_important:
@@ -68,6 +69,11 @@ def _insert_recovery_chip(db: Session, message: models.WhatsAppMessage) -> bool:
         return False
     if meeting_scope.MEETINGS_REMINDERS_ONLY and not meeting_scope.is_meeting_or_reminder(
         category=message.category
+    ):
+        return False
+    # Groups: never recover chips for untagged messages.
+    if getattr(message, "is_group", False) and not meeting_scope.message_addresses_owner(
+        message.body, WHATSAPP_USER_NAMES
     ):
         return False
 
