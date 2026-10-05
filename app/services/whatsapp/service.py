@@ -2358,6 +2358,34 @@ class WhatsAppService:
                     if is_urgent_wait
                     else f"Reminder: you said you'd send {display_name} — {commitment.label}"
                 )
+                draft = None
+                if WHATSAPP_AI_DRAFTS_ENABLED:
+                    instructions = [
+                        i.text for i in repo.list_instructions(db, active_only=True)
+                    ]
+                    voice_examples = repo.recent_outbound_examples(
+                        db,
+                        personal=False,
+                        contact_id=commitment.contact_id,
+                        category="follow_up",
+                    )
+                    try:
+                        draft = classifier.draft_owner_commitment_message(
+                            commitment.label,
+                            contact_name=display_name,
+                            instructions=instructions or None,
+                            voice_examples=voice_examples or None,
+                        )
+                    except WhatsAppAIError:
+                        logger.warning(
+                            "[WHATSAPP] OpenAI draft failed for owner commitment %s — "
+                            "using fallback text",
+                            commitment.id,
+                        )
+                        draft = (
+                            f"Hi — following up on {commitment.label.lower()} I mentioned. "
+                            f"Sharing an update shortly."
+                        )
                 repo.create_suggestion(
                     db,
                     contact_id=commitment.contact_id,
@@ -2366,7 +2394,7 @@ class WhatsAppService:
                     category="pending_commitment",
                     priority=priority,
                     lane="work",
-                    draft_text=None,
+                    draft_text=draft,
                     details={
                         "chip_label": chip_label,
                         "commitment_label": commitment.label,

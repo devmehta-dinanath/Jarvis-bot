@@ -689,6 +689,16 @@ _CLIENT_NUDGE_SYSTEM = (
     "Do not sound automated, pushy, or passive-aggressive. One or two short sentences."
 )
 
+_OWNER_COMMITMENT_DRAFT_SYSTEM = (
+    "You draft a short WhatsApp message the account owner can send to a client about "
+    "something the OWNER previously promised to send or do (e.g. packing list, quote, "
+    "document, pricing). Write as if the owner is following through or giving a quick "
+    "status update — natural, concise, WhatsApp tone. Match Roman Hinglish vs English "
+    "from typical B2B WhatsApp style when unsure. Do not invent that a file is attached "
+    "unless the promise itself is only a verbal update. One or two short sentences. "
+    "Return ONLY the message text, no preamble, no quotes."
+)
+
 
 def draft_commitment_nudge(
     label: str,
@@ -708,6 +718,28 @@ def draft_commitment_nudge(
     )
     system = (
         _CLIENT_NUDGE_SYSTEM
+        + _tone_instructions_block(instructions)
+        + _voice_examples_block(voice_examples)
+    )
+    return _chat(system, user_content, max_tokens=120, json_mode=False).strip()
+
+
+def draft_owner_commitment_message(
+    label: str,
+    *,
+    contact_name: str | None = None,
+    instructions: list[str] | None = None,
+    voice_examples: list[str] | None = None,
+) -> str:
+    """Draft the owner can send when reminded about their own open promise
+    (WhatsAppCommitment.direction == 'owner')."""
+    who = contact_name or "the client"
+    user_content = (
+        f"You previously told {who} you'd handle: \"{label}\"\n\n"
+        "Write the WhatsApp message to send them now (follow-through or short status):"
+    )
+    system = (
+        _OWNER_COMMITMENT_DRAFT_SYSTEM
         + _tone_instructions_block(instructions)
         + _voice_examples_block(voice_examples)
     )
