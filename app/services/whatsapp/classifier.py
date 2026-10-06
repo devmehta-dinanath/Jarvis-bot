@@ -224,19 +224,21 @@ _CLASSIFY_SYSTEM = (
     "- SPAM: if the message is clearly promotional, prize/lottery/offer spam, bulk broadcast, "
     "or sent by an unknown number with no conversation history and no legitimate business intent, "
     "set category='spam' and is_important=false. Never surface spam as an action item.\n"
-    "- CLARIFYING QUESTIONS: this is RARE — most messages should NOT trigger it. Only set "
-    "needs_clarification=true when the message could concretely mean 2-3 SPECIFIC, materially "
-    "different things — e.g. the conversation history already mentions two distinct orders/"
-    "shipments/dates/topics, and this message doesn't say which one it's about, so a drafted "
-    "reply would genuinely risk answering about the wrong one. Do NOT use it for ordinary wording "
-    "uncertainty, a single topic with unclear phrasing, or whenever you'd otherwise just use a "
-    "medium confidence score — in those cases classify normally instead. When you do use it: "
-    "clarifying_question is ONE short question (under 12 words) naming the real ambiguity, and "
-    "clarifying_options is a list of 2-3 SHORT (2-5 word) tap-friendly answers drawn from what's "
-    "concretely in the conversation (e.g. 'April shipment', 'May shipment'), optionally ending "
-    "with a catch-all like 'Not sure' — never something requiring the user to type. When "
-    "needs_clarification is true, set confidence low (this is explicitly the low-confidence case) "
-    "and leave clarifying_question/clarifying_options non-null; otherwise both must be null.\n"
+    "- CLARIFYING QUESTIONS: set needs_clarification=true in TWO cases only: "
+    "(A) Ambiguous referent — the message could mean 2-3 SPECIFIC, materially different things "
+    "already in history (e.g. two distinct orders/shipments), so a draft would risk answering "
+    "the wrong one. "
+    "(B) Missing owner-only fact — the client asks for a date, price, stock ETA, invoice number, "
+    "or similar private detail that is NOT present anywhere in the conversation history "
+    "(e.g. 'When will the stock arrive?' with no arrival date in the thread). In that case do "
+    "NOT invent the fact; ask the owner first. "
+    "Do NOT use clarification for ordinary wording uncertainty, greetings, or when the needed "
+    "fact IS already in the thread (then draft normally using that fact). When you do use it: "
+    "clarifying_question is ONE short question (under 12 words), and clarifying_options is a "
+    "list of 2-3 SHORT (2-5 word) tap-friendly answers (e.g. 'Friday', 'Next week', 'Not sure') "
+    "— never something requiring the user to type free-form. When needs_clarification is true, "
+    "set confidence low and leave clarifying_question/clarifying_options non-null; otherwise "
+    "both must be null.\n"
     "- LIFE LANE vs WORK LANE: this system has two lanes that feel completely different to the user. "
     "WORK LANE (meeting, payment, lead, document, complaint, shipment, budget, scope, timeline, "
     "follow_up, other) — these produce urgent chips with business tone, draft replies, and "
@@ -476,7 +478,10 @@ _REPLY_SYSTEM = (
     "If 'Me:' speaks formally with a corporate client, match that professional tone. "
     "If there are no past 'Me:' messages yet, mirror the contact's own level of formality, brevity, and language style.\n"
     "3. CONCISE & NATURAL: WhatsApp messages are conversational. Avoid corporate customer-support fluff (do NOT say 'Thank you for reaching out' or 'I hope this message finds you well' unless the user writes like that).\n"
-    "4. ACCURACY: Do not invent facts, prices, or commitments; if information is needed, ask for it or say you will confirm shortly.\n"
+    "4. ACCURACY (HARD): Never invent dates, prices, stock availability, ETAs, invoice numbers, "
+    "quantities, or other business facts. Only use details that appear in the conversation "
+    "history or the user's clarifying answer. If a needed fact is missing, do not guess — "
+    "ask a short clarifying question or say you will confirm (without inventing the fact).\n"
     "5. NO UNNECESSARY REPETITION: Check the 'Me:' lines in the recent conversation before writing: if you already said this same thing (already promised to check and get back, already gave this exact update), do NOT repeat it near-verbatim. Treat a repeated message as a follow-up nudge — give a fresh status or acknowledge you're still on it.\n"
     "Return ONLY the plain reply text, no preamble, no quotes."
 )
@@ -563,40 +568,79 @@ def _now_context_line() -> str:
 
 
 _COMMITMENT_SYSTEM = (
-    "You analyze a business message the ACCOUNT OWNER just sent to a client on WhatsApp. "
-    "Decide whether this message makes a NEW commitment to send or do something for the "
-    "client that is NOT already done in the message itself — e.g. 'I'll send you the price "
-    "list', 'Let me get you the details', 'I will share the invoice shortly', 'I'll confirm "
-    "and send the documents tomorrow'. "
-    "Do NOT treat it as a commitment if the message already delivers the thing right there "
-    "(e.g. it contains the actual price/quote, or is just answering a question with the "
-    "answer included) — only a promise of FUTURE action counts. Small talk, greetings, and "
-    "messages with no promise at all are never commitments. "
+    "You analyze a business message the ACCOUNT OWNER just sent to a client on WhatsApp, "
+    "using the recent conversation (especially the client's last inbound request). "
+    "Decide whether this outbound message makes a NEW commitment to send or do something "
+    "that is NOT already done in the message itself. "
+    "Examples that ARE commitments: "
+    "'I'll send the documents tomorrow', 'Will call you on Monday', 'Kal bhejta hoon', "
+    "'Let me check and revert', 'I will share the invoice shortly'. "
+    "ACK-AFTER-REQUEST: a short acknowledgement like 'Ok', 'Sure', 'Haan', 'Done' IS a "
+    "commitment ONLY when the immediately prior client message clearly asked the owner to "
+    "do something (e.g. client: 'Please send the COA by Friday' → owner: 'Ok' → commitment "
+    "to send the COA by Friday). An isolated 'Ok' after small talk ('How are you?' → 'Ok') "
+    "is NOT a commitment. "
+    "Do NOT treat it as a commitment if the message already delivers the thing, is only "
+    "answering a question with the answer included, or is greeting/small-talk with no promise. "
     f"{_DEADLINE_HINT_INSTRUCTION} "
+    "When the commitment comes from accepting a client request that named a deadline "
+    "('by Friday'), use that deadline. "
     "Respond ONLY with a JSON object with keys: "
     "is_commitment (boolean), "
     "commitment_type ('pricing', 'document', 'other', or null — null if is_commitment is "
     "false; 'pricing' for a quote/cost/budget promise, 'document' for a file/invoice/"
-    "catalogue/report promise, 'other' for anything else), "
-    "label (a short description of what was promised, e.g. 'Send price list', 'Share the "
-    "invoice', or null if is_commitment is false), "
+    "catalogue/report/COA promise, 'other' for anything else), "
+    "label (a short description of what was promised, e.g. 'Send documents', 'Send COA', "
+    "'Check and revert', or null if is_commitment is false), "
     "deadline_at (ISO 8601 datetime string for when they said they'd do it, else null)."
 )
 
 
-def detect_commitment(message: str) -> dict[str, Any]:
-    """Does this outbound message promise the client something not yet delivered?"""
+def detect_commitment(
+    message: str,
+    *,
+    history: list[dict[str, str]] | None = None,
+    last_inbound: str | None = None,
+) -> dict[str, Any]:
+    """Does this outbound message promise the client something not yet delivered?
+
+    Pass conversation context so 'Ok' after a client request can be detected.
+    Isolated 'Ok' after small talk is hard-blocked without calling the model.
+    """
+    from app.services.whatsapp import product_gates
+
+    ack_gate = product_gates.owner_ack_creates_commitment(message, last_inbound)
+    if ack_gate is False:
+        return {
+            "is_commitment": False,
+            "commitment_type": None,
+            "label": None,
+            "deadline_at": None,
+        }
+
+    context_bits: list[str] = []
+    if history:
+        context_bits.append("Recent conversation:\n" + _history_block(history))
+    if last_inbound:
+        context_bits.append(f"Client's last inbound message:\n{last_inbound}")
+    context_bits.append(f"Message the account owner just sent:\n{message}")
     user_content = (
-        f"{_now_context_line()}Message the account owner just sent:\n{message}\n\n"
-        "Analyze as JSON:"
+        f"{_now_context_line()}" + "\n\n".join(context_bits) + "\n\nAnalyze as JSON:"
     )
-    data = _chat_json(_COMMITMENT_SYSTEM, user_content, max_tokens=140)
-    return {
+    data = _chat_json(_COMMITMENT_SYSTEM, user_content, max_tokens=160)
+    result = {
         "is_commitment": bool(data.get("is_commitment", False)),
         "commitment_type": (data.get("commitment_type") or "").strip().lower() or None,
         "label": (data.get("label") or "").strip() or None,
         "deadline_at": (data.get("deadline_at") or "").strip() or None,
     }
+    # Ack after a clear request: if the model hedges false, still treat as commitment
+    # using the request text (label/deadline come from the model when present).
+    if ack_gate is True and not result["is_commitment"]:
+        result["is_commitment"] = True
+        result["commitment_type"] = result["commitment_type"] or "document"
+        result["label"] = result["label"] or "Follow through on their request"
+    return result
 
 
 _FULFILLMENT_SYSTEM = (
@@ -625,10 +669,12 @@ _CLIENT_COMMITMENT_SYSTEM = (
     "whether this message makes a NEW commitment to send or do something for the account "
     "owner that is NOT already done in the message itself — e.g. 'I'll send the payment "
     "proof in 2 hours', 'I'll get you the signed contract tomorrow', 'let me confirm and "
-    "get back to you by Friday'. "
+    "get back to you by Friday', 'I'll confirm tomorrow'. "
     "Do NOT treat it as a commitment if the message already delivers the thing right there, "
-    "is just a question, or is a vague acknowledgement ('ok', 'noted', 'sure') with no "
-    "actual promise — only a promise of FUTURE action from the client counts. "
+    "is just a question, is a greeting/small-talk, is an immediate 'abhi'/'right now'/'send "
+    "now' demand (those are urgent asks, not future promises), or is a vague acknowledgement "
+    "('ok', 'noted', 'sure') with no actual promise — only a promise of FUTURE action from "
+    "the client counts. "
     f"{_DEADLINE_HINT_INSTRUCTION} "
     "Respond ONLY with a JSON object with keys: "
     "is_commitment (boolean), "
@@ -991,6 +1037,25 @@ def classify_message(
         clarifying_question = None
         clarifying_options = None
 
+    # Deterministic gate: owner-only facts missing from the thread → clarify, never invent.
+    from app.services.whatsapp import product_gates
+
+    if (
+        is_important
+        and not needs_clarification
+        and not safety_concern
+        and product_gates.should_clarify_missing_owner_fact(message, history)
+    ):
+        needs_clarification = True
+        clarifying_question = clarifying_question or "What should I tell them?"
+        clarifying_options = clarifying_options or [
+            "Share the date",
+            "Still checking",
+            "Not sure",
+        ]
+        if confidence is None or confidence > 60:
+            confidence = 40
+
     return {
         "is_important": is_important,
         "category": category,
@@ -1090,9 +1155,9 @@ def draft_reply(
             "invent a specific date you can't commit to."
         ),
         "greeting": (
-            "This is a casual/greeting message — there is no task to action. Reply warmly and "
-            "briefly in a friendly tone that matches the client's message (including festival or "
-            "well-wishing greetings). Keep it to one or two short sentences."
+            "This is a casual/greeting or festival message — do NOT draft a business reply. "
+            "If you must produce text, keep it empty-feeling and never invent business facts. "
+            "Prefer no reply at all for bare hi/hello/festival wishes."
         ),
     }.get(category, "Respond helpfully to the client's query.")
 

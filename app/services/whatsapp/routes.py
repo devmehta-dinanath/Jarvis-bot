@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
@@ -653,6 +653,29 @@ def dismiss_all_suggestions(db: Session = Depends(get_db)) -> DismissAllResponse
     return DismissAllResponse(dismissed=dismissed)
 
 
+def _suggestion_details(suggestion) -> dict:
+    raw = suggestion.details
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+def _commitment_id_from_suggestion(suggestion) -> int | None:
+    details = _suggestion_details(suggestion)
+    raw = details.get("commitment_id")
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/suggestions/{suggestion_id}/dismiss", response_model=WhatsAppSuggestionResponse)
 def dismiss_suggestion(
     suggestion_id: int,
@@ -661,8 +684,63 @@ def dismiss_suggestion(
     suggestion = repo.get_suggestion(db, suggestion_id)
     if suggestion is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
+    # Dismiss stops further reminders for linked commitments (fulfill so they don't reappear).
+    commitment_id = _commitment_id_from_suggestion(suggestion)
+    if commitment_id is not None:
+        repo.fulfill_commitment(db, commitment_id)
+        repo.dismiss_commitment_suggestions(db, commitment_id)
     suggestion.status = "dismissed"
     suggestion.resolved_at = datetime.utcnow()
+    db.commit()
+    db.refresh(suggestion)
+    return _suggestion_response(suggestion, db)
+
+
+@router.post("/suggestions/{suggestion_id}/done", response_model=WhatsAppSuggestionResponse)
+def mark_suggestion_done(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+) -> WhatsAppSuggestionResponse:
+    """Done / Mark done — fulfill linked commitment and dismiss the card."""
+    suggestion = repo.get_suggestion(db, suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
+    commitment_id = _commitment_id_from_suggestion(suggestion)
+    if commitment_id is not None:
+        repo.fulfill_commitment(db, commitment_id)
+        repo.dismiss_commitment_suggestions(db, commitment_id)
+    suggestion.status = "done"
+    suggestion.resolved_at = datetime.utcnow()
+    db.commit()
+    db.refresh(suggestion)
+    return _suggestion_response(suggestion, db)
+
+
+@router.post("/suggestions/{suggestion_id}/snooze", response_model=WhatsAppSuggestionResponse)
+def snooze_suggestion(
+    suggestion_id: int,
+    hours: int = Query(default=24, ge=1, le=168),
+    db: Session = Depends(get_db),
+) -> WhatsAppSuggestionResponse:
+    """Snooze / Remind me later — postpone and hide the current chip."""
+    suggestion = repo.get_suggestion(db, suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
+    commitment_id = _commitment_id_from_suggestion(suggestion)
+    now = datetime.utcnow()
+    if commitment_id is not None:
+        commitment = db.get(models.WhatsAppCommitment, commitment_id)
+        if commitment is not None and commitment.fulfilled_at is None:
+            base = commitment.deadline_at or now
+            if base < now:
+                base = now
+            commitment.deadline_at = base + timedelta(hours=hours)
+            commitment.last_reminded_at = now
+    suggestion.status = "dismissed"
+    suggestion.resolved_at = now
+    details = _suggestion_details(suggestion)
+    details["snoozed_until"] = (now + timedelta(hours=hours)).isoformat()
+    suggestion.details = json.dumps(details)
     db.commit()
     db.refresh(suggestion)
     return _suggestion_response(suggestion, db)

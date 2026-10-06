@@ -349,9 +349,13 @@ def pending_followup_nudge_exists(db: Session, contact_id: int) -> bool:
 
 
 def pending_owner_followup_exists(db: Session, contact_id: int) -> bool:
-    """One owner→them ghost follow-up per silence window since last_replied_at."""
+    """True when an owner→them follow-up already covers this silence window.
+
+    Dismiss / Mark done block regeneration until the owner sends again.
+    Remind-me-later (snooze) blocks only until snoozed_until expires.
+    """
     contact = db.get(models.WhatsAppContact, contact_id)
-    query = db.query(models.WhatsAppSuggestion.id).filter(
+    query = db.query(models.WhatsAppSuggestion).filter(
         models.WhatsAppSuggestion.contact_id == contact_id,
         models.WhatsAppSuggestion.kind == "owner_followup_nudge",
     )
@@ -359,7 +363,99 @@ def pending_owner_followup_exists(db: Session, contact_id: int) -> bool:
         query = query.filter(
             models.WhatsAppSuggestion.created_at >= contact.last_replied_at
         )
-    return query.first() is not None
+    now = datetime.utcnow()
+    for suggestion in query.all():
+        if suggestion.status == "pending":
+            return True
+        details: dict = {}
+        raw = suggestion.details
+        if isinstance(raw, dict):
+            details = raw
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    details = parsed
+            except (TypeError, ValueError, json.JSONDecodeError):
+                details = {}
+        snoozed_until = details.get("snoozed_until")
+        if snoozed_until:
+            try:
+                until = datetime.fromisoformat(str(snoozed_until).replace("Z", "+00:00"))
+                if until.tzinfo is not None:
+                    until = until.replace(tzinfo=None)
+                if until > now:
+                    return True
+                # Snooze expired — allow a fresh Waiting-on card.
+                continue
+            except (TypeError, ValueError):
+                return True
+        # Dismiss / Mark done without snooze — do not resurface this silence window.
+        return True
+    return False
+
+
+def dismiss_waiting_on_followups_for_contact(db: Session, contact_id: int) -> int:
+    """Clear Waiting-on chips when the other person replies (C5 / promise engagement).
+
+    Also pauses open client commitments so the same follow-up is not re-raised
+    immediately after the reply.
+    """
+    now = datetime.utcnow()
+    waiting_kinds = ("owner_followup_nudge", "client_commitment_reminder")
+    updated = 0
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.contact_id == contact_id,
+            models.WhatsAppSuggestion.status == "pending",
+            models.WhatsAppSuggestion.kind.in_(waiting_kinds),
+        )
+        .all()
+    )
+    for suggestion in pending:
+        suggestion.status = "dismissed"
+        suggestion.resolved_at = now
+        updated += 1
+
+    # Reset reminder clock on open client promises so chips do not instantly return.
+    open_client = (
+        db.query(models.WhatsAppCommitment)
+        .filter(
+            models.WhatsAppCommitment.contact_id == contact_id,
+            models.WhatsAppCommitment.direction == "client",
+            models.WhatsAppCommitment.fulfilled_at.is_(None),
+        )
+        .all()
+    )
+    for commitment in open_client:
+        commitment.last_reminded_at = now
+
+    if updated or open_client:
+        db.flush()
+    return updated
+
+
+def dismiss_awaiting_owner_reply_for_contact(db: Session, contact_id: int) -> int:
+    """Clear 'you haven't replied' chips when the owner answers (C6)."""
+    now = datetime.utcnow()
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.contact_id == contact_id,
+            models.WhatsAppSuggestion.status == "pending",
+            models.WhatsAppSuggestion.kind == "followup_nudge",
+        )
+        .all()
+    )
+    updated = 0
+    for suggestion in pending:
+        suggestion.status = "dismissed"
+        suggestion.resolved_at = now
+        updated += 1
+    if updated:
+        db.flush()
+    return updated
 
 
 def latest_message_for_contact(
@@ -405,6 +501,8 @@ _SUPERSEDEABLE_KINDS = frozenset(
         "scope",
         "other",
         "safety",
+        "commitment_reminder",
+        "client_commitment_reminder",
     }
 )
 
@@ -542,39 +640,74 @@ def fulfill_commitment(db: Session, commitment_id: int) -> None:
         commitment.fulfilled_at = datetime.utcnow()
 
 
+def dismiss_commitment_suggestions(db: Session, commitment_id: int) -> int:
+    """Dismiss open Inbox chips tied to this commitment (by details.commitment_id)."""
+    now = datetime.utcnow()
+    updated = 0
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(models.WhatsAppSuggestion.status == "pending")
+        .all()
+    )
+    needle = f'"commitment_id": {commitment_id}'
+    needle2 = f'"commitment_id":{commitment_id}'
+    for suggestion in pending:
+        raw = suggestion.details or ""
+        if isinstance(raw, dict):
+            details = raw
+        else:
+            try:
+                details = json.loads(raw) if raw else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                details = {}
+        if not isinstance(details, dict):
+            continue
+        if details.get("commitment_id") == commitment_id or needle in str(raw) or needle2 in str(raw):
+            suggestion.status = "dismissed"
+            suggestion.resolved_at = now
+            updated += 1
+    if updated:
+        db.flush()
+    return updated
+
+
 def commitments_awaiting_reminder(
     db: Session,
     *,
     direction: str = "owner",
     flag_hours: float,
     reminder_interval_hours: float,
+    allow_no_deadline_fallback: bool = True,
 ) -> list[models.WhatsAppCommitment]:
-    """Unfulfilled commitments in this direction that are due for a reminder, and
-    haven't been reminded about recently. "Due" means: past the deadline actually
-    extracted from the promise text ('in 2 hours', 'by Friday') when there was one —
-    otherwise past the generic flag_hours fallback from when the promise was made.
-    last_reminded_at (not the created suggestion) is the dedup source of truth — a
-    reminder chip can get dismissed by an unrelated later reply, but the underlying
-    promise is still open and due to be re-flagged."""
+    """Unfulfilled commitments due for a reminder.
+
+    Owner promises without an explicit timeframe are assigned a Morning Brief
+    deadline_at at create time — so owner path should pass
+    allow_no_deadline_fallback=False (no 24h surprise chip).
+    """
     now = datetime.utcnow()
     fallback_cutoff = now - timedelta(hours=flag_hours)
     reminder_cutoff = now - timedelta(hours=reminder_interval_hours)
+    due_clauses = [
+        and_(
+            models.WhatsAppCommitment.deadline_at.isnot(None),
+            models.WhatsAppCommitment.deadline_at <= now,
+        )
+    ]
+    if allow_no_deadline_fallback:
+        due_clauses.append(
+            and_(
+                models.WhatsAppCommitment.deadline_at.is_(None),
+                models.WhatsAppCommitment.created_at <= fallback_cutoff,
+            )
+        )
     return (
         db.query(models.WhatsAppCommitment)
         .join(models.WhatsAppContact, models.WhatsAppCommitment.contact_id == models.WhatsAppContact.id)
         .filter(
             models.WhatsAppCommitment.direction == direction,
             models.WhatsAppCommitment.fulfilled_at.is_(None),
-            or_(
-                and_(
-                    models.WhatsAppCommitment.deadline_at.isnot(None),
-                    models.WhatsAppCommitment.deadline_at <= now,
-                ),
-                and_(
-                    models.WhatsAppCommitment.deadline_at.is_(None),
-                    models.WhatsAppCommitment.created_at <= fallback_cutoff,
-                ),
-            ),
+            or_(*due_clauses),
             (
                 models.WhatsAppCommitment.last_reminded_at.is_(None)
                 | (models.WhatsAppCommitment.last_reminded_at <= reminder_cutoff)
