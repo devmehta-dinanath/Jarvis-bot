@@ -71,6 +71,18 @@ class TestReminderHelpers:
         assert not g.is_bare_ack("Ok I'll send the COA")
 
 
+class TestUsableContactDisplayName:
+    def test_phone_and_jid_not_usable_for_greeting(self):
+        assert g.usable_contact_display_name("8615372598293") is None
+        assert g.usable_contact_display_name("+91 98765 43210") is None
+        assert g.usable_contact_display_name("919876543210@c.us") is None
+        assert g.usable_contact_display_name("[Client's Name]") is None
+
+    def test_real_name_usable(self):
+        assert g.usable_contact_display_name("Rahul") == "Rahul"
+        assert g.usable_contact_display_name("Dr. Bichara Somi") == "Dr. Bichara Somi"
+
+
 class TestFollowupHelpers:
     def test_waiting_on_silence_copy(self):
         text = g.format_waiting_on_silence(

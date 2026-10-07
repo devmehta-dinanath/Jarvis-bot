@@ -265,3 +265,7 @@ class TestReminderFrontendContracts:
         assert "snoozeSuggestion" in api
         assert 'textContent = "Snooze"' in card or "Snooze" in card
         assert 'textContent = isFollowupActionCard(suggestion) ? "Mark done" : "Done"' in card
+        # Wrong must be hidden on Reminder / Follow-up action cards.
+        assert "isReminderActionCard(suggestion) ||" in card
+        assert "isFollowupActionCard(suggestion)" in card
+        assert "wrongBtn.hidden" in card

@@ -115,6 +115,23 @@ class TestFollowupExclusions:
         assert "is_group.is_(False)" in src
 
 
+class TestClientNudgeNameHandling:
+    def test_phone_id_does_not_pass_as_greetable_name(self):
+        with patch.object(
+            classifier,
+            "_chat",
+            return_value="Hi, just checking in on the documents — any update?",
+        ) as mocked:
+            classifier.draft_commitment_nudge(
+                "upload evidence",
+                contact_name="8615372598293",
+            )
+        user_content = mocked.call_args[0][1]
+        assert "No real display name" in user_content
+        assert "8615372598293" not in user_content
+        assert "[Client's Name]" not in classifier._CLIENT_NUDGE_SYSTEM
+
+
 class TestClientCommitmentDetectionMocked:
     def test_c2_detect_will_confirm(self):
         tomorrow = (datetime.utcnow() + timedelta(days=1)).replace(

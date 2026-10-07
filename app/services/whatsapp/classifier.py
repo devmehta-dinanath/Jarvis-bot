@@ -729,6 +729,9 @@ _CLIENT_NUDGE_SYSTEM = (
     "who has not yet delivered on something they said they'd do. Reference what they "
     "promised naturally and briefly ask for an update in the language and tone of the chat "
     "(Roman Hinglish if the conversation is in Hinglish, English if in English). "
+    "If a real contact name is provided, you may use it once naturally. "
+    "If no real name is provided, open with a simple greeting (e.g. Hi) — never invent a "
+    "name and never use bracket placeholders for the name. "
     "Do not sound automated, pushy, or passive-aggressive. One or two short sentences."
 )
 
@@ -757,11 +760,22 @@ def draft_commitment_nudge(
     WhatsAppCommitment.direction == 'client') — used by
     WhatsAppService._check_pending_client_commitments so the reminder comes with an
     editable draft, not just a flag."""
-    who = contact_name or "the client"
-    user_content = (
-        f"{who} previously said: \"{label}\"\n\n"
-        "They haven't followed through yet. Write the follow-up message matching the chat's tone and language:"
-    )
+    from app.services.whatsapp import product_gates
+
+    who = product_gates.usable_contact_display_name(contact_name)
+    if who:
+        user_content = (
+            f"{who} previously said: \"{label}\"\n\n"
+            "They haven't followed through yet. Write the follow-up message matching "
+            "the chat's tone and language:"
+        )
+    else:
+        user_content = (
+            f"The client previously said: \"{label}\"\n\n"
+            "No real display name is available (only a phone id). "
+            "They haven't followed through yet. Write the follow-up opening with a "
+            "simple greeting and no name placeholder:"
+        )
     system = (
         _CLIENT_NUDGE_SYSTEM
         + _tone_instructions_block(instructions)

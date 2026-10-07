@@ -277,6 +277,27 @@ def owner_followup_subject(body: str | None) -> str:
     return "message"
 
 
+def usable_contact_display_name(name: str | None) -> str | None:
+    """Human name safe to put in a drafted greeting, or None if only a phone/JID.
+
+    Chip labels may still show the raw wa_id; drafts should not invent placeholders.
+    """
+    text = (name or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"the client", "client", "[client's name]", "client's name"}:
+        return None
+    # WhatsApp JIDs / bare phone numbers are not greetable names.
+    if "@" in text:
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    non_digit = "".join(ch for ch in text if ch.isalnum() and not ch.isdigit())
+    if len(digits) >= 8 and not non_digit:
+        return None
+    return text
+
+
 def format_waiting_on_silence(
     *,
     contact_name: str,
