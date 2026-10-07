@@ -1,8 +1,10 @@
 import {
   answerClarification,
   forwardSuggestion,
+  markSuggestionDone,
   sendSuggestionFeedback,
-  sendSuggestionReply
+  sendSuggestionReply,
+  snoozeSuggestion
 } from "../../lib/api.js";
 import { applyAvatarGradient } from "../../lib/avatar-color.js";
 import {
@@ -11,6 +13,8 @@ import {
   canSchedule,
   canSendReply,
   categoryLabel,
+  isFollowupActionCard,
+  isReminderActionCard,
   isUrgent,
   resolveCategory
 } from "../../lib/whatsapp-categories.js";
@@ -313,6 +317,18 @@ export function createWhatsAppRequestCard(
   dismissBtn.className = "btn btn--ghost";
   dismissBtn.textContent = "Dismiss";
 
+  const doneBtn = document.createElement("button");
+  doneBtn.type = "button";
+  doneBtn.className = "btn btn--primary btn--large";
+  doneBtn.textContent = isFollowupActionCard(suggestion) ? "Mark done" : "Done";
+  doneBtn.hidden = !(isReminderActionCard(suggestion) || isFollowupActionCard(suggestion));
+
+  const snoozeBtn = document.createElement("button");
+  snoozeBtn.type = "button";
+  snoozeBtn.className = "btn btn--ghost";
+  snoozeBtn.textContent = isFollowupActionCard(suggestion) ? "Remind me later" : "Snooze";
+  snoozeBtn.hidden = !(isReminderActionCard(suggestion) || isFollowupActionCard(suggestion));
+
   // Rule 14 — forward to team: one tap, no copy/paste, no switching apps. The backend
   // only ever sets forward_label once a real team member is assigned to this category
   // in Settings and this suggestion hasn't already been forwarded.
@@ -337,9 +353,34 @@ export function createWhatsAppRequestCard(
   wrongBtn.type = "button";
   wrongBtn.className = "btn btn--ghost btn--warning";
   wrongBtn.textContent = "Wrong";
-  wrongBtn.hidden = needsClarification;
+  // Reminder / Follow-up cards: Done + Snooze + Dismiss only — Wrong is for reply drafts.
+  wrongBtn.hidden =
+    needsClarification ||
+    isReminderActionCard(suggestion) ||
+    isFollowupActionCard(suggestion);
 
-  actions.append(sendBtn, editBtn, scheduleBtn, remindBtn, forwardBtn, dismissBtn, wrongBtn, stopGroupBtn);
+  // Reminder / follow-up cards: Done + Snooze + Dismiss (hide generic Remind me / empty draft send).
+  if (isReminderActionCard(suggestion) || isFollowupActionCard(suggestion)) {
+    remindBtn.hidden = true;
+    if (!suggestion.draft_text) {
+      sendBtn.hidden = true;
+      editBtn.hidden = true;
+      draftSection.hidden = true;
+    }
+  }
+
+  actions.append(
+    doneBtn,
+    sendBtn,
+    editBtn,
+    scheduleBtn,
+    snoozeBtn,
+    remindBtn,
+    forwardBtn,
+    dismissBtn,
+    wrongBtn,
+    stopGroupBtn
+  );
 
   const correctionPanel = document.createElement("div");
   correctionPanel.className = "whatsapp-card__correction";
@@ -532,6 +573,41 @@ export function createWhatsAppRequestCard(
       await onDismiss(suggestion);
     } catch {
       dismissBtn.disabled = false;
+    }
+  });
+
+  doneBtn.addEventListener("click", async () => {
+    doneBtn.disabled = true;
+    snoozeBtn.disabled = true;
+    dismissBtn.disabled = true;
+    try {
+      await markSuggestionDone(suggestion.id);
+      if (typeof onSent === "function") {
+        await onSent();
+      }
+    } catch (error) {
+      doneBtn.disabled = false;
+      snoozeBtn.disabled = false;
+      dismissBtn.disabled = false;
+      doneBtn.title = String(error.message || error);
+    }
+  });
+
+  snoozeBtn.addEventListener("click", async () => {
+    doneBtn.disabled = true;
+    snoozeBtn.disabled = true;
+    dismissBtn.disabled = true;
+    try {
+      const hours = isFollowupActionCard(suggestion) ? 48 : 24;
+      await snoozeSuggestion(suggestion.id, hours);
+      if (typeof onSent === "function") {
+        await onSent();
+      }
+    } catch (error) {
+      doneBtn.disabled = false;
+      snoozeBtn.disabled = false;
+      dismissBtn.disabled = false;
+      snoozeBtn.title = String(error.message || error);
     }
   });
 

@@ -168,6 +168,19 @@ export function dismissSuggestion(suggestionId) {
   }, SERVER_API);
 }
 
+export function markSuggestionDone(suggestionId) {
+  return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/done`, {
+    method: "POST"
+  }, SERVER_API);
+}
+
+export function snoozeSuggestion(suggestionId, hours = 24) {
+  const params = new URLSearchParams({ hours: String(hours) });
+  return fetchJson(`/api/v1/whatsapp/suggestions/${suggestionId}/snooze?${params}`, {
+    method: "POST"
+  }, SERVER_API);
+}
+
 export function dismissAllSuggestions() {
   return fetchJson("/api/v1/whatsapp/suggestions/dismiss-all", {
     method: "POST"

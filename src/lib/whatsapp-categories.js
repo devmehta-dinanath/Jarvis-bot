@@ -241,6 +241,12 @@ export const CATEGORY_SECTIONS = [
     categories: ["meeting"]
   },
   {
+    id: "reminders",
+    title: "Reminders",
+    accent: "info",
+    categories: ["pending_commitment"]
+  },
+  {
     id: "replies",
     title: "Client messages",
     accent: "info",
@@ -255,7 +261,6 @@ export const CATEGORY_SECTIONS = [
       "follow_up",
       "other",
       "awaiting_reply",
-      "pending_commitment",
       "client_commitment"
     ]
   },
@@ -337,11 +342,35 @@ export function hasReminder(suggestion) {
   return Boolean(suggestion.details?.reminder_event_id);
 }
 
-export function canSendReply() {
-  // The reply box always shows, for every category — populated with the AI's draft when
-  // there is one, empty for the owner to type into when there isn't. Never fall back to a
-  // generic canned line: empty-but-present beats fake-personalized.
+export function canSendReply(suggestion) {
+  // Reminder / follow-up action cards have Done/Snooze — not a Write-your-reply box.
+  const kind = suggestion?.kind || "";
+  if (
+    kind === "commitment_reminder" ||
+    kind === "client_commitment_reminder" ||
+    kind === "owner_followup_nudge"
+  ) {
+    return Boolean(suggestion?.draft_text);
+  }
+  if (resolveCategory(suggestion) === "greeting" && !suggestion?.draft_text) {
+    return false;
+  }
   return true;
+}
+
+export function isReminderActionCard(suggestion) {
+  return (
+    suggestion?.kind === "commitment_reminder" ||
+    resolveCategory(suggestion) === "pending_commitment"
+  );
+}
+
+export function isFollowupActionCard(suggestion) {
+  return (
+    suggestion?.kind === "client_commitment_reminder" ||
+    suggestion?.kind === "owner_followup_nudge" ||
+    Boolean(suggestion?.details?.followup_actions)
+  );
 }
 
 export function partitionSuggestions(suggestions) {
