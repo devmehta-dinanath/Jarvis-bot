@@ -2486,8 +2486,7 @@ class WhatsAppService:
                             commitment.id,
                         )
                         draft = (
-                            f"Hi — following up on {commitment.label.lower()} I mentioned. "
-                            f"Sharing an update shortly."
+                            f"Hi — I'll get back to you shortly on: {commitment.label}."
                         )
                 repo.create_suggestion(
                     db,

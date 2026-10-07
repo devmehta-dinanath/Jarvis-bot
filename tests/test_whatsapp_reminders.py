@@ -169,6 +169,31 @@ class TestDetectCommitmentMocked:
         assert result["is_commitment"] is False
 
 
+class TestOwnerCommitmentDraftNoFalseCompletion:
+    def test_prompt_forbids_false_completion_generally(self):
+        system = classifier._OWNER_COMMITMENT_DRAFT_SYSTEM.lower()
+        assert "already completed" in system or "never state or imply" in system
+        assert "fulfillment" in system or "promise" in system
+        # Must stay principle-based — not a language-specific ban list.
+        assert "kaam ho gaya" not in system
+        assert "bhej diya" not in system
+
+    def test_draft_user_prompt_requires_future_intent(self):
+        with patch.object(
+            classifier,
+            "_chat",
+            return_value="Sidi, I'll get the required documents to you shortly.",
+        ) as mocked:
+            classifier.draft_owner_commitment_message(
+                "provide required documents",
+                contact_name="mohamed abduallah",
+            )
+        assert mocked.called
+        user_content = mocked.call_args[0][1].lower()
+        assert "no fulfillment evidence" in user_content
+        assert "already done" in user_content
+
+
 class TestFulfillmentDismissSnooze:
     def test_b6_fulfillment_dismisses_suggestions(self):
         with patch.object(

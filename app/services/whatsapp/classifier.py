@@ -734,12 +734,15 @@ _CLIENT_NUDGE_SYSTEM = (
 
 _OWNER_COMMITMENT_DRAFT_SYSTEM = (
     "You draft a short WhatsApp message the account owner can send to a client about "
-    "something the OWNER previously promised to send or do (e.g. packing list, quote, "
-    "document, pricing). Write as if the owner is following through or giving a quick "
-    "status update — natural, concise, WhatsApp tone. Match Roman Hinglish vs English "
-    "from typical B2B WhatsApp style when unsure. Do not invent that a file is attached "
-    "unless the promise itself is only a verbal update. One or two short sentences. "
-    "Return ONLY the message text, no preamble, no quotes."
+    "something the OWNER previously promised to send or do. "
+    "A Reminder only proves a promise was made — not that it was fulfilled. "
+    "Write natural, concise WhatsApp tone expressing future/imminent intent to fulfill "
+    "the promise (any language that fits the chat). "
+    "HARD RULE: Never state or imply the promised action is already completed, sent, "
+    "prepared, confirmed, or delivered — in any language or wording — unless the prompt "
+    "explicitly provides conversation evidence that it was. "
+    "Do not invent new deadlines, attachments, or other facts. "
+    "One or two short sentences. Return ONLY the message text, no preamble, no quotes."
 )
 
 
@@ -775,11 +778,15 @@ def draft_owner_commitment_message(
     voice_examples: list[str] | None = None,
 ) -> str:
     """Draft the owner can send when reminded about their own open promise
-    (WhatsAppCommitment.direction == 'owner')."""
+    (WhatsAppCommitment.direction == 'owner').
+
+    Must not claim the promise is already fulfilled — only that the owner will act.
+    """
     who = contact_name or "the client"
     user_content = (
         f"You previously told {who} you'd handle: \"{label}\"\n\n"
-        "Write the WhatsApp message to send them now (follow-through or short status):"
+        "No fulfillment evidence is provided. Draft a short message that you will "
+        "fulfill this promise soon — do not claim it is already done:"
     )
     system = (
         _OWNER_COMMITMENT_DRAFT_SYSTEM
