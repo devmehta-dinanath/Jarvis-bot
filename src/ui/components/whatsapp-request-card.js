@@ -120,6 +120,13 @@ export function createWhatsAppRequestCard(
     header.appendChild(languageBadge);
   }
 
+  const messageBlock = document.createElement("div");
+  messageBlock.className = "language-card__message";
+
+  const messageLabel = document.createElement("p");
+  messageLabel.className = "language-card__label";
+  messageLabel.textContent = "Message";
+
   const original = document.createElement("blockquote");
   original.className = "language-card__original";
   original.textContent =
@@ -145,6 +152,7 @@ export function createWhatsAppRequestCard(
   if (category === "media" && !suggestion.message_body) {
     original.textContent = suggestion.details?.chip_label || "Media message — no caption.";
   }
+  messageBlock.append(messageLabel, original);
 
   const meta = document.createElement("p");
   meta.className = "whatsapp-card__meta";
@@ -718,7 +726,7 @@ export function createWhatsAppRequestCard(
 
   card.append(
     header,
-    original,
+    messageBlock,
     originalTranslation,
     meta,
     clarifySection,

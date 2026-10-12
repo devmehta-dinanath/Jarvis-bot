@@ -131,6 +131,72 @@ export function filterConfirmedPlans(suggestions) {
 }
 
 /**
+ * One reply card per person. A meeting stays until its time has passed.
+ * Reminder and follow-up cards stay as their own cards so those actions still work.
+ */
+export function keepLatestSuggestionPerContact(suggestions) {
+  const buckets = {
+    meeting: new Map(),
+    action: new Map(),
+    reply: new Map()
+  };
+  for (const suggestion of suggestions || []) {
+    const key = suggestion.contact_id ?? suggestion.wa_id ?? suggestion.id;
+    const lane = suggestionLane(suggestion);
+    const previous = buckets[lane].get(key);
+    if (!previous || suggestionSortTime(suggestion) >= suggestionSortTime(previous)) {
+      buckets[lane].set(key, suggestion);
+    }
+  }
+  return [
+    ...buckets.meeting.values(),
+    ...buckets.action.values(),
+    ...buckets.reply.values()
+  ];
+}
+
+function suggestionLane(suggestion) {
+  if (suggestion?.kind === "meeting" || suggestion?.category === "meeting") {
+    return "meeting";
+  }
+  if (isReminderActionCard(suggestion) || isFollowupActionCard(suggestion)) {
+    return "action";
+  }
+  return "reply";
+}
+
+/** True when a meeting card's scheduled time is already over. */
+export function meetingTimeHasPassed(suggestion, now = new Date()) {
+  if (suggestion?.kind !== "meeting" && suggestion?.category !== "meeting") {
+    return false;
+  }
+  const details = suggestion.details || {};
+  const raw = details.end || details.start;
+  if (raw) {
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) {
+      return parsed <= now.getTime();
+    }
+  }
+  if (details.date) {
+    const parsed = Date.parse(`${details.date}T${details.time || "23:59"}`);
+    if (!Number.isNaN(parsed)) {
+      return parsed <= now.getTime();
+    }
+  }
+  return false;
+}
+
+function suggestionSortTime(suggestion) {
+  const parsed = Date.parse(suggestion?.created_at || "");
+  if (!Number.isNaN(parsed)) {
+    return parsed;
+  }
+  const id = Number(suggestion?.id);
+  return Number.isFinite(id) ? id : 0;
+}
+
+/**
  * One conversation (contact) → one group. Plans sorted soonest-first by start/date.
  */
 export function groupSuggestionsByContact(suggestions) {

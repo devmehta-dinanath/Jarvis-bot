@@ -16,6 +16,8 @@ import {
   filterConfirmedPlans,
   filterMeetingReminderSuggestions,
   groupSuggestionsByContact,
+  keepLatestSuggestionPerContact,
+  meetingTimeHasPassed,
   MEETINGS_REMINDERS_ONLY,
   partitionSuggestions
 } from "../lib/whatsapp-categories.js";
@@ -379,9 +381,11 @@ export function createSummaryPage() {
         getInboxStatus()
       ]);
       inboxStatus = statusData;
-      suggestions = filterConfirmedPlans(
-        filterMeetingReminderSuggestions(dedupeSuggestions(pendingData.items ?? []))
-      );
+      suggestions = keepLatestSuggestionPerContact(
+        filterConfirmedPlans(
+          filterMeetingReminderSuggestions(dedupeSuggestions(pendingData.items ?? []))
+        )
+      ).filter((suggestion) => !meetingTimeHasPassed(suggestion));
     } catch (error) {
       sections.forEach((item) => {
         item.cardList.replaceChildren(

@@ -1036,15 +1036,20 @@ a:focus-visible,
   letter-spacing: 0.02em;
 }
 
+.language-card__message {
+  display: grid;
+  gap: 6px;
+}
+
 .language-card__original {
   margin: 0;
   padding: 14px 16px;
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.03);
   border-left: 3px solid var(--info);
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  font-style: italic;
+  color: var(--text-main);
+  font-size: 0.95rem;
+  font-style: normal;
   line-height: 1.5;
 }
 
