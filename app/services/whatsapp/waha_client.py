@@ -337,6 +337,12 @@ def _jid_digits(value: str | None) -> str:
 _session_self_ids: set[str] | None = None
 
 
+def clear_session_self_cache() -> None:
+    """Drop the cached login. Call this when WAHA reports a session change."""
+    global _session_self_ids
+    _session_self_ids = None
+
+
 def session_self_ids() -> set[str]:
     """Phone digits for the connected WAHA account, cached after the first lookup."""
     global _session_self_ids
@@ -355,8 +361,18 @@ def session_self_ids() -> set[str]:
             digits = _jid_digits(me)
             if len(digits) >= 8:
                 found.add(digits)
-    _session_self_ids = found
+    # Don't cache a failed lookup — the next Inbox load should try again.
+    if found:
+        _session_self_ids = found
     return found
+
+
+def connected_account_key() -> str | None:
+    """Stable phone digits for the WhatsApp account currently linked in WAHA."""
+    ids = session_self_ids()
+    if not ids:
+        return None
+    return max(ids, key=len)
 
 
 def payload_is_from_me(body: dict[str, Any] | None) -> bool:

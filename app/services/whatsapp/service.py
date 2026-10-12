@@ -360,6 +360,20 @@ class WhatsAppService:
                     self._check_owner_outbound_followups()
                 except Exception:
                     logger.exception("[WHATSAPP] Owner→them follow-up check failed")
+                try:
+                    db = SessionLocal()
+                    try:
+                        cleared = repo.dismiss_past_meetings(db)
+                        if cleared:
+                            db.commit()
+                            logger.info(
+                                "[WHATSAPP] Dismissed %s meeting card(s) whose time has passed",
+                                cleared,
+                            )
+                    finally:
+                        db.close()
+                except Exception:
+                    logger.exception("[WHATSAPP] Past-meeting cleanup failed")
                 interval_s = WHATSAPP_PERSONAL_SILENCE_CHECK_HOURS * 3600
                 self._next_silence_check_at = datetime.utcnow() + timedelta(seconds=interval_s)
 
@@ -691,7 +705,7 @@ class WhatsAppService:
         # conversation (last 20 messages, fetched live from WAHA), not just what our own DB
         # happened to capture. Falls back to local DB history if WAHA is unreachable.
         history = repo.live_chat_context(
-            db, message.contact_id, exclude_body=body, limit=20
+            db, message.contact_id, exclude_body=body, limit=40
         )
 
         contact = message.contact
@@ -782,13 +796,19 @@ class WhatsAppService:
         # falls back to the older DB-tiered lookup (repo.recent_outbound_examples) when that
         # window has no outbound messages at all to draw from.
         voice_examples = repo.voice_examples_from_history(history)
-        if not voice_examples:
-            voice_examples = repo.recent_outbound_examples(
-                db,
-                personal=is_personal_contact,
-                contact_id=message.contact_id,
-                category=category,
-            )
+        own_voice = repo.recent_outbound_examples(
+            db,
+            personal=is_personal_contact,
+            contact_id=message.contact_id,
+            category=category,
+        )
+        seen_voice = {item.strip() for item in voice_examples}
+        for sample in own_voice:
+            text = (sample or "").strip()
+            if text and text not in seen_voice:
+                seen_voice.add(text)
+                voice_examples.append(text)
+        voice_examples = voice_examples[-8:]
         priority = result.get("priority", "normal")
         if category == "follow_up":
             priority = self._followup_priority(db, message)

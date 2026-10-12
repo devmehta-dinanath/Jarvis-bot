@@ -185,6 +185,9 @@ def _process_waha_payload(db: Session, payload: dict[str, Any]) -> int:
         return 0
 
     if event == "session.status":
+        from app.services.whatsapp.waha_client import clear_session_self_cache
+
+        clear_session_self_cache()
         logger.info(
             "[WAHA] session.status session=%s status=%s",
             payload.get("session"),

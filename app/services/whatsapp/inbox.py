@@ -37,17 +37,22 @@ def _inbox_preview_text(body: str | None) -> str | None:
 
 
 def inbox_status(db: Session) -> dict:
-    pending_count = (
-        db.query(models.WhatsAppSuggestion.id)
-        .filter(models.WhatsAppSuggestion.status == "pending")
-        .count()
-    )
-    last_inbound = (
-        db.query(models.WhatsAppMessage)
-        .filter(models.WhatsAppMessage.direction == "inbound")
-        .order_by(models.WhatsAppMessage.timestamp.desc())
-        .first()
-    )
+    from app.services.whatsapp.account_scope import apply_connected_account_filter
+
+    pending_count = apply_connected_account_filter(
+        db.query(models.WhatsAppSuggestion.id).filter(
+            models.WhatsAppSuggestion.status == "pending"
+        ),
+        db,
+        models.WhatsAppSuggestion.contact_id,
+    ).count()
+    last_inbound = apply_connected_account_filter(
+        db.query(models.WhatsAppMessage).filter(
+            models.WhatsAppMessage.direction == "inbound"
+        ),
+        db,
+        models.WhatsAppMessage.contact_id,
+    ).order_by(models.WhatsAppMessage.timestamp.desc()).first()
     return {
         "pending_count": pending_count,
         "last_inbound_at": last_inbound.timestamp if last_inbound else None,

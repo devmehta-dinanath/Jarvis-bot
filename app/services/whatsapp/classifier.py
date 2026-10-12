@@ -1199,7 +1199,9 @@ def draft_reply(
         f"Recent conversation:\n{_history_block(history)}\n\n"
         f"{sender_label} latest message (MATCH THIS LANGUAGE):\n{message}\n\n"
         f"Context: {category_hint}\n\n"
-        "Write the suggested reply matching their latest message's language and the chat's tone:"
+        "Write the suggested reply. Use the earlier messages as context for what this chat is about. "
+        "Answer only their latest message. Match the tone, length, and wording of the Me: lines "
+        "and of the user's own sent messages:"
     )
     system = (
         (_REPLY_SYSTEM_PERSONAL if personal else _REPLY_SYSTEM)

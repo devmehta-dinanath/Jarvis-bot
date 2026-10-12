@@ -1,7 +1,8 @@
 import bisect
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
@@ -37,7 +38,8 @@ def upsert_contact(
         .filter(models.WhatsAppContact.wa_id == wa_id)
         .one_or_none()
     )
-    if contact is None:
+    created = contact is None
+    if created:
         contact = models.WhatsAppContact(
             wa_id=wa_id, profile_name=profile_name, is_group=is_group
         )
@@ -48,6 +50,10 @@ def upsert_contact(
             contact.profile_name = profile_name
         if is_group and not contact.is_group:
             contact.is_group = True
+    if created:
+        from app.services.whatsapp.account_scope import remember_contact_account
+
+        remember_contact_account(db, contact.id, waha_client.connected_account_key())
     return contact
 
 
@@ -71,12 +77,15 @@ def dismiss_pending_for_contact(db: Session, contact_id: int) -> int:
     )
 
 
-def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -> int:
-    """Auto-clear pending suggestions the user has already moved past by replying.
+def _is_meeting_card(suggestion) -> bool:
+    return suggestion.kind == "meeting" or suggestion.category == "meeting"
 
-    Only suggestions tied to a message strictly before `cutoff` are cleared — chips
-    for messages that arrived *after* the one just replied to are left pending, since
-    the user hasn't seen/handled those yet.
+
+def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -> int:
+    """Clear pending reply cards once the owner has replied in this chat.
+
+    Meeting cards stay until their scheduled time has passed. A card for a
+    message that arrived after this reply stays, because that message is new.
     """
     now = datetime.utcnow()
     pending = (
@@ -89,6 +98,8 @@ def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -
     )
     updated = 0
     for suggestion in pending:
+        if _is_meeting_card(suggestion):
+            continue
         ts = None
         if suggestion.message_id is not None:
             message = db.get(models.WhatsAppMessage, suggestion.message_id)
@@ -96,10 +107,73 @@ def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -
                 ts = message.timestamp
         if ts is None:
             ts = suggestion.created_at
-        if ts is not None and ts < cutoff:
+        if ts is not None and ts <= cutoff:
             suggestion.status = "dismissed"
             suggestion.resolved_at = now
             updated += 1
+    return updated
+
+
+def _meeting_moment(details: dict) -> datetime | None:
+    """When this meeting card is over. Uses end, otherwise start, otherwise date+time."""
+    from app.config import CALENDAR_DEFAULT_TIMEZONE
+
+    raw = details.get("end") or details.get("start")
+    if isinstance(raw, str) and raw.strip():
+        text = raw.strip().replace("Z", "+00:00")
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            moment = None
+        if moment is not None:
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
+            return moment
+    date = details.get("date")
+    clock = details.get("time") or "23:59"
+    if isinstance(date, str) and date.strip():
+        try:
+            moment = datetime.fromisoformat(f"{date.strip()}T{clock}")
+        except ValueError:
+            return None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=ZoneInfo(CALENDAR_DEFAULT_TIMEZONE))
+        return moment
+    return None
+
+
+def dismiss_past_meetings(db: Session) -> int:
+    """Remove meeting cards whose scheduled time has already passed."""
+    now = datetime.now(timezone.utc)
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.status == "pending",
+            or_(
+                models.WhatsAppSuggestion.kind == "meeting",
+                models.WhatsAppSuggestion.category == "meeting",
+            ),
+        )
+        .all()
+    )
+    updated = 0
+    for suggestion in pending:
+        raw = suggestion.details
+        if not raw:
+            continue
+        try:
+            details = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(details, dict):
+            continue
+        moment = _meeting_moment(details)
+        if moment is not None and moment.astimezone(timezone.utc) <= now:
+            suggestion.status = "dismissed"
+            suggestion.resolved_at = datetime.utcnow()
+            updated += 1
+    if updated:
+        db.flush()
     return updated
 
 
@@ -570,6 +644,10 @@ def work_contacts_awaiting_their_reply(
     for contact in contacts:
         if pending_owner_followup_exists(db, contact.id):
             continue
+        from app.services.whatsapp.account_scope import contact_visible_for_connected_account
+
+        if not contact_visible_for_connected_account(db, contact.id):
+            continue
         if not contact_latest_is_outbound(db, contact.id):
             continue
         outbound = last_important_outbound(db, contact.id)
@@ -871,6 +949,51 @@ def create_suggestion(
     details: dict | None = None,
     visible_after: datetime | None = None,
 ) -> models.WhatsAppSuggestion:
+    """One pending reply card per contact, plus a meeting card that is left alone.
+
+    A newer message updates the reply card. It does not replace a meeting card;
+    that card stays until its time has passed.
+    """
+    existing_rows = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.contact_id == contact_id,
+            models.WhatsAppSuggestion.status == "pending",
+        )
+        .order_by(models.WhatsAppSuggestion.created_at.desc())
+        .all()
+    )
+    incoming_is_meeting = kind == "meeting" or category == "meeting"
+    existing = next(
+        (
+            row
+            for row in existing_rows
+            if _is_meeting_card(row) == incoming_is_meeting
+        ),
+        None,
+    )
+    payload = json.dumps(details) if details is not None else None
+    if existing is not None:
+        existing.message_id = message_id
+        existing.kind = kind
+        existing.category = category
+        existing.priority = priority
+        existing.lane = lane
+        existing.confidence = confidence
+        existing.draft_text = draft_text
+        existing.details = payload
+        existing.visible_after = visible_after
+        now = datetime.utcnow()
+        for row in existing_rows:
+            if row.id == existing.id or row.status != "pending":
+                continue
+            if _is_meeting_card(row) != incoming_is_meeting:
+                continue
+            row.status = "dismissed"
+            row.resolved_at = now
+        db.flush()
+        return existing
+
     suggestion = models.WhatsAppSuggestion(
         contact_id=contact_id,
         message_id=message_id,
@@ -881,10 +1004,17 @@ def create_suggestion(
         confidence=confidence,
         status="pending",
         draft_text=draft_text,
-        details=json.dumps(details) if details is not None else None,
+        details=payload,
         visible_after=visible_after,
     )
     db.add(suggestion)
+    db.flush()
+    now = datetime.utcnow()
+    for row in existing_rows:
+        if row.id == suggestion.id or _is_meeting_card(row) != incoming_is_meeting:
+            continue
+        row.status = "dismissed"
+        row.resolved_at = now
     db.flush()
     return suggestion
 
@@ -1180,6 +1310,9 @@ def list_contacts(
     offset: int,
 ) -> tuple[list[models.WhatsAppContact], int]:
     base = db.query(models.WhatsAppContact)
+    from app.services.whatsapp.account_scope import apply_connected_account_filter
+
+    base = apply_connected_account_filter(base, db, models.WhatsAppContact.id)
     total = base.count()
     items = (
         base.order_by(models.WhatsAppContact.last_message_at.desc().nullslast())
@@ -1221,7 +1354,14 @@ def list_suggestions(
     limit: int,
     offset: int,
 ) -> tuple[list[models.WhatsAppSuggestion], int]:
+    from app.services.whatsapp.account_scope import apply_connected_account_filter
+
+    if dismiss_past_meetings(db):
+        db.commit()
     base = db.query(models.WhatsAppSuggestion)
+    base = apply_connected_account_filter(
+        base, db, models.WhatsAppSuggestion.contact_id
+    )
     if status:
         base = base.filter(models.WhatsAppSuggestion.status == status)
         # Rule 9's timing (instant/30min/4-6h) gates when the DRAFTED REPLY is ready to
