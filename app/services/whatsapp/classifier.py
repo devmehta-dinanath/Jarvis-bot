@@ -198,16 +198,22 @@ _CLASSIFY_SYSTEM = (
     "Detect the message language. Decide whether the message is important and needs action. "
     "Greetings, small-talk, thanks, emojis-only, and acknowledgements are NOT important "
     "(set is_important=false, category=greeting). This also covers casual check-in QUESTIONS "
-    "that carry no task behind them — 'where are you', 'what's the plan today', 'you up?', "
-    "'hi bro lets connect' are just as much small-talk as 'hey' is, even though they're phrased "
+    "that carry no task and no request to talk — 'where are you', 'what's the plan today', "
+    "'you up?' are just as much small-talk as 'hey' is, even though they're phrased "
     "as questions; do not treat 'it's phrased as a question' as a reason to call something "
     "important on its own. Set is_important=false, category=greeting, and use confidence 80+ "
     "for this call whenever the message has no business/client ask (no pricing, deadline, order, "
-    "deliverable, complaint, document request, or question about when work will be finished) "
+    "deliverable, complaint, document request, question about when work will be finished, "
+    "or request to call, meet, or connect) "
     "and the conversation history doesn't establish an existing business/client relationship — "
     "recognizing 'this has nothing business-actionable in it' does not require being certain "
     "about anything else. Reserve low confidence for genuine ambiguity — e.g. history shows an "
     "active work thread and this could plausibly be a client follow-up on it.\n"
+    "CALL AND MEETING REQUESTS ARE IMPORTANT in any language, script, slang, or spelling. "
+    "If the sender is asking to call, talk, meet, or connect — including about a task or "
+    "piece of work — set is_important=true and category=meeting. Do not mark that as greeting "
+    "because it starts with a hello, is short, or does not use a particular English phrase. "
+    "A greeting with no request to talk stays greeting.\n"
     "STATUS AND DEADLINE QUESTIONS ARE IMPORTANT in any language, script, slang, or spelling. "
     "If the sender is asking when work, a delivery, an order, or something already promised "
     "will be finished or ready, set is_important=true. Use category=timeline when they want a "
@@ -1019,6 +1025,8 @@ def classify_message(
         is_important = True
         category = "meeting"
     if category in ALWAYS_IMPORTANT and category in CATEGORIES:
+        is_important = True
+    if category == "meeting" and (not is_group or owner_addressed):
         is_important = True
     if is_group and owner_addressed:
         is_important = True

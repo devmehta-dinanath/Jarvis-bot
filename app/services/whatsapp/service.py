@@ -1347,16 +1347,6 @@ class WhatsAppService:
                 meeting["confirmed"] = True
             confirmed = bool(meeting.get("confirmed"))
             meeting["chip_label"] = _meeting_chip_label(meeting, confirmed)
-            # Product rule: only mutually confirmed plans reach Inbox / Schedule / Remind.
-            if not confirmed:
-                logger.info(
-                    "[WHATSAPP] Skipping unconfirmed meeting chip for message %s "
-                    "(will surface after both sides agree)",
-                    message.id,
-                )
-                # Still upgrade any older pending chip if history just became mutual.
-                self._upgrade_pending_meeting_confirmation(db, message.contact_id, history, body)
-                return None
             suggestion = repo.create_suggestion(
                 db,
                 contact_id=message.contact_id,
