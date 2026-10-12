@@ -253,12 +253,18 @@ def list_contact_messages(
     wa_id: str,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    newest: bool = Query(
+        default=False,
+        description="When true, return the latest window in chronological order.",
+    ),
     db: Session = Depends(get_db),
 ) -> WhatsAppMessageListResponse:
     contact = repo.get_contact_by_wa_id(db, wa_id)
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
-    items, total = repo.list_messages(db, contact_id=contact.id, limit=limit, offset=offset)
+    items, total = repo.list_messages(
+        db, contact_id=contact.id, limit=limit, offset=offset, newest=newest
+    )
     return WhatsAppMessageListResponse(
         items=[WhatsAppMessageResponse.model_validate(m) for m in items],
         total=total,

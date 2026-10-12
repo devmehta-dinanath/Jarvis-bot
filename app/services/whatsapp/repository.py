@@ -1329,17 +1329,23 @@ def list_messages(
     contact_id: int,
     limit: int,
     offset: int,
+    newest: bool = False,
 ) -> tuple[list[models.WhatsAppMessage], int]:
     base = db.query(models.WhatsAppMessage).filter(
         models.WhatsAppMessage.contact_id == contact_id
     )
     total = base.count()
-    items = (
-        base.order_by(models.WhatsAppMessage.timestamp.asc())
-        .limit(limit)
-        .offset(offset)
-        .all()
+    order = (
+        models.WhatsAppMessage.timestamp.desc()
+        if newest
+        else models.WhatsAppMessage.timestamp.asc()
     )
+    id_order = (
+        models.WhatsAppMessage.id.desc() if newest else models.WhatsAppMessage.id.asc()
+    )
+    items = base.order_by(order, id_order).limit(limit).offset(offset).all()
+    if newest:
+        items.reverse()
     return items, total
 
 
