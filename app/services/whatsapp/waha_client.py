@@ -319,6 +319,85 @@ def fetch_contact_name(wa_id: str) -> str | None:
     return name
 
 
+def _flag_is_true(value: Any) -> bool:
+    if value is True or value == 1:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {"true", "1", "yes"}:
+        return True
+    return False
+
+
+def _jid_digits(value: str | None) -> str:
+    if not value:
+        return ""
+    head = str(value).split("@", 1)[0]
+    return "".join(ch for ch in head if ch.isdigit())
+
+
+_session_self_ids: set[str] | None = None
+
+
+def session_self_ids() -> set[str]:
+    """Phone digits for the connected WAHA account, cached after the first lookup."""
+    global _session_self_ids
+    if _session_self_ids is not None:
+        return _session_self_ids
+    found: set[str] = set()
+    if is_configured():
+        session = _get(f"/api/sessions/{quote(WAHA_SESSION, safe='')}")
+        me = session.get("me") if isinstance(session, dict) else None
+        if isinstance(me, dict):
+            for key in ("id", "jid", "user"):
+                digits = _jid_digits(str(me.get(key) or ""))
+                if len(digits) >= 8:
+                    found.add(digits)
+        elif isinstance(me, str):
+            digits = _jid_digits(me)
+            if len(digits) >= 8:
+                found.add(digits)
+    _session_self_ids = found
+    return found
+
+
+def payload_is_from_me(body: dict[str, Any] | None) -> bool:
+    """True when this WAHA payload is a message the connected account sent.
+
+    Drafts must use messages the other person sent. WAHA often omits top-level
+    ``fromMe`` and only sets it on ``_data``, ``id``, or a ``true_`` message id.
+    """
+    if not isinstance(body, dict):
+        return False
+    if _flag_is_true(body.get("fromMe")):
+        return True
+
+    data = body.get("_data")
+    if isinstance(data, dict):
+        if _flag_is_true(data.get("fromMe")):
+            return True
+        for key in ("id", "key"):
+            nested = data.get(key)
+            if isinstance(nested, dict) and (
+                _flag_is_true(nested.get("fromMe"))
+                or str(nested.get("_serialized") or "").lower().startswith("true_")
+            ):
+                return True
+
+    raw_id = body.get("id")
+    if isinstance(raw_id, dict):
+        if _flag_is_true(raw_id.get("fromMe")):
+            return True
+        if str(raw_id.get("_serialized") or "").lower().startswith("true_"):
+            return True
+    elif isinstance(raw_id, str) and raw_id.lower().startswith("true_"):
+        return True
+
+    sender = body.get("participant") or body.get("author") or body.get("from")
+    sender_digits = _jid_digits(str(sender) if sender else "")
+    if len(sender_digits) >= 8 and sender_digits in session_self_ids():
+        return True
+    return False
+
+
 def fetch_recent_messages(wa_id: str, *, limit: int = 100) -> list[dict[str, str]]:
     """Best-effort fetch of the last `limit` messages for a contact/chat straight from
     WAHA (oldest first), independent of anything captured locally via webhook.
@@ -347,7 +426,7 @@ def fetch_recent_messages(wa_id: str, *, limit: int = 100) -> list[dict[str, str
         if not body:
             continue
         entry: dict[str, str] = {
-            "direction": "outbound" if item.get("fromMe") else "inbound",
+            "direction": "outbound" if payload_is_from_me(item) else "inbound",
             "body": body,
         }
         mid = item.get("id")

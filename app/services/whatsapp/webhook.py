@@ -319,7 +319,9 @@ def _waha_peer_chat_id(body: dict[str, Any]) -> str | None:
         # never file it under the individual participant who happened to send it.
         return group_id
 
-    from_me = bool(body.get("fromMe"))
+    from app.services.whatsapp.waha_client import payload_is_from_me
+
+    from_me = payload_is_from_me(body)
     chat_id = body.get("chatId")
     if from_me:
         peer = body.get("to") or chat_id or body.get("from")
@@ -341,9 +343,9 @@ def _store_waha_message(
     *,
     event: str,
 ):
-    from app.services.whatsapp.waha_client import resolve_contact_wa_id
+    from app.services.whatsapp.waha_client import payload_is_from_me, resolve_contact_wa_id
 
-    from_me = bool(body.get("fromMe"))
+    from_me = payload_is_from_me(body)
     # Avoid duplicating outbound messages we already persisted after sendText.
     if from_me and str(body.get("source") or "").lower() == "api":
         return None
