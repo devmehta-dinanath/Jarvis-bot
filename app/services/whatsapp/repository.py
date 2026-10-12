@@ -478,29 +478,14 @@ def contact_latest_is_outbound(db: Session, contact_id: int) -> bool:
     return latest is not None and latest.direction == "outbound"
 
 
-# Reply / nudge chips that should collapse to one per contact when a newer inbound arrives.
+# Generated nudges collapse to one per contact. A card that quotes a specific
+# client message (reply, timeline, document, …) stays, so a newer message does
+# not remove the earlier message from the Inbox.
 _SUPERSEDEABLE_KINDS = frozenset(
     {
-        "reply",
-        "nudge",
-        "greeting",
-        "clarify",
         "followup_nudge",
         "owner_followup_nudge",
         "life_nudge",
-        "blank",
-        "unconfident",
-        "payment",
-        "lead",
-        "document",
-        "complaint",
-        "shipment",
-        "order",
-        "timeline",
-        "budget",
-        "scope",
-        "other",
-        "safety",
         "commitment_reminder",
         "client_commitment_reminder",
     }
@@ -513,9 +498,10 @@ def dismiss_superseded_pending_for_contact(
     *,
     keep_id: int | None = None,
 ) -> int:
-    """Drop older reply/nudge chips for a contact so Inbox shows one fresh card.
+    """Drop older generated nudges for a contact.
 
-    Confirmed meeting chips are kept (conversation card can list multiple plans).
+    Cards that quote a client message are not in this set, so they stay on the
+    Inbox. Confirmed meeting chips are kept as well.
     """
     now = datetime.utcnow()
     query = db.query(models.WhatsAppSuggestion).filter(

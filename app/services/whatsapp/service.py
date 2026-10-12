@@ -1049,7 +1049,7 @@ class WhatsAppService:
             suggestion.visible_after = visible_after
             if needs_review_reason is not None:
                 self._flag_needs_review(db, suggestion, needs_review_reason)
-            # One card per contact for reply/nudge chips — drop superseded pending.
+            # Keep each client-message card. Only collapse generated nudges.
             if suggestion.kind != "meeting" and suggestion.category != "meeting":
                 cleared = repo.dismiss_superseded_pending_for_contact(
                     db, message.contact_id, keep_id=suggestion.id

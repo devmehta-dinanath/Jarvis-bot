@@ -325,64 +325,6 @@ def list_suggestions(
                 filtered.append(suggestion)
         items = filtered[:limit]
         total = len(filtered) if offset == 0 else max(total, len(filtered))
-    elif status == "pending":
-        # Hide reply/nudge chips once the owner's latest message is outbound (already replied).
-        # Keep meeting chips and owner→them follow-ups (those exist *because* latest is outbound).
-        preserve_kinds = {
-            "meeting",
-            "owner_followup_nudge",
-            "commitment_reminder",
-            "client_commitment_reminder",
-            "life_nudge",
-        }
-        reply_kinds = {
-            "reply",
-            "nudge",
-            "greeting",
-            "clarify",
-            "followup_nudge",
-            "payment",
-            "lead",
-            "document",
-            "complaint",
-            "shipment",
-            "order",
-            "timeline",
-            "budget",
-            "scope",
-            "other",
-            "blank",
-            "unconfident",
-        }
-        kept: list = []
-        for suggestion in items:
-            if suggestion.kind in preserve_kinds or suggestion.category in (
-                "meeting",
-                "family_plan",
-                "personal_date",
-                "personal_task",
-                "pending_commitment",
-                "client_commitment",
-            ):
-                kept.append(suggestion)
-                continue
-            if suggestion.kind in reply_kinds or (
-                suggestion.category
-                and suggestion.category
-                not in (
-                    "meeting",
-                    "family_plan",
-                    "personal_date",
-                    "personal_task",
-                    "awaiting_reply",
-                )
-                and suggestion.kind != "meeting"
-            ):
-                if repo.contact_latest_is_outbound(db, suggestion.contact_id):
-                    continue
-            kept.append(suggestion)
-        items = kept
-
     # Groups: only @tag / name mentions — hide leftover untagged chips from older builds.
     if status == "pending" and items:
         items = [

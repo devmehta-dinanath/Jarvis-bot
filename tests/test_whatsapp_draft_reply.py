@@ -163,6 +163,38 @@ class TestClassifyMessageDraftPath:
 
 
 class TestReplyPromptAndServiceGates:
+    def test_status_question_is_important_in_any_wording(self):
+        system = classifier._CLASSIFY_SYSTEM.lower()
+        assert "status and deadline questions are important" in system
+        assert "any language" in system
+        assert "category=timeline" in system
+        assert "do not mark that as greeting" in system
+        # Principle only — the live example must not be baked into the prompt.
+        assert "kab tak" not in system
+        assert "kaam ho jaygaa" not in system
+
+    def test_timeline_status_question_stays_actionable(self):
+        with patch.object(
+            classifier,
+            "_chat_json",
+            return_value=_mock_classify_payload(
+                is_important=True,
+                category="timeline",
+                document_type=None,
+                summary="Client asks when the work will be finished",
+                confidence=91,
+            ),
+        ):
+            result = classifier.classify_message([], "When will this be finished?")
+        assert result["is_important"] is True
+        assert result["category"] == "timeline"
+
+    def test_client_message_cards_are_not_replaced(self):
+        from app.services.whatsapp import repository as repo
+
+        for kind in ("reply", "timeline", "document", "clarify", "other"):
+            assert kind not in repo._SUPERSEDEABLE_KINDS
+
     def test_reply_system_forbids_invented_facts(self):
         assert "Never invent dates" in classifier._REPLY_SYSTEM
         assert "invoice numbers" in classifier._REPLY_SYSTEM
