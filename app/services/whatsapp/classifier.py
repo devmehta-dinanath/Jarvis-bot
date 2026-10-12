@@ -827,6 +827,21 @@ def is_english(language: str | None) -> bool:
 _is_english = is_english
 
 
+def translate_to_english(text: str) -> str:
+    """English reading of a draft. Already-English text comes back unchanged."""
+    if not text or not text.strip():
+        return text
+    system = (
+        "You turn a WhatsApp draft into English so the sender can read it. "
+        "If the text is already English, return it unchanged. "
+        "Otherwise return a faithful English translation of that same message. "
+        "Keep names, numbers, links, and tone. Do not add, remove, or explain anything. "
+        "Respond with ONLY the text, no preamble and no quotes."
+    )
+    user_content = f"Text:\n{text}\n\nEnglish:"
+    return _chat(system, user_content, max_tokens=220, json_mode=False).strip()
+
+
 def translate_reply_to_language(text: str, target_language: str) -> str:
     """Translate a reply into the contact's target language if needed."""
     if not text or not target_language or is_english(target_language):

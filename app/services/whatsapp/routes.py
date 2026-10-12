@@ -25,6 +25,7 @@ from app.services.whatsapp.schemas import (
     CreateForwardingRuleRequest,
     CreateInstructionRequest,
     DismissAllResponse,
+    DraftEnglishResponse,
     FeedbackRequest,
     FeedbackResponse,
     InboxStatusResponse,
@@ -534,6 +535,48 @@ def remind_me(
         "html_link": event.get("htmlLink"),
         "reminder_at": event.get("reminder_at"),
     }
+
+
+@router.post("/suggestions/{suggestion_id}/draft-english", response_model=DraftEnglishResponse)
+def draft_english(
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+) -> DraftEnglishResponse:
+    """English view of the draft. Does not change the text that Send uses."""
+    suggestion = repo.get_suggestion(db, suggestion_id)
+    if suggestion is None or not (suggestion.draft_text or "").strip():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
+
+    source = suggestion.draft_text.strip()
+    details: dict = {}
+    if suggestion.details:
+        try:
+            parsed = json.loads(suggestion.details)
+            if isinstance(parsed, dict):
+                details = parsed
+        except json.JSONDecodeError:
+            details = {}
+
+    cached = details.get("draft_english")
+    if isinstance(cached, str) and details.get("draft_english_for") == source:
+        return DraftEnglishResponse(english=cached, unchanged=cached.strip() == source)
+
+    from app.services.whatsapp import classifier
+    from app.services.whatsapp.classifier import WhatsAppAIError
+
+    try:
+        english = classifier.translate_to_english(source).strip() or source
+    except WhatsAppAIError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not show the English reading of this draft.",
+        ) from exc
+
+    details["draft_english"] = english
+    details["draft_english_for"] = source
+    suggestion.details = json.dumps(details)
+    db.commit()
+    return DraftEnglishResponse(english=english, unchanged=english.strip() == source)
 
 
 @router.post("/suggestions/{suggestion_id}/feedback", response_model=FeedbackResponse)

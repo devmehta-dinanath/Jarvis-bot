@@ -219,6 +219,13 @@ class FeedbackRequest(BaseModel):
     )
 
 
+class DraftEnglishResponse(BaseModel):
+    """English reading of a draft. The stored draft itself is not replaced."""
+
+    english: str
+    unchanged: bool = False
+
+
 class FeedbackResponse(BaseModel):
     ok: bool
     feedback_id: int
