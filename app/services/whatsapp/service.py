@@ -1081,6 +1081,15 @@ class WhatsAppService:
                         message.contact_id,
                     )
 
+        quoted = repo.quote_newer_inbound_on_pending_cards(db, message)
+        if quoted:
+            logger.info(
+                "[WHATSAPP] Pointed %s pending card(s) at newer message %s for contact %s",
+                quoted,
+                message.id,
+                message.contact_id,
+            )
+
         # C5 — any client reply clears Waiting-on follow-ups (even when no new chip).
         if not is_group:
             waiting_cleared = repo.dismiss_waiting_on_followups_for_contact(

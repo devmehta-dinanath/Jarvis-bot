@@ -546,6 +546,41 @@ def latest_message_for_contact(
     )
 
 
+def quote_newer_inbound_on_pending_cards(db: Session, message: models.WhatsAppMessage) -> int:
+    """Point open reply and follow-up cards at this inbound when it is the newest.
+
+    A later client message should be the one quoted on the suggestion. Meeting
+    cards stay on the message that proposed the meeting.
+    """
+    if message.direction != "inbound" or not (message.body or "").strip():
+        return 0
+    rows = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.contact_id == message.contact_id,
+            models.WhatsAppSuggestion.status == "pending",
+        )
+        .all()
+    )
+    updated = 0
+    for row in rows:
+        if _is_meeting_card(row) or row.message_id == message.id:
+            continue
+        linked = db.get(models.WhatsAppMessage, row.message_id) if row.message_id else None
+        if (
+            linked is not None
+            and linked.timestamp is not None
+            and message.timestamp is not None
+            and linked.timestamp > message.timestamp
+        ):
+            continue
+        row.message_id = message.id
+        updated += 1
+    if updated:
+        db.flush()
+    return updated
+
+
 def contact_latest_is_outbound(db: Session, contact_id: int) -> bool:
     """True when the newest stored message for this contact is from the owner."""
     latest = latest_message_for_contact(db, contact_id)
