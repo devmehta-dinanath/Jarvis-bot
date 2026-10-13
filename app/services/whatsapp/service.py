@@ -364,6 +364,7 @@ class WhatsAppService:
                     db = SessionLocal()
                     try:
                         cleared = repo.dismiss_past_meetings(db)
+                        cleared += repo.dismiss_suggestions_already_answered(db)
                         if cleared:
                             db.commit()
                             logger.info(
@@ -2464,6 +2465,20 @@ class WhatsAppService:
             for commitment in commitments:
                 contact = commitment.contact
                 if contact is None:
+                    continue
+                anchor_at = commitment.created_at
+                anchor_id = None
+                if commitment.message_id is not None:
+                    promised = db.get(models.WhatsAppMessage, commitment.message_id)
+                    if promised is not None and promised.timestamp is not None:
+                        anchor_at = promised.timestamp
+                        anchor_id = promised.id
+                if repo.owner_replied_after(
+                    db,
+                    commitment.contact_id,
+                    anchor_at=anchor_at,
+                    anchor_message_id=anchor_id,
+                ):
                     continue
                 reference = commitment.deadline_at or commitment.created_at
                 hours_overdue = max(

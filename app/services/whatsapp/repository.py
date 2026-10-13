@@ -114,6 +114,87 @@ def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -
     return updated
 
 
+# Cards that exist because the other person still owes a reply. The owner's own
+# later message is what creates them, so a reply must not clear them.
+_WAITING_ON_THEM_KINDS = frozenset(
+    {
+        "owner_followup_nudge",
+        "client_commitment_reminder",
+    }
+)
+
+
+def owner_replied_after(
+    db: Session,
+    contact_id: int,
+    *,
+    anchor_at: datetime | None,
+    anchor_message_id: int | None = None,
+) -> bool:
+    """True when the owner sent a message after this card's message.
+
+    The message the card is about does not count. A later reply does, including
+    one stored in the same second with a higher id.
+    """
+    if anchor_at is None:
+        return False
+    outbound = db.query(models.WhatsAppMessage.id).filter(
+        models.WhatsAppMessage.contact_id == contact_id,
+        models.WhatsAppMessage.direction == "outbound",
+    )
+    if (
+        outbound.filter(models.WhatsAppMessage.timestamp > anchor_at).first()
+        is not None
+    ):
+        return True
+    if anchor_message_id is None:
+        return False
+    return (
+        outbound.filter(
+            models.WhatsAppMessage.timestamp == anchor_at,
+            models.WhatsAppMessage.id > anchor_message_id,
+        ).first()
+        is not None
+    )
+
+
+def dismiss_suggestions_already_answered(db: Session) -> int:
+    """Drop suggestion drafts for a chat the owner has already answered.
+
+    A meeting stays until its time has passed. A card that is waiting on the
+    other person stays. A card for a message that arrived after the reply stays.
+    """
+    now = datetime.utcnow()
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(models.WhatsAppSuggestion.status == "pending")
+        .all()
+    )
+    updated = 0
+    for suggestion in pending:
+        if _is_meeting_card(suggestion) or suggestion.kind in _WAITING_ON_THEM_KINDS:
+            continue
+        anchor_at = suggestion.created_at
+        anchor_id = None
+        if suggestion.message_id is not None:
+            message = db.get(models.WhatsAppMessage, suggestion.message_id)
+            if message is not None and message.timestamp is not None:
+                anchor_at = message.timestamp
+                anchor_id = message.id
+        if owner_replied_after(
+            db,
+            suggestion.contact_id,
+            anchor_at=anchor_at,
+            anchor_message_id=anchor_id,
+        ):
+            suggestion.status = "dismissed"
+            suggestion.resolved_at = now
+            updated += 1
+    if updated:
+        db.flush()
+    return updated
+
+
 def _meeting_moment(details: dict) -> datetime | None:
     """When this meeting card is over. Uses end, otherwise start, otherwise date+time."""
     from app.config import CALENDAR_DEFAULT_TIMEZONE
@@ -1397,7 +1478,9 @@ def list_suggestions(
 ) -> tuple[list[models.WhatsAppSuggestion], int]:
     from app.services.whatsapp.account_scope import apply_connected_account_filter
 
-    if dismiss_past_meetings(db):
+    cleared = dismiss_past_meetings(db)
+    cleared += dismiss_suggestions_already_answered(db)
+    if cleared:
         db.commit()
     base = db.query(models.WhatsAppSuggestion)
     base = apply_connected_account_filter(

@@ -169,6 +169,7 @@ def _process_waha_payload(db: Session, payload: dict[str, Any]) -> int:
             # Typed directly in WhatsApp (not sent through the app) — treat it as the
             # user handling the conversation and clear older pending chips for this contact.
             cleared = repo.dismiss_pending_older_than(db, stored.contact_id, stored.timestamp)
+            cleared += repo.dismiss_suggestions_already_answered(db)
             if cleared:
                 logger.info(
                     "[WHATSAPP] Auto-dismissed %s older pending suggestion(s) for contact %s "
