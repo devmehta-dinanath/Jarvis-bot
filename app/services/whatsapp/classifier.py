@@ -70,14 +70,17 @@ _CATEGORY_PRIORITY = {
 }
 
 _CATEGORY_GUIDE = (
-    "- meeting: the client wants a call or meeting to schedule for later — ask availability, "
-    "propose a future time/place, or confirm a planned call "
+    "- meeting: the latest message, read with the chat around it, is about arranging or agreeing "
+    "a call or meeting — asking availability, proposing a time or place, or agreeing to that plan "
     "('Let's meet Thursday at 3pm', 'Are you free tomorrow?', 'can we connect at 5pm?', "
     "'Confirming our meeting on Friday', 'let's schedule a call next week'). "
     "Do NOT use meeting for: (1) product/plan/package choice questions with no call request "
     "('which plan — group or one on one?', 'did you decide what plan to opt for?'); "
     "(2) immediate 'connect/talk/call NOW / right now / can connect now' — already in attention, "
-    "not a schedulable Inbox plan; (3) short delay replies like 'allow me 1 hour' with no meet ask.\n"
+    "not a schedulable Inbox plan; (3) short delay replies like 'allow me 1 hour' with no meet ask; "
+    "(4) a price, order, payment, or delivery confirmation; (5) one person saying they will call "
+    "back later, with no time being arranged. A single word such as call, connect, or confirm "
+    "does not make the message a meeting.\n"
     "- payment: anything about money changing hands — the client says they paid/transferred an "
     "amount, asks you to check/verify a payment, or chases an unpaid/pending/overdue invoice "
     "('Payment done please check', 'Amount transferred', 'Invoice still pending', "
@@ -210,10 +213,14 @@ _CLASSIFY_SYSTEM = (
     "about anything else. Reserve low confidence for genuine ambiguity — e.g. history shows an "
     "active work thread and this could plausibly be a client follow-up on it.\n"
     "CALL AND MEETING REQUESTS ARE IMPORTANT in any language, script, slang, or spelling. "
-    "If the sender is asking to call, talk, meet, or connect — including about a task or "
-    "piece of work — set is_important=true and category=meeting. Do not mark that as greeting "
+    "Read the latest message together with the conversation around it, and decide from that "
+    "meaning. Set is_important=true and category=meeting only when the latest message is "
+    "asking to arrange a call or meeting, or is agreeing to one. Do not mark that as greeting "
     "because it starts with a hello, is short, or does not use a particular English phrase. "
-    "A greeting with no request to talk stays greeting.\n"
+    "A greeting with no request to talk stays greeting. Do not use meeting because an earlier "
+    "message mentioned a call, or because this message contains a word such as call, connect, "
+    "or confirm while its real intent is a price, an order, a payment, a delivery, or a promise "
+    "to call back later with no plan to schedule. Those stay in their own category.\n"
     "STATUS AND DEADLINE QUESTIONS ARE IMPORTANT in any language, script, slang, or spelling. "
     "If the sender is asking when work, a delivery, an order, or something already promised "
     "will be finished or ready, set is_important=true. Use category=timeline when they want a "
@@ -561,8 +568,14 @@ _MEETING_SYSTEM = (
     "start (ISO 8601 datetime with timezone offset if resolved, else null), "
     "end (ISO 8601 datetime if given or inferable, else null), "
     "confirmed (true only per the MUTUAL CONFIRMATION RULE above; false if the plan is tentative, "
-    "proposed, one-sided, or still being negotiated such as 'are you free?' or 'maybe Friday?'). "
-    "If the client wants to meet but gives no specific time, set start and end to null."
+    "proposed, one-sided, or still being negotiated such as 'are you free?' or 'maybe Friday?'), "
+    "is_meeting (true only when the latest message, read with the conversation, is arranging or "
+    "agreeing a call or meeting). "
+    "If the client wants to meet but gives no specific time, set start and end to null. "
+    "If the latest message is a price, order, payment, or delivery confirmation, or one person "
+    "saying they will call back later with no time being set, set is_meeting=false, "
+    "confirmed=false, and start and end to null. Do not turn an earlier 'call' or 'connect' "
+    "in the history into a meeting for this message."
 )
 
 
@@ -996,9 +1009,9 @@ def classify_message(
     # A genuine safety/distress signal must never be silently dropped — not as spam/forwarded,
     # not as an irrelevant group message, not as an instruction-skip. It always surfaces.
     safety_concern = bool(data.get("safety_concern", False))
-    call_request = meeting_scope.looks_like_call_or_meeting_request(message)
     # Deterministic @name / name match only — never trust the LLM's group_relevant
     # or addressed flags for Inbox surfacing (they reopen untagged chatter).
+    # A meeting is the model's reading of this message in context, not a phrase list.
     owner_addressed = meeting_scope.message_addresses_owner(message, user_names)
 
     if instructions and bool(data.get("instruction_skip", False)) and not safety_concern:
@@ -1015,15 +1028,9 @@ def classify_message(
         if is_group and not owner_addressed:
             return _silent_filter_result("group", detected_language)
 
-        if call_request:
-            category = "meeting"
-
     is_important = bool(data.get("is_important", False))
     if safety_concern:
         is_important = True
-    if call_request and (not is_group or owner_addressed):
-        is_important = True
-        category = "meeting"
     if category in ALWAYS_IMPORTANT and category in CATEGORIES:
         is_important = True
     if category == "meeting" and (not is_group or owner_addressed):
@@ -1433,6 +1440,7 @@ def extract_meeting(history: list[dict[str, str]], message: str) -> dict[str, An
         "start": (data.get("start") or None),
         "end": (data.get("end") or None),
         "confirmed": bool(data.get("confirmed", False)),
+        "is_meeting": bool(data.get("is_meeting", True)),
     }
 
 

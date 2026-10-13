@@ -158,6 +158,40 @@ def owner_replied_after(
     )
 
 
+def requeue_pending_meetings(db: Session) -> int:
+    """Drop pending meeting cards and send their messages through classification again.
+
+    Used once after a deploy so an old meeting label is not kept. The message
+    text stays. A new card appears only if the new reading still says it is a meeting.
+    """
+    now = datetime.utcnow()
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.status == "pending",
+            or_(
+                models.WhatsAppSuggestion.kind == "meeting",
+                models.WhatsAppSuggestion.category == "meeting",
+            ),
+        )
+        .all()
+    )
+    updated = 0
+    for suggestion in pending:
+        suggestion.status = "dismissed"
+        suggestion.resolved_at = now
+        if suggestion.message_id is not None:
+            message = db.get(models.WhatsAppMessage, suggestion.message_id)
+            if message is not None and message.direction == "inbound":
+                message.classified_at = None
+                message.category = None
+                message.is_important = None
+        updated += 1
+    if updated:
+        db.flush()
+    return updated
+
+
 def dismiss_suggestions_already_answered(db: Session) -> int:
     """Drop suggestion drafts for a chat the owner has already answered.
 

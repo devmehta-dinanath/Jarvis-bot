@@ -332,6 +332,7 @@ class WhatsAppService:
         logger.info("[WHATSAPP] Worker stopped")
 
     def _run_loop(self) -> None:
+        self._requeue_old_meetings_once()
         while not self._stop_event.is_set():
             try:
                 processed = self._process_batch()
@@ -380,6 +381,24 @@ class WhatsAppService:
 
             if processed == 0:
                 self._stop_event.wait(self.poll_interval_seconds)
+
+    def _requeue_old_meetings_once(self) -> None:
+        """After this process starts, clear saved meeting cards and read them again."""
+        db = SessionLocal()
+        try:
+            cleared = repo.requeue_pending_meetings(db)
+            if cleared:
+                db.commit()
+                logger.info(
+                    "[WHATSAPP] Cleared %s old meeting card(s) so those messages "
+                    "are read again",
+                    cleared,
+                )
+        except Exception:
+            logger.exception("[WHATSAPP] Could not requeue old meeting cards")
+            db.rollback()
+        finally:
+            db.close()
 
     def _process_batch(self) -> int:
         db = SessionLocal()
@@ -1314,6 +1333,15 @@ class WhatsAppService:
             except WhatsAppAIError:
                 logger.warning("[WHATSAPP] OpenAI meeting extraction failed, using fallback")
                 meeting = wa_fallback.extract_meeting(body)
+            meeting = wa_calendar.enrich_meeting_details(meeting)
+            if meeting.get("is_meeting") is False:
+                logger.info(
+                    "[WHATSAPP] Skipping Inbox meeting chip for message %s — "
+                    "latest message is not a plan to meet: %r",
+                    message.id,
+                    (body or "")[:80],
+                )
+                return None
             draft = _draft_reply_with_budget(
                 history,
                 body,
@@ -1323,7 +1351,6 @@ class WhatsAppService:
                 corrections=corrections,
                 voice_examples=voice_examples,
             )
-            meeting = wa_calendar.enrich_meeting_details(meeting)
             # Prefer the newest time mentioned in the thread (e.g. 6pm over an older 5pm).
             latest_time_text = meeting_scope.latest_time_bearing_text(history, body)
             if latest_time_text and latest_time_text.strip() != (body or "").strip():

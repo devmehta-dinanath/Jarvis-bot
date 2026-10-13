@@ -214,10 +214,10 @@ def infer_mutual_meeting_confirmation(
 
     Time is optional: "can we connect" + "okay" counts as confirmed intent;
     the owner then picks the clock time via Schedule.
+    The model's own confirmed flag is not enough; both sides still have to show
+    up in the conversation.
     """
-    meeting = meeting or {}
-    if meeting.get("confirmed") is True:
-        return True
+    del meeting
 
     client_texts: list[str] = []
     owner_texts: list[str] = []
