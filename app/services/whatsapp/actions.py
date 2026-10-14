@@ -265,10 +265,10 @@ def answer_clarification(
             )
     except classifier.WhatsAppAIError:
         logger.warning(
-            "[WHATSAPP] Drafting after clarification failed for suggestion %s — using fallback",
+            "[WHATSAPP] Drafting after clarification failed for suggestion %s — no factual draft",
             suggestion.id,
         )
-        draft = "Got it, thanks for confirming — I'll follow up on that shortly."
+        draft = None
 
     details["needs_clarification"] = False
     details["clarified_answer"] = answer

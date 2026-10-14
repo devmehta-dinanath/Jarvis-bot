@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+import re
 import threading
 from datetime import datetime, timedelta
 
@@ -31,6 +32,7 @@ from app.services.google_calendar.service import google_calendar_service
 from app.services.whatsapp import actions
 from app.services.whatsapp import calendar as wa_calendar
 from app.services.whatsapp import classifier
+from app.services.whatsapp import decision as wa_decision
 from app.services.whatsapp import fallback as wa_fallback
 from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import repository as repo
@@ -198,6 +200,13 @@ def _apply_group_fallback(
     return classifier._silent_filter_result("group", result.get("language"))
 
 
+def _meeting_from_keyword_fallback(message: str) -> dict:
+    """Keyword extraction may mark a parsed day as confirmed. That is only a proposal."""
+    meeting = wa_fallback.extract_meeting(message)
+    meeting["confirmed"] = False
+    return meeting
+
+
 def _short_date(value: datetime | None) -> str | None:
     if value is None:
         return None
@@ -220,7 +229,16 @@ def _draft_reply_with_budget(
     corrections: list[dict] | None = None,
     personal: bool = False,
     voice_examples: list[str] | None = None,
-) -> str:
+) -> str | None:
+    decision = (result or {}).get("decision") or {}
+    # A model "reply_allowed: true" is already forced false for safety,
+    # clarification, and missing facts. Do not fill that gap with a template.
+    if (
+        decision.get("reply_allowed") is False
+        or decision.get("schema_valid") is False
+        or decision.get("missing_facts")
+    ):
+        return None
     if WHATSAPP_AI_DRAFTS_ENABLED:
         try:
             if complaint:
@@ -249,11 +267,58 @@ def _draft_reply_with_budget(
                 "[WHATSAPP] AI drafting failed for category=%s, using fallback template",
                 category,
             )
-    return wa_fallback.draft_reply(
+    text = wa_fallback.draft_reply(
         category,
         payment_status=payment_status,
         shipment_status=shipment_status,
     )
+    # These templates promise a file, a catalogue, a clock time, or a delivery
+    # date the conversation has not established. Do not persist them.
+    if category in {"meeting", "lead", "document", "timeline"}:
+        return None
+    if category == "shipment" and shipment_status == "delayed":
+        return "Thanks for the update. I can't confirm a new arrival date from this message."
+    return text.strip() or None
+
+
+_OWNER_FOLLOWUP_CHECKIN = (
+    "Hi, just checking in on my last message — any update when you get a chance?"
+)
+# A waiting-on nudge may ask them to look at the last message. It may not
+# restate a price, date, ETA, file promise, or a completed action.
+_OWNER_FOLLOWUP_UNSUPPORTED_RE = re.compile(
+    r"(?i)("
+    r"(?:₹|\$|rs\.?|inr|usd)\s*\d"
+    r"|\b\d+(?:[.,]\d+)?\s*(?:rs|inr|usd|rupees)\b"
+    r"|\b\d+\.\d{2}\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b\d{1,2}(?:st|nd|rd|th)\b"
+    r"|\b(?:today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday|january|february|march|april|june|july|august|"
+    r"september|october|november|december|eta)\b"
+    # "may" is also a verb. Treat it as a month only beside a day or a date word.
+    r"|\b(?:on|in|by|this|next|late|early|mid|of)\s+may\b"
+    r"|\bmay\s+\d{1,2}(?:st|nd|rd|th)?\b"
+    r"|\b\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+may\b"
+    r"|\b(?:arriv(?:e|al|ing)|delivery date|deliver by|will be delivered|"
+    r"delivered|shipped|dispatched)\b"
+    r"|\b(?:i(?:'ll| will)|we(?:'ll| will))\s+"
+    r"(?:send|share|attach|forward|email|confirm|get that)\b"
+    r"|\bget that across\b"
+    r"|\b(?:i(?:'ve| have)|we(?:'ve| have))\s+"
+    r"(?:sent|shared|attached|paid|delivered|shipped)\b"
+    r"|\b(?:payment\s+(?:received|done|completed|has been)|already\s+paid|"
+    r"has been paid|already\s+(?:sent|delivered|shipped|done))\b"
+    r")"
+)
+
+
+def _owner_followup_draft(text: str | None) -> str:
+    """Keep a plain check-in. Replace any unsupported factual claim."""
+    cleaned = (text or "").strip()
+    if cleaned and _OWNER_FOLLOWUP_UNSUPPORTED_RE.search(cleaned) is None:
+        return cleaned
+    return _OWNER_FOLLOWUP_CHECKIN
 
 
 class WhatsAppService:
@@ -796,6 +861,13 @@ class WhatsAppService:
                     result = _apply_group_fallback(
                         result, body=body, user_names=WHATSAPP_USER_NAMES
                     )
+                # Keyword triage is not a validated decision. Leave an already
+                # closed group/forwarded decision alone, and block drafts when
+                # this result has none. Other callers may still draft without one.
+                if not result.get("decision"):
+                    result["decision"] = wa_decision.closed_decision(
+                        result.get("category") or "other"
+                    )
 
         # Belt-and-suspenders: never create Inbox chips for untagged group messages,
         # even if an older classifier path or fallback marked them important.
@@ -1010,9 +1082,20 @@ class WhatsAppService:
                     db, message, category, priority, confidence, lane
                 )
         elif result["is_important"]:
-            suggestion = self._create_suggestion(
-                db, message, history, body, result, priority, instructions, corrections, voice_examples
-            )
+            decision = result.get("decision") or {}
+            if decision.get("reply_allowed") is False:
+                logger.info(
+                    "[WHATSAPP] Message %s decision blocks a factual draft (intent=%s)",
+                    message.id,
+                    decision.get("intent"),
+                )
+                suggestion = self._create_unconfident_suggestion(
+                    db, message, category, priority, confidence, lane
+                )
+            else:
+                suggestion = self._create_suggestion(
+                    db, message, history, body, result, priority, instructions, corrections, voice_examples
+                )
         elif category == "greeting":
             # Product rule: greetings / festivals / small talk → no draft, no empty box.
             logger.info(
@@ -1332,7 +1415,7 @@ class WhatsAppService:
                 meeting = classifier.extract_meeting(history, body)
             except WhatsAppAIError:
                 logger.warning("[WHATSAPP] OpenAI meeting extraction failed, using fallback")
-                meeting = wa_fallback.extract_meeting(body)
+                meeting = _meeting_from_keyword_fallback(body)
             meeting = wa_calendar.enrich_meeting_details(meeting)
             if meeting.get("is_meeting") is False:
                 logger.info(
@@ -1363,7 +1446,7 @@ class WhatsAppService:
                             meeting["end"] = latest.get("end")
                 except WhatsAppAIError:
                     try:
-                        latest = wa_fallback.extract_meeting(latest_time_text)
+                        latest = _meeting_from_keyword_fallback(latest_time_text)
                         latest = wa_calendar.enrich_meeting_details(latest)
                         if latest.get("start"):
                             meeting["start"] = latest.get("start")
@@ -1407,15 +1490,22 @@ class WhatsAppService:
                 logger.warning("[WHATSAPP] OpenAI deadline extraction failed, using fallback")
                 deadline = wa_fallback.extract_deadline(body)
 
-            draft = _draft_reply_with_budget(
-                history,
-                body,
-                category,
-                result=result,
-                instructions=instructions,
-                corrections=corrections,
-                voice_examples=voice_examples,
-            )
+            accepted_date = deadline.get("date")
+            if accepted_date and classifier.stated_deadline_date(body, accepted_date) is None:
+                deadline["date"] = None
+                deadline["date_rejected"] = True
+            if deadline.get("date_rejected"):
+                draft = None
+            else:
+                draft = _draft_reply_with_budget(
+                    history,
+                    body,
+                    category,
+                    result=result,
+                    instructions=instructions,
+                    corrections=corrections,
+                    voice_examples=voice_examples,
+                )
 
             calendar_event_id = None
             calendar_html_link = None
@@ -1898,7 +1988,7 @@ class WhatsAppService:
                 "[WHATSAPP] OpenAI meeting extraction failed for message %s during silent "
                 "observation, using fallback", message.id,
             )
-            meeting = wa_fallback.extract_meeting(body)
+            meeting = _meeting_from_keyword_fallback(body)
         meeting = wa_calendar.enrich_meeting_details(meeting)
         when = _format_meeting_when(meeting)
         meeting["chip_label"] = f"Meeting {when} — schedule?" if when else "Meeting requested — schedule?"
@@ -2710,21 +2800,25 @@ class WhatsAppService:
                 try:
                     draft = classifier.draft_reply(
                         history,
-                        f"(Follow up — they haven't replied to: {preview})",
+                        "They have not replied yet.",
                         "follow_up",
                         context_hint=(
-                            "You previously messaged them and they went silent. Write a short, "
-                            "polite follow-up that references what you sent without repeating it "
-                            "verbatim. Match the chat language. Do not invent facts."
+                            "Write one short check-in asking whether they have had a chance to "
+                            "review your last message. Do not state a price, date, delivery time, "
+                            "stock level, or payment. Do not promise to send a file or say that "
+                            "any action is already done."
                         ),
                         language=None,
                         instructions=instructions or None,
                         voice_examples=voice_examples or None,
                     )
                 except WhatsAppAIError:
-                    draft = (
-                        "Hi, just checking in on my last message — any update when you get a chance?"
+                    logger.warning(
+                        "[WHATSAPP] Owner follow-up draft failed for contact %s — generic check-in",
+                        contact.id,
                     )
+                    draft = None
+                draft = _owner_followup_draft(draft)
                 repo.create_suggestion(
                     db,
                     contact_id=contact.id,

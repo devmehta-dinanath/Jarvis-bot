@@ -205,45 +205,82 @@ def _message_has_time_or_meet_ask(text: str | None) -> bool:
     return bool(_TIME_HINT_RE.search(body)) or looks_like_call_or_meeting_request(body)
 
 
+_CLOCK_TIME_RE = re.compile(
+    r"""
+    \b(
+        \d{1,2}\s*:\s*\d{2}\s*(?:am|pm)?
+        | \d{1,2}\s*(?:am|pm)
+        | \d{1,2}\s*(?:o'?clock)
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_EXPLICIT_AGREEMENT_RE = re.compile(
+    r"\b(?:sounds\s+good|see\s+you|confirmed|works|let'?s\s+(?:do\s+it|meet|connect))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_clock_time_proposal(text: str | None) -> bool:
+    """A proposed clock time for a call or meeting, not a day word or a price."""
+    body = (text or "").strip()
+    if not body or not _CLOCK_TIME_RE.search(body):
+        return False
+    if is_immediate_attention_request(body) or is_delay_only_reply(body):
+        return False
+    if is_non_meeting_business_question(body):
+        return False
+    if looks_like_call_or_meeting_request(body):
+        return True
+    return bool(re.search(r"\b(?:meet|meeting|schedule|free|available)\b", body, re.IGNORECASE))
+
+
+def _agrees_to_time_proposal(text: str | None) -> bool:
+    """The other person agrees to the proposed time. A bare Ok does not."""
+    body = (text or "").strip()
+    if not body or is_bare_ack(body) or is_immediate_attention_request(body):
+        return False
+    if not _message_is_acceptance(body):
+        return False
+    if _CLOCK_TIME_RE.search(body):
+        return True
+    return bool(_EXPLICIT_AGREEMENT_RE.search(body))
+
+
 def infer_mutual_meeting_confirmation(
     history: list | None,
     body: str | None,
     meeting: dict | None = None,
 ) -> bool:
-    """One side proposed a meet/time and the other accepted → confirmed.
+    """True when one side proposes a clock time and the other later agrees to it.
 
-    Time is optional: "can we connect" + "okay" counts as confirmed intent;
-    the owner then picks the clock time via Schedule.
-    The model's own confirmed flag is not enough; both sides still have to show
-    up in the conversation.
+    "Tomorrow", "call me", "connect now", an availability question, and a bare
+    "Ok" are not agreement. The model's confirmed flag is not read here. When
+    this returns false, callers keep that flag instead of overriding it.
     """
     del meeting
 
-    client_texts: list[str] = []
-    owner_texts: list[str] = []
+    turns: list[tuple[str, str]] = []
     for item in history or []:
         if not isinstance(item, dict):
             continue
         text = (item.get("body") or "").strip()
         if not text:
             continue
-        if (item.get("direction") or "").lower() == "inbound":
-            client_texts.append(text)
-        else:
-            owner_texts.append(text)
+        speaker = "client" if (item.get("direction") or "").lower() == "inbound" else "owner"
+        turns.append((speaker, text))
     current = (body or "").strip()
     if current:
-        client_texts.append(current)
+        turns.append(("client", current))
 
-    client_proposed = any(_message_has_time_or_meet_ask(t) for t in client_texts)
-    owner_proposed = any(_message_has_time_or_meet_ask(t) for t in owner_texts)
-    client_accepted = any(_message_is_acceptance(t) for t in client_texts)
-    owner_accepted = any(_message_is_acceptance(t) for t in owner_texts)
-
-    if client_proposed and owner_accepted:
-        return True
-    if owner_proposed and client_accepted:
-        return True
+    for index, (speaker, text) in enumerate(turns):
+        if not _is_clock_time_proposal(text):
+            continue
+        for later_speaker, later_text in turns[index + 1 :]:
+            if later_speaker == speaker:
+                continue
+            if _agrees_to_time_proposal(later_text):
+                return True
     return False
 
 
