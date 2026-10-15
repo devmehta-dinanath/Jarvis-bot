@@ -139,19 +139,22 @@ def owner_replied_after(
     The message the card is about does not count. A later reply does, including
     one stored in the same second with a higher id.
     """
-    if anchor_at is None:
-        return False
     outbound = db.query(models.WhatsAppMessage.id).filter(
         models.WhatsAppMessage.contact_id == contact_id,
         models.WhatsAppMessage.direction == "outbound",
     )
-    if (
+    if anchor_at is not None and (
         outbound.filter(models.WhatsAppMessage.timestamp > anchor_at).first()
         is not None
     ):
         return True
     if anchor_message_id is None:
         return False
+    if anchor_at is None:
+        return (
+            outbound.filter(models.WhatsAppMessage.id > anchor_message_id).first()
+            is not None
+        )
     return (
         outbound.filter(
             models.WhatsAppMessage.timestamp == anchor_at,
@@ -229,9 +232,10 @@ def dismiss_suggestions_already_answered(db: Session) -> int:
 
     This does not depend on the wording. Any later owner message means that
     client turn is not a reply still owed. A meeting stays until its time has
-    passed. A card that is waiting on the other person stays. An owner reminder
-    stays, but it quotes the owner's promise, not the client message already
-    answered.
+    passed. A card that is waiting on the other person stays, but its reply
+    draft is removed when that draft quotes a client message the owner already
+    answered. An owner reminder stays, but it quotes the owner's promise, not
+    the client message already answered.
     """
     from app.services.whatsapp import product_gates
 
@@ -243,18 +247,30 @@ def dismiss_suggestions_already_answered(db: Session) -> int:
     )
     updated = 0
     for suggestion in pending:
-        if _is_meeting_card(suggestion) or suggestion.kind in _WAITING_ON_THEM_KINDS:
-            continue
         message = (
             db.get(models.WhatsAppMessage, suggestion.message_id)
             if suggestion.message_id is not None
             else None
         )
         anchor_at = suggestion.created_at
-        anchor_id = None
+        anchor_id = message.id if message is not None else None
         if message is not None and message.timestamp is not None:
             anchor_at = message.timestamp
-            anchor_id = message.id
+        quotes_client = (
+            message is not None
+            and product_gates.speaker_for_direction(message.direction) != "owner"
+        )
+        answered = quotes_client and owner_replied_after(
+            db,
+            suggestion.contact_id,
+            anchor_at=anchor_at,
+            anchor_message_id=anchor_id,
+        )
+        if _is_meeting_card(suggestion) or suggestion.kind in _WAITING_ON_THEM_KINDS:
+            if answered and suggestion.draft_text:
+                suggestion.draft_text = None
+                updated += 1
+            continue
         if suggestion.kind == "commitment_reminder":
             quotes_client = (
                 message is not None
@@ -288,6 +304,7 @@ def dismiss_suggestions_already_answered(db: Session) -> int:
         ):
             suggestion.status = "dismissed"
             suggestion.resolved_at = now
+            suggestion.draft_text = None
             updated += 1
     if updated:
         db.flush()

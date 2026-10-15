@@ -625,7 +625,10 @@ def reprocess_contacts(
         if not dry_run:
             db.commit()
 
-    if dry_run:
+    if not dry_run:
+        repo.dismiss_suggestions_already_answered(db)
+        db.commit()
+    else:
         db.rollback()
 
     logger.info(

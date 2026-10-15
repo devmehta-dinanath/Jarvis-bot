@@ -1264,6 +1264,28 @@ class WhatsAppService:
                 message.contact_id,
             )
 
+        if (
+            suggestion is not None
+            and getattr(message, "direction", None) == "inbound"
+            and repo.owner_replied_after(
+                db,
+                message.contact_id,
+                anchor_at=message.timestamp,
+                anchor_message_id=message.id,
+            )
+        ):
+            slot = repo._card_slot(suggestion.kind, suggestion.category)
+            if slot == "reply":
+                suggestion.status = "dismissed"
+                suggestion.resolved_at = datetime.utcnow()
+                suggestion.draft_text = None
+                logger.info(
+                    "[WHATSAPP] Dropped reply draft for message %s — owner already answered",
+                    message.id,
+                )
+            elif suggestion.draft_text:
+                suggestion.draft_text = None
+
         # C5 — any client reply clears Waiting-on follow-ups (even when no new chip).
         if not is_group:
             waiting_cleared = repo.dismiss_waiting_on_followups_for_contact(
@@ -2785,8 +2807,23 @@ class WhatsAppService:
                 voice_examples = repo.recent_outbound_examples(
                     db, personal=False, contact_id=commitment.contact_id, category="follow_up"
                 )
+                source = (
+                    db.get(models.WhatsAppMessage, commitment.message_id)
+                    if commitment.message_id is not None
+                    else None
+                )
+                source_answered = (
+                    source is not None
+                    and product_gates.speaker_for_direction(source.direction) != "owner"
+                    and repo.owner_replied_after(
+                        db,
+                        commitment.contact_id,
+                        anchor_at=source.timestamp,
+                        anchor_message_id=source.id,
+                    )
+                )
                 try:
-                    draft = classifier.draft_commitment_nudge(
+                    draft = None if source_answered else classifier.draft_commitment_nudge(
                         commitment.label,
                         contact_name=display_name,
                         instructions=instructions or None,
@@ -2797,7 +2834,11 @@ class WhatsAppService:
                         "[WHATSAPP] OpenAI nudge drafting failed for client commitment %s, "
                         "using fallback text", commitment.id,
                     )
-                    draft = f"Hi, just following up on {commitment.label.lower()} — any update?"
+                    draft = (
+                        None
+                        if source_answered
+                        else f"Hi, just following up on {commitment.label.lower()} — any update?"
+                    )
 
                 chip_label = product_gates.format_waiting_on_promise(
                     contact_name=display_name,
