@@ -235,6 +235,160 @@ def test_past_meeting_is_removed():
     assert pending == 0
 
 
+def test_reply_after_a_promise_clears_the_draft_and_keeps_the_meeting():
+    from datetime import timedelta
+
+    from app.services.whatsapp.repository import dismiss_suggestions_already_answered
+
+    db = _session()
+    contact = models.WhatsAppContact(wa_id="919844444444", profile_name="Punit Surolia")
+    db.add(contact)
+    db.flush()
+    thanked_at = datetime.utcnow() - timedelta(minutes=5)
+    replied_at = thanked_at + timedelta(minutes=1)
+    later_at = replied_at + timedelta(minutes=1)
+    thank_you = models.WhatsAppMessage(
+        contact_id=contact.id,
+        direction="inbound",
+        body="Thank you",
+        timestamp=thanked_at,
+    )
+    reply = models.WhatsAppMessage(
+        contact_id=contact.id,
+        direction="outbound",
+        body="Trusted",
+        timestamp=replied_at,
+    )
+    newer = models.WhatsAppMessage(
+        contact_id=contact.id,
+        direction="inbound",
+        body="Can you confirm the other point?",
+        timestamp=later_at,
+    )
+    db.add_all([thank_you, reply, newer])
+    db.flush()
+    db.add_all(
+        [
+            models.WhatsAppSuggestion(
+                contact_id=contact.id,
+                message_id=thank_you.id,
+                kind="commitment_reminder",
+                category="pending_commitment",
+                status="pending",
+                draft_text="I'll revert to confirm soon.",
+            ),
+            models.WhatsAppSuggestion(
+                contact_id=contact.id,
+                message_id=thank_you.id,
+                kind="meeting",
+                category="meeting",
+                status="pending",
+            ),
+            models.WhatsAppSuggestion(
+                contact_id=contact.id,
+                message_id=reply.id,
+                kind="owner_followup_nudge",
+                category="follow_up",
+                status="pending",
+            ),
+            models.WhatsAppSuggestion(
+                contact_id=contact.id,
+                message_id=newer.id,
+                kind="reply",
+                category="timeline",
+                status="pending",
+                draft_text="Yes, confirming that now.",
+            ),
+        ]
+    )
+    db.commit()
+
+    assert dismiss_suggestions_already_answered(db) == 1
+    db.commit()
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(models.WhatsAppSuggestion.status == "pending")
+        .all()
+    )
+    assert {row.kind for row in pending} == {"meeting", "owner_followup_nudge", "reply"}
+
+
+def test_promise_card_stays_when_that_message_is_still_the_latest_reply():
+    from app.services.whatsapp.repository import (
+        create_suggestion,
+        dismiss_suggestions_already_answered,
+    )
+
+    db = _session()
+    contact = models.WhatsAppContact(wa_id="919855555555", profile_name="Punit Surolia")
+    db.add(contact)
+    db.flush()
+    promise = models.WhatsAppMessage(
+        contact_id=contact.id,
+        direction="outbound",
+        body="I will revert to confirm by Friday",
+        timestamp=datetime.utcnow(),
+    )
+    db.add(promise)
+    db.flush()
+    create_suggestion(
+        db,
+        contact_id=contact.id,
+        message_id=promise.id,
+        kind="commitment_reminder",
+        category="pending_commitment",
+        draft_text="I'll revert to confirm soon.",
+    )
+    db.commit()
+
+    assert dismiss_suggestions_already_answered(db) == 0
+    pending = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(models.WhatsAppSuggestion.status == "pending")
+        .count()
+    )
+    assert pending == 1
+
+
+def test_old_meeting_card_is_cleared_and_its_message_is_read_again():
+    from app.services.whatsapp.repository import requeue_pending_meetings
+
+    db = _session()
+    contact = models.WhatsAppContact(wa_id="919866666666", profile_name="Santy")
+    db.add(contact)
+    db.flush()
+    message = models.WhatsAppMessage(
+        contact_id=contact.id,
+        direction="inbound",
+        body="Rs. 14.50 Please close this as revised price confirm.",
+        timestamp=datetime.utcnow(),
+        classified_at=datetime.utcnow(),
+        category="meeting",
+        is_important=True,
+    )
+    db.add(message)
+    db.flush()
+    db.add(
+        models.WhatsAppSuggestion(
+            contact_id=contact.id,
+            message_id=message.id,
+            kind="meeting",
+            category="meeting",
+            status="pending",
+        )
+    )
+    db.commit()
+
+    assert requeue_pending_meetings(db) == 1
+    db.commit()
+    db.refresh(message)
+    suggestion = db.query(models.WhatsAppSuggestion).one()
+    assert suggestion.status == "dismissed"
+    assert message.classified_at is None
+    assert message.category is None
+    assert message.body.startswith("Rs. 14.50")
+
+
 def test_owner_key_reads_recipient_on_incoming_message():
     assert (
         account_scope.owner_key_from_payload(

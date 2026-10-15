@@ -173,6 +173,41 @@ class TestReplyPromptAndServiceGates:
         assert "kab tak" not in system
         assert "kaam ho jaygaa" not in system
 
+    def test_a_call_phrase_does_not_override_the_model(self):
+        with patch.object(
+            classifier,
+            "_chat_json",
+            return_value=_mock_classify_payload(
+                is_important=True,
+                category="budget",
+                document_type=None,
+                summary="Client is confirming a revised price",
+                confidence=90,
+            ),
+        ):
+            result = classifier.classify_message(
+                [{"direction": "outbound", "body": "Call me"}],
+                "Rs. 14.50 Please close this as revised price confirm.",
+            )
+        assert result["category"] == "budget"
+        assert result["category"] != "meeting"
+
+    def test_model_meeting_stays_a_meeting(self):
+        with patch.object(
+            classifier,
+            "_chat_json",
+            return_value=_mock_classify_payload(
+                is_important=True,
+                category="meeting",
+                document_type=None,
+                summary="Client wants to schedule a call",
+                confidence=93,
+            ),
+        ):
+            result = classifier.classify_message([], "Can we talk tomorrow afternoon?")
+        assert result["is_important"] is True
+        assert result["category"] == "meeting"
+
     def test_timeline_status_question_stays_actionable(self):
         with patch.object(
             classifier,
@@ -194,6 +229,24 @@ class TestReplyPromptAndServiceGates:
 
         for kind in ("reply", "timeline", "document", "clarify", "other"):
             assert kind not in repo._SUPERSEDEABLE_KINDS
+
+    def test_a_loose_month_is_not_saved_as_the_last_day(self):
+        """Approximate month language is not a confirmed calendar day.
+
+        An earlier draft of this test also required a new deadline-prompt sentence.
+        That sentence was never in the prompt. The check is stated_deadline_date.
+        The existing prompt still tells the model not to invent a date.
+        """
+        body = (
+            "But I saw your message, is actually good we start now because from the "
+            "looks of things 60days is involved before we get it here in sa it will "
+            "be around late December"
+        )
+        assert classifier.stated_deadline_date(body, "2026-12-31") is None
+        assert classifier.stated_deadline_date("Please deliver by the 20th", "2026-12-20") == (
+            "2026-12-20"
+        )
+        assert "not invent one" in classifier._DEADLINE_SYSTEM.lower()
 
     def test_reply_system_forbids_invented_facts(self):
         assert "Never invent dates" in classifier._REPLY_SYSTEM

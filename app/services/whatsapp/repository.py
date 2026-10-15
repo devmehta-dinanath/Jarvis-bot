@@ -679,7 +679,11 @@ def quote_newer_inbound_on_pending_cards(db: Session, message: models.WhatsAppMe
     )
     updated = 0
     for row in rows:
-        if _is_meeting_card(row) or row.message_id == message.id:
+        if (
+            _is_meeting_card(row)
+            or row.kind in {"commitment_reminder", "client_commitment_reminder"}
+            or row.message_id == message.id
+        ):
             continue
         linked = db.get(models.WhatsAppMessage, row.message_id) if row.message_id else None
         if (
@@ -1499,6 +1503,63 @@ def list_messages(
     return items, total
 
 
+def dismiss_unsupported_owner_commitments(db: Session) -> int:
+    """Drop a pending owner reminder whose source message is not a real promise.
+
+    "Thank you", "Pls", and a conditional weekend update are not a payment-status
+    promise due at 9:00. A reminder whose source still states the promise is kept,
+    and its card is pointed back at that source if a later inbound was quoted.
+    """
+    from app.services.whatsapp import product_gates
+
+    now = datetime.utcnow()
+    rows = (
+        db.query(models.WhatsAppSuggestion)
+        .filter(
+            models.WhatsAppSuggestion.status == "pending",
+            models.WhatsAppSuggestion.kind == "commitment_reminder",
+        )
+        .all()
+    )
+    updated = 0
+    for row in rows:
+        commitment_id = None
+        try:
+            details = json.loads(row.details or "{}")
+        except json.JSONDecodeError:
+            details = {}
+        if isinstance(details, dict):
+            commitment_id = details.get("commitment_id")
+        commitment = (
+            db.get(models.WhatsAppCommitment, commitment_id)
+            if commitment_id is not None
+            else None
+        )
+        if commitment is None or commitment.direction != "owner":
+            continue
+        source = (
+            db.get(models.WhatsAppMessage, commitment.message_id)
+            if commitment.message_id is not None
+            else None
+        )
+        source_body = source.body if source is not None else ""
+        if not product_gates.owner_reminder_still_supported(
+            source_body, commitment.label
+        ):
+            row.status = "dismissed"
+            row.resolved_at = now
+            if commitment.fulfilled_at is None:
+                commitment.fulfilled_at = now
+            updated += 1
+            continue
+        if source is not None and row.message_id != source.id:
+            row.message_id = source.id
+            updated += 1
+    if updated:
+        db.flush()
+    return updated
+
+
 def list_suggestions(
     db: Session,
     *,
@@ -1514,6 +1575,7 @@ def list_suggestions(
 
     cleared = dismiss_past_meetings(db)
     cleared += dismiss_suggestions_already_answered(db)
+    cleared += dismiss_unsupported_owner_commitments(db)
     if cleared:
         db.commit()
     base = db.query(models.WhatsAppSuggestion)

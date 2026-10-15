@@ -1,0 +1,811 @@
+checking permissions...
+  screen recording: ok
+  microphone: ok
+  accessibility: ok
+[2m2026-07-14T15:07:24.262202Z[0m [32m INFO[0m [2mscreenpipe_screen::monitor::macos::macos_version[0m[2m:[0m Detected macOS version: 15.7
+[2m2026-07-14T15:07:24.678929Z[0m [32m INFO[0m [2mscreenpipe_engine::sleep_monitor[0m[2m:[0m Starting macOS sleep/wake monitor
+[2m2026-07-14T15:07:24.680260Z[0m [32m INFO[0m [2mscreenpipe_engine::sleep_monitor[0m[2m:[0m Screen lock/unlock observers registered (CFNotificationCenter)
+[2m2026-07-14T15:07:24.680463Z[0m [32m INFO[0m [2mscreenpipe_engine::sleep_monitor[0m[2m:[0m Display reconfiguration watcher registered (CGDisplayRegisterReconfigurationCallback)
+[2m2026-07-14T15:07:24.692901Z[0m [32m INFO[0m [2mscreenpipe_engine::permission_monitor[0m[2m:[0m permission monitor started [3mscreen[0m[2m=[0mtrue [3mmic[0m[2m=[0mtrue [3maccessibility[0m[2m=[0mtrue [3mkeychain[0m[2m=[0mtrue
+[2m2026-07-14T15:07:24.692947Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m meeting detector enabled — independent of transcription mode
+[2m2026-07-14T15:07:25.129733Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction worker started (min_age=600s, poll=300s)
+[2m2026-07-14T15:07:25.129763Z[0m [32m INFO[0m [2mscreenpipe_engine::power::manager[0m[2m:[0m power manager started (poll interval: 10s)
+[2m2026-07-14T15:07:25.129838Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m API server listening on 127.0.0.1:3030 (localhost only)
+[2m2026-07-14T15:07:25.129898Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m API auth enabled — run `screenpipe auth token` to view your key
+
+  tip: get the desktop app for chat, timeline, and search UI
+       → https://screenpi.pe/onboarding
+
+[2m2026-07-14T15:07:25.129866Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::manager[0m[2m:[0m Starting VisionManager
+[2m2026-07-14T15:07:25.134551Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: day-recap
+[2m2026-07-14T15:07:25.134597Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: standup-update
+[2m2026-07-14T15:07:25.134623Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: ai-habits
+[2m2026-07-14T15:07:25.134647Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: time-breakdown
+[2m2026-07-14T15:07:25.134672Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: automate-my-work
+[2m2026-07-14T15:07:25.134696Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: video-export
+[2m2026-07-14T15:07:25.134735Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: meeting-summary
+[2m2026-07-14T15:07:25.134758Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded pipe: missed-todos
+[2m2026-07-14T15:07:25.134766Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m loaded 8 pipes from "/Users/varun/Library/Application Support/jarvis-bot-fe/screenpipe-data/pipes"
+
+
+
+                                            _          
+   __________________  ___  ____     ____  (_____  ___ 
+  / ___/ ___/ ___/ _ \/ _ \/ __ \   / __ \/ / __ \/ _ \
+ (__  / /__/ /  /  __/  __/ / / /  / /_/ / / /_/ /  __/
+/____/\___/_/   \___/\___/_/ /_/  / .___/_/ .___/\___/ 
+                                 /_/     /_/           
+
+
+
+power AI by everything you've seen, said or heard
+open source | runs locally | developer friendly
+
+
+┌────────────────────────┬────────────────────────────────────┐
+│ setting                │ value                              │
+├────────────────────────┼────────────────────────────────────┤
+│ audio chunk duration   │ 30 seconds                         │
+│ port                   │ 3030                               │
+│ audio disabled         │ false                              │
+│ vision disabled        │ false                              │
+│ pause on DRM content   │ false                              │
+│ audio engine           │ "WhisperTiny"                      │
+│ vad engine             │ Silero                             │
+│ data directory         │ /Users/varun/Library/Application Support/jarvis-bot-fe/screenpipe-data │
+│ debug mode             │ false                              │
+│ telemetry              │ true                               │
+│ use pii removal        │ true                               │
+│ use all monitors       │ true                               │
+│ ignored windows        │ []                                 │
+│ included windows       │ []                                 │
+│ cloud sync             │ disabled                           │
+│ auto-destruct pid      │ 0                                  │
+│ deepgram key           │ not set                            │
+│ api auth               │ enabled                            │
+│ encrypt secrets        │ disabled                           │
+│ retention days         │ 14                                 │
+│ retention mode         │ media-only (keep transcripts)      │
+├────────────────────────┼────────────────────────────────────┤
+│ languages              │                                    │
+│                        │ all languages                      │
+├────────────────────────┼────────────────────────────────────┤
+│ monitors               │                                    │
+│                        │ id: 1                              │
+├────────────────────────┼────────────────────────────────────┤
+│ audio devices          │                                    │
+│                        │ External Microphone (input)        │
+│                        │ System Audio (output)              │
+└────────────────────────┴────────────────────────────────────┘
+you are using local processing. all your data stays on your computer.
+
+warning: telemetry is enabled. only error-level data will be sent.
+to disable, use the --disable-telemetry flag.
+
+check latest changes here: https://github.com/screenpipe/screenpipe/releases
+[2m2026-07-14T15:07:25.135541Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m pipe scheduler started (generation 2)
+[2m2026-07-14T15:07:25.135575Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m starting UI event capture
+[2m2026-07-14T15:07:25.135686Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m connection-trigger watcher started (generation 2)
+[2m2026-07-14T15:07:25.138545Z[0m [33m WARN[0m [2mscreenpipe[0m[2m:[0m pi agent install failed: bun not found — install from https://bun.sh
+[2m2026-07-14T15:07:25.144121Z[0m [32m INFO[0m [2mscreenpipe_engine::ui_recorder[0m[2m:[0m Starting UI event capture
+[2m2026-07-14T15:07:25.144344Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m text-PII worker skipped at startup — async_pii_redaction=false. OPF model (~2.8 GB) will NOT be downloaded or loaded. Toggle via Settings → Privacy → AI PII removal.
+[2m2026-07-14T15:07:25.144356Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m image-PII worker skipped at startup — async_image_pii_redaction=false. rfdetr_v9 model (~108 MB) will NOT be downloaded or loaded. Toggle via Settings → Privacy → AI PII removal.
+[2m2026-07-14T15:07:25.144371Z[0m [32m INFO[0m [2mscreenpipe_engine::ui_recorder[0m[2m:[0m UI recording session started: 84325238-efa8-430f-8101-53304f362d75
+[2m2026-07-14T15:07:25.144509Z[0m [32m INFO[0m [2mscreenpipe_engine::calendar_speaker_id[0m[2m:[0m speaker identification: started (user_name=<not set>)
+[2m2026-07-14T15:07:25.144576Z[0m [32m INFO[0m [2mscreenpipe_engine::hot_frame_cache[0m[2m:[0m hot_frame_cache: warming from DB (2026-07-13 09:37:25.144575 UTC to 2026-07-14 09:37:25.144575 UTC)
+[2m2026-07-14T15:07:25.145822Z[0m [32m INFO[0m [2mscreenpipe_engine::power::manager[0m[2m:[0m initial power profile: Performance (on_ac=true, battery=Some(14), os_low_power=false, thermal=Nominal, reason=battery_low)
+[2m2026-07-14T15:07:25.148455Z[0m [32m INFO[0m [2mscreenpipe_engine::meeting_detector[0m[2m:[0m meeting v2: detection loop started (base_interval=5s, profiles=12, ignored_apps=0)
+[2m2026-07-14T15:07:25.150787Z[0m [32m INFO[0m [2mscreenpipe_engine::server[0m[2m:[0m Server listening on 127.0.0.1:3030
+[2m2026-07-14T15:07:25.246624Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::manager[0m[2m:[0m Starting vision recording for monitor 1 (1710x1107)
+[2m2026-07-14T15:07:25.246686Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::manager[0m[2m:[0m Starting event-driven capture for monitor 1 (device: monitor_1)
+[2m2026-07-14T15:07:25.246705Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::manager[0m[2m:[0m VisionManager started with 1/1 monitor(s)
+[2m2026-07-14T15:07:25.246714Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::monitor_watcher[0m[2m:[0m Starting monitor watcher (event-driven via CGDisplayRegisterReconfigurationCallback, 60s backstop poll)
+[2m2026-07-14T15:07:25.246720Z[0m [32m INFO[0m [2mscreenpipe_engine::hd_recorder::macos[0m[2m:[0m hd recorder ready for monitor 1 (device monitor_1)
+[2m2026-07-14T15:07:25.246769Z[0m [32m INFO[0m [2mscreenpipe_engine::event_driven_capture[0m[2m:[0m event-driven capture started for monitor 1 (device: monitor_1)
+[2m2026-07-14T15:07:25.313797Z[0m [32m INFO[0m [2mscreenpipe_engine::event_driven_capture[0m[2m:[0m idle capture phase for monitor 1: next idle in 30000ms across 1 monitor(s)
+[2m2026-07-14T15:07:25.390630Z[0m [32m INFO[0m [2mscreenpipe_engine::hot_frame_cache[0m[2m:[0m hot_frame_cache: warmed with 605 frame entries, coverage from 2026-07-13 09:37:25.144575 UTC
+[2m2026-07-14T15:07:25.918586Z[0m [32m INFO[0m [2msck_rs::stream_manager[0m[2m:[0m persistent SCK stream started for display 1 (1710x1107, 2fps, 0 excluded)
+[2m2026-07-14T15:07:27.043540Z[0m [32m INFO[0m [2mscreenpipe_engine::event_driven_capture[0m[2m:[0m startup capture for monitor 1: frame_id=1301, dur=919ms
+[2m2026-07-14T15:07:35.136964Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::engine[0m[2m:[0m transcription engine runtime: Whisper variant=WhisperTiny
+[2m2026-07-14T15:07:35.137301Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::engine[0m[2m:[0m whisper model available: "/Users/varun/.cache/huggingface/hub/models--ggerganov--whisper.cpp/snapshots/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin"
+[2m2026-07-14T15:07:35.137319Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::whisper::model[0m[2m:[0m whisper context: gpu acceleration enabled (Metal on macOS, Vulkan on Windows)
+[2m2026-07-14T15:07:35.137327Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::engine[0m[2m:[0m loading whisper model with GPU acceleration...
+whisper_init_from_file_with_params_no_state: loading model from '/Users/varun/.cache/huggingface/hub/models--ggerganov--whisper.cpp/snapshots/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin'
+whisper_init_with_params_no_state: use gpu    = 1
+whisper_init_with_params_no_state: flash attn = 0
+whisper_init_with_params_no_state: gpu_device = 0
+whisper_init_with_params_no_state: dtw        = 0
+ggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.037 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   Apple M4
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple9  (1009)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal3  (5001)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 11453.25 MB
+whisper_init_with_params_no_state: devices    = 3
+whisper_init_with_params_no_state: backends   = 3
+whisper_model_load: loading model
+whisper_model_load: n_vocab       = 51865
+whisper_model_load: n_audio_ctx   = 1500
+whisper_model_load: n_audio_state = 384
+whisper_model_load: n_audio_head  = 6
+whisper_model_load: n_audio_layer = 4
+whisper_model_load: n_text_ctx    = 448
+whisper_model_load: n_text_state  = 384
+whisper_model_load: n_text_head   = 6
+whisper_model_load: n_text_layer  = 4
+whisper_model_load: n_mels        = 80
+whisper_model_load: ftype         = 1
+whisper_model_load: qntvr         = 0
+whisper_model_load: type          = 1 (tiny)
+whisper_model_load: adding 1608 extra tokens
+whisper_model_load: n_langs       = 99
+whisper_model_load:        Metal total size =    77.11 MB
+whisper_model_load: model size    =   77.11 MB
+[2m2026-07-14T15:07:35.275472Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::engine[0m[2m:[0m whisper model loaded successfully
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+[2m2026-07-14T15:07:35.300664Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::manager[0m[2m:[0m transcription session created (will be reused across segments)
+[2m2026-07-14T15:07:35.301213Z[0m [32m INFO[0m [2mscreenpipe_audio::meeting_streaming::controller[0m[2m:[0m meeting streaming: coordinator listening (provider=selected-engine)
+[2m2026-07-14T15:07:35.306631Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::manager[0m[2m:[0m seeded 87 speakers (named + unnamed) from DB into embedding manager
+[2m2026-07-14T15:07:35.306802Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::manager[0m[2m:[0m audio manager started
+[2m2026-07-14T15:07:35.306867Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::manager[0m[2m:[0m calendar-assisted speaker diarization: listening for meeting events
+[2m2026-07-14T15:07:35.480072Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::device_monitor[0m[2m:[0m [DEVICE_RECOVERY] initial sync: default input 'External Microphone (input)' not active, switching
+[2m2026-07-14T15:07:35.518050Z[0m [32m INFO[0m [2mscreenpipe_audio::device::device_manager[0m[2m:[0m starting recording for device: External Microphone (input)
+[2m2026-07-14T15:07:35.518089Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::device_monitor[0m[2m:[0m [DEVICE_RECOVERY] initial sync: started default input: External Microphone (input)
+[2m2026-07-14T15:07:35.518101Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::device_monitor[0m[2m:[0m [DEVICE_RECOVERY] initial sync: default output 'System Audio (output)' not active, switching
+[2m2026-07-14T15:07:35.574000Z[0m [32m INFO[0m [2mscreenpipe_audio::device::device_manager[0m[2m:[0m starting recording for device: System Audio (output)
+[2m2026-07-14T15:07:35.574051Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::device_monitor[0m[2m:[0m [DEVICE_RECOVERY] initial sync: started default output: System Audio (output)
+[2m2026-07-14T15:07:35.574183Z[0m [32m INFO[0m [2mscreenpipe_audio::core::run_record_and_transcribe[0m[2m:[0m starting continuous recording for External Microphone (input) (unknown / 30s segments)
+[2m2026-07-14T15:07:35.847061Z[0m [32m INFO[0m [2mscreenpipe_audio::core::run_record_and_transcribe[0m[2m:[0m starting continuous recording for System Audio (output) (unknown / 30s segments)
+[2m2026-07-14T15:07:36.065830Z[0m [33m WARN[0m [2msqlx::query[0m[2m:[0m [3msummary[0m[2m=[0m"PRAGMA quick_check(1)" [3mdb.statement[0m[2m=[0m"" [3mrows_affected[0m[2m=[0m0 [3mrows_returned[0m[2m=[0m1 [3melapsed[0m[2m=[0m1.385357042s
+[2m2026-07-14T15:08:25.138811Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction: found 311 eligible frames
+[2m2026-07-14T15:08:31.746333Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction: 99 frames, 20.0MB → 13.9MB (1.4x), 99 JPEGs deleted
+[2m2026-07-14T15:08:41.484479Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction: 100 frames, 18.6MB → 20.6MB (0.9x), 100 JPEGs deleted
+[2m2026-07-14T15:08:49.946245Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction: 100 frames, 17.0MB → 18.8MB (0.9x), 100 JPEGs deleted
+[2m2026-07-14T15:08:51.268989Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction: 11 frames, 1.4MB → 1.7MB (0.9x), 11 JPEGs deleted
+[2m2026-07-14T15:09:08.444997Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device External Microphone (input) skipping duplicate transcript (entire content overlaps with previous)
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+[2m2026-07-14T15:09:57.508523Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::manager[0m[2m:[0m reconciliation: transcribed 28 orphaned chunks
+[2m2026-07-14T15:11:38.583193Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device System Audio (output) skipping duplicate transcript (entire content overlaps with previous)
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+[2m2026-07-14T15:11:58.392814Z[0m [32m INFO[0m [2mscreenpipe_db::db::speakers[0m[2m:[0m created new speaker id=88 (no existing match within threshold)
+ggml_metal_free: deallocating
+whisper_backend_init_gpu: device 0: Metal (type: 1)
+whisper_backend_init_gpu: found GPU device 0: Metal (type: 1, cnt: 0)
+whisper_backend_init_gpu: using Metal backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M4
+ggml_metal_init: picking default device: Apple M4
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =    3.15 MB
+whisper_init_state: kv cross size =    9.44 MB
+whisper_init_state: kv pad  size  =    2.36 MB
+whisper_init_state: compute buffer (conv)   =   14.17 MB
+whisper_init_state: compute buffer (encode) =   65.96 MB
+whisper_init_state: compute buffer (cross)  =    8.50 MB
+whisper_init_state: compute buffer (decode) =   96.83 MB
+ggml_metal_free: deallocating
+[2m2026-07-14T15:11:59.678568Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::manager[0m[2m:[0m reconciliation: transcribed 4 orphaned chunks
+
+  tip: get the screenpipe desktop app for the full experience
+       https://screenpipe.com
+
+[2m2026-07-14T15:12:25.147946Z[0m [32m INFO[0m [2mscreenpipe_engine::server[0m[2m:[0m api_usage_5min: 157 requests
+[2m2026-07-14T15:12:38.666654Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device System Audio (output) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:13:51.276471Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction: found 4 eligible frames
+[2m2026-07-14T15:14:07.729331Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device External Microphone (input) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:14:07.820489Z[0m [32m INFO[0m [2mscreenpipe_db::db::speakers[0m[2m:[0m created new speaker id=89 (no existing match within threshold)
+[2m2026-07-14T15:14:08.712814Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device System Audio (output) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:14:08.892456Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device System Audio (output) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:14:08.986271Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device System Audio (output) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:14:36.965174Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device External Microphone (input) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:14:37.034885Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device External Microphone (input) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:14:38.183599Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device System Audio (output) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:15:38.274118Z[0m [32m INFO[0m [2mscreenpipe_audio::transcription::handle_new_transcript[0m[2m:[0m device System Audio (output) skipping duplicate transcript (entire content overlaps with previous)
+[2m2026-07-14T15:16:50.678733Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m received ctrl+c, initiating shutdown
+[2m2026-07-14T15:16:50.679749Z[0m [32m INFO[0m [2mscreenpipe_audio::device::device_manager[0m[2m:[0m Stopping device: External Microphone (input)
+[2m2026-07-14T15:16:50.679770Z[0m [32m INFO[0m [2mscreenpipe_audio::device::device_manager[0m[2m:[0m Stopping device: External Microphone (input)
+[2m2026-07-14T15:16:50.714616Z[0m [32m INFO[0m [2mscreenpipe_audio::device::device_manager[0m[2m:[0m Stopping device: System Audio (output)
+[2m2026-07-14T15:16:50.714635Z[0m [32m INFO[0m [2mscreenpipe_audio::device::device_manager[0m[2m:[0m Stopping device: System Audio (output)
+[2m2026-07-14T15:16:50.732807Z[0m [32m INFO[0m [2mscreenpipe_audio::audio_manager::manager[0m[2m:[0m audio manager stopped
+[2m2026-07-14T15:16:50.732843Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m stopping UI event capture
+[2m2026-07-14T15:16:50.732901Z[0m [32m INFO[0m [2mscreenpipe_engine::snapshot_compaction[0m[2m:[0m snapshot compaction worker shutting down
+[2m2026-07-14T15:16:50.732937Z[0m [32m INFO[0m [2mscreenpipe_engine::meeting_detector[0m[2m:[0m meeting v2: shutdown received, exiting detection loop
+[2m2026-07-14T15:16:50.733215Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m received shutdown signal for VisionManager
+[2m2026-07-14T15:16:50.733754Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::manager[0m[2m:[0m Shutting down VisionManager
+[2m2026-07-14T15:16:50.733772Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::manager[0m[2m:[0m Stopping VisionManager
+[2m2026-07-14T15:16:50.733788Z[0m [32m INFO[0m [2mscreenpipe_engine::vision_manager::manager[0m[2m:[0m Stopping vision recording for monitor 1
+[2m2026-07-14T15:16:50.754133Z[0m [32m INFO[0m [2msck_rs::stream_manager[0m[2m:[0m stopped 1 persistent stream(s)
+[2m2026-07-14T15:16:50.919514Z[0m [33m WARN[0m [2mscreenpipe_engine::ui_recorder[0m[2m:[0m frame linker channel full or closed; dropping event persisted (row_id=381, corr_id=361)
+[2m2026-07-14T15:16:50.931653Z[0m [32m INFO[0m [2mscreenpipe_engine::ui_recorder[0m[2m:[0m UI recording session ended: 84325238-efa8-430f-8101-53304f362d75
+[2m2026-07-14T15:16:50.931816Z[0m [32m INFO[0m [2mscreenpipe[0m[2m:[0m shutdown complete
+[2m2026-07-14T15:16:50.935271Z[0m [32m INFO[0m [2mscreenpipe_core::pipes[0m[2m:[0m connection-trigger watcher exited (generation 2)
+ggml_metal_free: deallocating
+PANIC: panicked at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/thread/local.rs:428:25:
+cannot access a Thread Local Storage value during or after destruction: AccessError
+panicked at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/thread/current.rs:315:9:
+use of std::thread::current() is not possible after the thread's local data has been destroyed
+thread panicked while processing panic. aborting.

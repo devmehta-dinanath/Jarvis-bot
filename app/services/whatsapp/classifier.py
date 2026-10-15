@@ -138,7 +138,7 @@ def detect_commitment(
     from app.services.whatsapp import product_gates
 
     ack_gate = product_gates.owner_ack_creates_commitment(message, last_inbound)
-    if ack_gate is False:
+    if ack_gate is False or _owner_message_cannot_be_commitment(message):
         return {
             "is_commitment": False,
             "commitment_type": None,
@@ -168,7 +168,48 @@ def detect_commitment(
         result["is_commitment"] = True
         result["commitment_type"] = result["commitment_type"] or "document"
         result["label"] = result["label"] or "Follow through on their request"
+    if result["is_commitment"] and ack_gate is not True:
+        if not product_gates.states_future_promise(message):
+            return {
+                "is_commitment": False,
+                "commitment_type": None,
+                "label": None,
+                "deadline_at": None,
+            }
+        if product_gates.label_infers_unstated_payment_update(message, result["label"]):
+            return {
+                "is_commitment": False,
+                "commitment_type": None,
+                "label": None,
+                "deadline_at": None,
+            }
+    if result["is_commitment"]:
+        result["deadline_at"] = product_gates.supported_commitment_deadline(
+            message,
+            result.get("deadline_at"),
+            also=last_inbound if ack_gate is True else None,
+        )
     return result
+
+
+def _owner_message_cannot_be_commitment(message: str) -> bool:
+    """Questions, greetings, completed reports, and conditional updates are not promises."""
+    from app.services.whatsapp import product_gates
+
+    body = (message or "").strip()
+    if not body:
+        return True
+    if product_gates.is_conditional_update(body):
+        return True
+    if (
+        product_gates.is_closing_thanks(body)
+        or product_gates.is_bare_please(body)
+        or product_gates.is_greeting_or_festival(body)
+    ):
+        return True
+    if product_gates.is_status_question(body):
+        return True
+    return False
 
 
 def check_commitment_fulfilled(label: str, message: str) -> bool:
@@ -400,6 +441,11 @@ def classify_message(
             return _silent_filter_result("group", detected_language)
 
     is_important = bool(data.get("is_important", False))
+    from app.services.whatsapp import product_gates
+
+    if not safety_concern and product_gates.is_closing_thanks(message):
+        is_important = False
+        category = "greeting"
     if safety_concern:
         is_important = True
     if category in ALWAYS_IMPORTANT and category in CATEGORIES:
@@ -417,7 +463,8 @@ def classify_message(
     if category != "payment":
         payment_status = None
     elif payment_status not in ("received", "overdue"):
-        payment_status = "overdue"
+        # incoming, pending, sent, empty, and any other unrecognized value stay unknown.
+        payment_status = None
 
     document_type = str(data.get("document_type") or "").strip() or None
     if category != "document":
@@ -485,6 +532,17 @@ def classify_message(
             "Still checking",
             "Not sure",
         ]
+        if confidence is None or confidence > 60:
+            confidence = 40
+    elif (
+        is_important
+        and not needs_clarification
+        and not safety_concern
+        and product_gates.should_clarify_missing_material_readiness(message, history)
+    ):
+        needs_clarification = True
+        clarifying_question = "Can you prepare and send this?"
+        clarifying_options = ["Yes, it's ready", "Not ready yet", "Need more detail"]
         if confidence is None or confidence > 60:
             confidence = 40
 

@@ -90,6 +90,11 @@ def payment_reply_hint(payment_status: str | None) -> str:
             "The client says they have made a payment to us. Thank them, confirm you will verify "
             "and acknowledge once it reflects. Do NOT confirm receipt as a fact yet."
         )
+    if payment_status != "overdue":
+        return (
+            "The payment status is not established. Do not call the payment received, sent, "
+            "or overdue. Acknowledge only what this message already says."
+        )
     return (
         "The client is chasing a payment we owe or an unpaid/pending invoice. Acknowledge it, "
         "apologise for any delay, and give a clear next step or timeline. Do NOT invent a date "
@@ -180,8 +185,10 @@ def _render_classify_system(categories) -> str:
         "the wrong one. "
         "(B) Missing owner-only fact — the client asks for a date, price, stock ETA, invoice number, "
         "or similar private detail that is NOT present anywhere in the conversation history "
-        "(e.g. 'When will the stock arrive?' with no arrival date in the thread). In that case do "
-        "NOT invent the fact; ask the owner first. "
+        "(e.g. 'When will the stock arrive?' with no arrival date in the thread), or asks the owner "
+        "to prepare, revise, include, or send a draft, proposal, or document when the thread does "
+        "not show that the material is available and that the owner has agreed to do it. In that "
+        "case do NOT invent the fact or promise the work; ask the owner first. "
         "Do NOT use clarification for ordinary wording uncertainty, greetings, or when the needed "
         "fact IS already in the thread (then draft normally using that fact). When you do use it: "
         "clarifying_question is ONE short question (under 12 words), and clarifying_options is a "
@@ -438,7 +445,11 @@ _REPLY_SYSTEM = (
     "4. ACCURACY (HARD): Never invent dates, prices, stock availability, ETAs, invoice numbers, "
     "quantities, or other business facts. Only use details that appear in the conversation "
     "history or the user's clarifying answer. If a needed fact is missing, do not guess — "
-    "ask a short clarifying question or say you will confirm (without inventing the fact).\n"
+    "ask a short clarifying question or say you will confirm (without inventing the fact). "
+    "A client's request does not prove the account owner has agreed to fulfil it. "
+    "For a document, draft, or proposal request, never assume the requested materials are "
+    "available, and never promise preparation, inclusion, revision, or sending unless the "
+    "conversation already shows that those materials are available and that the owner has agreed.\n"
     "5. NO UNNECESSARY REPETITION: Check the 'Me:' lines in the recent conversation before writing: if you already said this same thing (already promised to check and get back, already gave this exact update), do NOT repeat it near-verbatim. Treat a repeated message as a follow-up nudge — give a fresh status or acknowledge you're still on it.\n"
     "Return ONLY the plain reply text, no preamble, no quotes."
 )
@@ -546,6 +557,13 @@ _COMMITMENT_SYSTEM = (
     "is NOT a commitment. "
     "Do NOT treat it as a commitment if the message already delivers the thing, is only "
     "answering a question with the answer included, or is greeting/small-talk with no promise. "
+    "A conditional update is not a commitment: 'if weekend', 'if anything', or "
+    "'I'll update you a date prior' does not promise to update payment status at a "
+    "specific time. Do not infer a promise from earlier payment talk when this message "
+    "does not itself promise a future action. A completed report such as "
+    "'Done a transfer today' is not a new promise. "
+    "Leave deadline_at null unless this message, or the client request being accepted, "
+    "states that timeframe. "
     f"{_DEADLINE_HINT_INSTRUCTION} "
     "When the commitment comes from accepting a client request that named a deadline "
     "('by Friday'), use that deadline. "
@@ -761,9 +779,10 @@ def draft_category_hint(
         ),
         "payment": "The client's message is about a payment. Acknowledge it clearly.",
         "document": (
-            "The client has requested a specific document/information. Acknowledge the request. "
-            "Do not promise to send it unless the conversation shows it is ready to send; if "
-            "something is needed first, ask briefly."
+            "The client has requested a document, draft, or proposal. Acknowledge only what the "
+            "conversation already supports. Do not promise to send it, prepare it, include it, "
+            "or revise it unless the conversation shows the material is available and the owner "
+            "has agreed to do that."
         ),
         "shipment": (
             "This is a shipment/delivery update. Acknowledge it appropriately and keep the client "

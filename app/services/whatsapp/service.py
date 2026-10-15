@@ -116,7 +116,9 @@ def _followup_chip_label(hours_waiting: float | None, priority: str) -> str:
 def _payment_chip_label(payment_status: str | None) -> str:
     if payment_status == "received":
         return "Payment received — verify & confirm to the client"
-    return "Payment overdue — acknowledge and send a reminder"
+    if payment_status == "overdue":
+        return "Payment overdue — acknowledge and send a reminder"
+    return "Payment update — review before replying"
 
 
 def _lead_chip_label() -> str:
@@ -239,6 +241,10 @@ def _draft_reply_with_budget(
         or decision.get("missing_facts")
     ):
         return None
+    from app.services.whatsapp import product_gates
+
+    if product_gates.should_clarify_missing_material_readiness(body, history):
+        return None
     if WHATSAPP_AI_DRAFTS_ENABLED:
         try:
             if complaint:
@@ -278,6 +284,8 @@ def _draft_reply_with_budget(
         return None
     if category == "shipment" and shipment_status == "delayed":
         return "Thanks for the update. I can't confirm a new arrival date from this message."
+    if category == "payment" and payment_status not in {"received", "overdue"}:
+        return None
     return text.strip() or None
 
 
@@ -727,6 +735,8 @@ class WhatsAppService:
             return
         if product_gates.is_small_talk_message(body):
             return
+        if product_gates.is_closing_thanks(body) or product_gates.is_bare_please(body):
+            return
 
         pending = repo.pending_commitment_for_contact(db, message.contact_id, direction="client")
         try:
@@ -822,6 +832,8 @@ class WhatsAppService:
             < timedelta(hours=WHATSAPP_SILENT_OBSERVATION_HOURS)
         )
 
+        from app.services.whatsapp import product_gates
+
         if wa_fallback.is_likely_spam(body, has_prior_history=prior_count > 0):
             result = classifier._silent_filter_result("spam")
         else:
@@ -848,6 +860,10 @@ class WhatsAppService:
                     exc,
                 )
                 result = wa_fallback.classify_message(body)
+                if result and result.get("category") == "payment":
+                    # The keyword list marks every payment mention overdue. Keep
+                    # that status only when this message supports it.
+                    result["payment_status"] = product_gates.keyword_payment_status(body)
                 if result is None:
                     logger.error(
                         "[WHATSAPP] Classification failed for message %s: %s",
@@ -868,6 +884,12 @@ class WhatsAppService:
                     result["decision"] = wa_decision.closed_decision(
                         result.get("category") or "other"
                     )
+
+        if product_gates.is_closing_thanks(body) and not result.get("safety_concern"):
+            result["is_important"] = False
+            result["category"] = "greeting"
+            result["needs_clarification"] = False
+            result["decision"] = wa_decision.closed_decision("greeting")
 
         # Belt-and-suspenders: never create Inbox chips for untagged group messages,
         # even if an older classifier path or fallback marked them important.
@@ -1635,7 +1657,7 @@ class WhatsAppService:
         corrections: list[dict] | None = None,
         voice_examples: list[str] | None = None,
     ):
-        payment_status = result.get("payment_status") or "overdue"
+        payment_status = result.get("payment_status") or None
         hint = classifier.payment_reply_hint(payment_status)
         draft = _draft_reply_with_budget(
             history,
@@ -2585,11 +2607,25 @@ class WhatsAppService:
                     continue
                 anchor_at = commitment.created_at
                 anchor_id = None
+                promised = None
                 if commitment.message_id is not None:
                     promised = db.get(models.WhatsAppMessage, commitment.message_id)
                     if promised is not None and promised.timestamp is not None:
                         anchor_at = promised.timestamp
                         anchor_id = promised.id
+                source_body = (promised.body or "") if promised is not None else ""
+                if not product_gates.owner_reminder_still_supported(
+                    source_body, commitment.label
+                ):
+                    repo.fulfill_commitment(db, commitment.id)
+                    repo.dismiss_commitment_suggestions(db, commitment.id)
+                    db.commit()
+                    logger.info(
+                        "[WHATSAPP] Dropped unsupported owner commitment %s for contact %s",
+                        commitment.id,
+                        commitment.contact_id,
+                    )
+                    continue
                 if repo.owner_replied_after(
                     db,
                     commitment.contact_id,
