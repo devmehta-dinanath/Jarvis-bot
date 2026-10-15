@@ -11,10 +11,10 @@ from app.config import (
     CALENDAR_DEFAULT_TIMEZONE,
     WHATSAPP_CORRECTIONS_CONTEXT_LIMIT,
     WHATSAPP_DEFAULT_MEETING_MINUTES,
-    WHATSAPP_HISTORY_CONTEXT_LIMIT,
     WHATSAPP_MEETING_CONFIRMATION_TEMPLATE,
     WHATSAPP_TEMPLATE_DEFAULT_LANGUAGE,
 )
+from app.services.whatsapp.settings import WHATSAPP_CHAT_CONTEXT_MESSAGES
 from app.services.google_calendar.schemas import EventCreate, EventDateTime
 from app.services.google_calendar.service import google_calendar_service
 from app.services.whatsapp import classifier
@@ -226,7 +226,7 @@ def answer_clarification(
     is_personal = bool(contact is not None and contact.contact_type == "personal")
 
     history = repo.recent_history(
-        db, suggestion.contact_id, limit=WHATSAPP_HISTORY_CONTEXT_LIMIT, before_message_id=message.id
+        db, suggestion.contact_id, limit=WHATSAPP_CHAT_CONTEXT_MESSAGES, before_message_id=message.id
     )
     instructions = [i.text for i in repo.list_instructions(db, active_only=True)]
     corrections = repo.load_corrections_for_prompt(db, limit=WHATSAPP_CORRECTIONS_CONTEXT_LIMIT)
@@ -307,7 +307,7 @@ def redraft_with_correction(
     is_personal = bool(contact is not None and contact.contact_type == "personal")
 
     history = repo.recent_history(
-        db, suggestion.contact_id, limit=WHATSAPP_HISTORY_CONTEXT_LIMIT, before_message_id=message.id
+        db, suggestion.contact_id, limit=WHATSAPP_CHAT_CONTEXT_MESSAGES, before_message_id=message.id
     )
     instructions = [i.text for i in repo.list_instructions(db, active_only=True)]
     corrections = repo.load_corrections_for_prompt(db, limit=WHATSAPP_CORRECTIONS_CONTEXT_LIMIT)

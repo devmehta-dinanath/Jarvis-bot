@@ -402,7 +402,7 @@ def live_chat_context(
     contact_id: int,
     *,
     exclude_body: str | None = None,
-    limit: int = 20,
+    limit: int = 40,
 ) -> list[dict[str, str]]:
     """Per-message context AND tone source: the last `limit` messages fetched live from
     WAHA for this contact, so classification/drafting reflects the real WhatsApp
@@ -842,12 +842,14 @@ def work_contacts_awaiting_their_reply(
     return results
 
 
-def pending_commitment_for_contact(
+def open_commitments_for_contact(
     db: Session, contact_id: int, *, direction: str = "owner"
-) -> models.WhatsAppCommitment | None:
-    """The one open (unfulfilled) commitment for this contact in this direction, if any —
-    only one is tracked at a time per (contact, direction); see
-    WhatsAppCommitment.direction."""
+) -> list[models.WhatsAppCommitment]:
+    """Every still-open commitment for this contact in this direction.
+
+    A later promise does not replace an older one. Completion has to match
+    the commitment it actually finishes.
+    """
     return (
         db.query(models.WhatsAppCommitment)
         .filter(
@@ -855,9 +857,17 @@ def pending_commitment_for_contact(
             models.WhatsAppCommitment.direction == direction,
             models.WhatsAppCommitment.fulfilled_at.is_(None),
         )
-        .order_by(models.WhatsAppCommitment.created_at.desc())
-        .first()
+        .order_by(models.WhatsAppCommitment.created_at.asc())
+        .all()
     )
+
+
+def pending_commitment_for_contact(
+    db: Session, contact_id: int, *, direction: str = "owner"
+) -> models.WhatsAppCommitment | None:
+    """The oldest open commitment for this contact in this direction, if any."""
+    rows = open_commitments_for_contact(db, contact_id, direction=direction)
+    return rows[0] if rows else None
 
 
 def create_commitment(
@@ -1014,7 +1024,7 @@ def next_uncommitment_checked_outbound(db: Session) -> models.WhatsAppMessage | 
         .filter(
             models.WhatsAppMessage.direction == "outbound",
             models.WhatsAppMessage.classified_at.is_(None),
-            models.WhatsAppMessage.msg_type == "text",
+            models.WhatsAppMessage.msg_type.in_(("text", "document")),
         )
         .order_by(models.WhatsAppMessage.id.asc())
         .first()

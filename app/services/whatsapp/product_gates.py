@@ -363,7 +363,8 @@ def supported_commitment_deadline(
         return None
     day = raw[:10]
     hour_phrase = re.compile(
-        r"(?i)\b(?:in\s+\d+\s+hours?|\d+\s+hours?|end of day|eod)\b"
+        r"(?i)\b(?:in\s+\d+\s+hours?|\d+\s+hours?|a\s+couple\s+of\s+hours?|"
+        r"in\s+a\s+couple\s+of\s+hours?|end of day|eod)\b"
     )
     for text in (message, also):
         if not text:
@@ -414,14 +415,31 @@ def outbound_may_complete_commitment(label: str | None, message: str | None) -> 
         return False
     if is_bare_ack(body) or is_small_talk_message(body):
         return False
-    lower = body.lower()
-    if re.search(r"\b(?:called|sent|shared|attached|delivered|completed)\b", lower):
-        return True
-    skip = {"call", "about", "send", "this", "that", "with", "your", "from", "have"}
-    for word in re.findall(r"[A-Za-z]{4,}", label or ""):
+    evidence = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", body)
+    evidence = evidence.replace("_", " ").replace("-", " ").lower()
+    skip = {
+        "call",
+        "about",
+        "send",
+        "share",
+        "this",
+        "that",
+        "with",
+        "your",
+        "from",
+        "have",
+        "will",
+        "just",
+        "please",
+        "file",
+        "document",
+    }
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", label or ""):
+        if len(word) < 4 and not word.isupper():
+            continue
         if word.lower() in skip:
             continue
-        if word.lower() in lower:
+        if word.lower() in evidence:
             return True
     return False
 

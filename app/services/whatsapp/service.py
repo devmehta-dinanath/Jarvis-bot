@@ -625,9 +625,11 @@ class WhatsAppService:
         # Does not touch Reminder (commitment_reminder) or Waiting-on owner_followup chips.
         repo.dismiss_awaiting_owner_reply_for_contact(db, message.contact_id)
 
-        pending = repo.pending_commitment_for_contact(db, message.contact_id, direction="owner")
+        open_rows = repo.open_commitments_for_contact(
+            db, message.contact_id, direction="owner"
+        )
         try:
-            if pending is not None:
+            for pending in open_rows:
                 may_complete = product_gates.outbound_may_complete_commitment(
                     pending.label, body
                 )
@@ -638,9 +640,18 @@ class WhatsAppService:
                         "[WHATSAPP] Commitment fulfilled for contact %s: %s",
                         message.contact_id, pending.label,
                     )
-            else:
+            is_document = getattr(message, "msg_type", "text") == "document"
+            should_detect = not is_document and (
+                not open_rows
+                or product_gates.states_future_promise(body)
+                or product_gates.is_bare_ack(body)
+            )
+            if should_detect:
                 history = repo.live_chat_context(
-                    db, message.contact_id, exclude_body=body, limit=12
+                    db,
+                    message.contact_id,
+                    exclude_body=body,
+                    limit=wa_settings.WHATSAPP_CHAT_CONTEXT_MESSAGES,
                 )
                 last_inbound = None
                 for item in reversed(history or []):
@@ -668,7 +679,9 @@ class WhatsAppService:
                 detected = classifier.detect_commitment(
                     body, history=history, last_inbound=last_inbound
                 )
-                if detected["is_commitment"]:
+                if detected["is_commitment"] and not any(
+                    row.message_id == message.id for row in open_rows
+                ):
                     explicit_deadline = _parse_iso(detected.get("deadline_at"))
                     deadline_at, create_immediate = product_gates.resolve_owner_reminder_schedule(
                         explicit_deadline,
@@ -799,11 +812,14 @@ class WhatsAppService:
         db.commit()
 
     def _classify_one_unsafe(self, db, message, body: str) -> None:
-        # Rule 12 — every inbound message gets its context AND tone from the real WhatsApp
-        # conversation (last 20 messages, fetched live from WAHA), not just what our own DB
-        # happened to capture. Falls back to local DB history if WAHA is unreachable.
+        # Reply drafting, classification, fallback, and meeting extraction all
+        # receive this same history. A model failure still uses the current
+        # message only for the keyword fallback; it does not shrink the window.
         history = repo.live_chat_context(
-            db, message.contact_id, exclude_body=body, limit=40
+            db,
+            message.contact_id,
+            exclude_body=body,
+            limit=wa_settings.WHATSAPP_CHAT_CONTEXT_MESSAGES,
         )
 
         contact = message.contact
@@ -2831,7 +2847,9 @@ class WhatsAppService:
                 voice_examples = repo.recent_outbound_examples(
                     db, personal=False, contact_id=contact.id, category="follow_up"
                 )
-                history = repo.live_chat_context(db, contact.id, limit=12)
+                history = repo.live_chat_context(
+                    db, contact.id, limit=wa_settings.WHATSAPP_CHAT_CONTEXT_MESSAGES
+                )
                 try:
                     draft = classifier.draft_reply(
                         history,

@@ -41,6 +41,12 @@ WHATSAPP_OWNER_FOLLOWUP_URGENT_HOURS = float(
     os.getenv("WHATSAPP_OWNER_FOLLOWUP_URGENT_HOURS", _FOLLOWUP_URGENT)
 )
 
+# How many recent chat messages each WhatsApp model path receives.
+# Classification, reply drafting, commitment extraction, follow-up drafts,
+# and meeting extraction all pass this count explicitly. It is not the
+# follow-up waiting threshold.
+WHATSAPP_CHAT_CONTEXT_MESSAGES = 40
+
 # Local hour (CALENDAR_DEFAULT_TIMEZONE) when no-deadline owner promises surface in Inbox.
 WHATSAPP_MORNING_BRIEF_HOUR = int(os.getenv("WHATSAPP_MORNING_BRIEF_HOUR", "9"))
 

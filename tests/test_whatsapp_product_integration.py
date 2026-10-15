@@ -202,7 +202,7 @@ class TestI3OwnerPromiseReminder:
 
         with (
             patch.object(repo, "dismiss_awaiting_owner_reply_for_contact", return_value=0),
-            patch.object(repo, "pending_commitment_for_contact", return_value=None),
+            patch.object(repo, "open_commitments_for_contact", return_value=[]),
             patch.object(
                 repo,
                 "live_chat_context",
@@ -469,7 +469,7 @@ class TestI9OwnerFulfillsReminder:
         )
         with (
             patch.object(repo, "dismiss_awaiting_owner_reply_for_contact", return_value=0),
-            patch.object(repo, "pending_commitment_for_contact", return_value=pending),
+            patch.object(repo, "open_commitments_for_contact", return_value=[pending]),
             patch.object(
                 classifier, "check_commitment_fulfilled", return_value=True
             ) as fulfilled,

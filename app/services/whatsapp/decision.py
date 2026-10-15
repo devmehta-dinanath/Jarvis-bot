@@ -64,6 +64,15 @@ def stated_deadline_date(message: str | None, candidate: str | None) -> str | No
         return None
     if not _RELATIVE_RE.search(text):
         return None
+    # "this week" and "early next week" name a range, not Wednesday.
+    vague_week = re.search(r"\b(?:this|next|coming)\s+week\b", text, re.IGNORECASE)
+    named_day = re.search(
+        r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if vague_week and not named_day and not explicit_days:
+        return None
     return raw
 
 
