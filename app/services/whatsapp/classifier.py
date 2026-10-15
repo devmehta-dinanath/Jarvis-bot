@@ -168,6 +168,12 @@ def detect_commitment(
         result["is_commitment"] = True
         result["commitment_type"] = result["commitment_type"] or "document"
         result["label"] = result["label"] or "Follow through on their request"
+    if ack_gate is True:
+        accepted = product_gates.accepted_action_label(last_inbound, history)
+        if accepted:
+            result["is_commitment"] = True
+            result["commitment_type"] = "other"
+            result["label"] = accepted
     if result["is_commitment"] and ack_gate is not True:
         if not product_gates.states_future_promise(message):
             return {

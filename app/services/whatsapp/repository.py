@@ -84,7 +84,8 @@ def _is_meeting_card(suggestion) -> bool:
 def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -> int:
     """Clear pending reply cards once the owner has replied in this chat.
 
-    Meeting cards stay until their scheduled time has passed. A card for a
+    Meeting cards stay until their scheduled time has passed. An owner reminder
+    and a follow-up that is waiting on the other person stay. A card for a
     message that arrived after this reply stays, because that message is new.
     """
     now = datetime.utcnow()
@@ -98,7 +99,9 @@ def dismiss_pending_older_than(db: Session, contact_id: int, cutoff: datetime) -
     )
     updated = 0
     for suggestion in pending:
-        if _is_meeting_card(suggestion):
+        if _is_meeting_card(suggestion) or suggestion.kind == "commitment_reminder":
+            continue
+        if suggestion.kind in _WAITING_ON_THEM_KINDS:
             continue
         ts = None
         if suggestion.message_id is not None:
@@ -196,7 +199,8 @@ def dismiss_suggestions_already_answered(db: Session) -> int:
     """Drop suggestion drafts for a chat the owner has already answered.
 
     A meeting stays until its time has passed. A card that is waiting on the
-    other person stays. A card for a message that arrived after the reply stays.
+    other person stays. An owner reminder stays until the promised action is
+    actually done. A card for a message that arrived after the reply stays.
     """
     now = datetime.utcnow()
     pending = (
@@ -206,7 +210,11 @@ def dismiss_suggestions_already_answered(db: Session) -> int:
     )
     updated = 0
     for suggestion in pending:
-        if _is_meeting_card(suggestion) or suggestion.kind in _WAITING_ON_THEM_KINDS:
+        if (
+            _is_meeting_card(suggestion)
+            or suggestion.kind in _WAITING_ON_THEM_KINDS
+            or suggestion.kind == "commitment_reminder"
+        ):
             continue
         anchor_at = suggestion.created_at
         anchor_id = None
@@ -706,18 +714,41 @@ def contact_latest_is_outbound(db: Session, contact_id: int) -> bool:
     return latest is not None and latest.direction == "outbound"
 
 
-# Generated nudges collapse to one per contact. A card that quotes a specific
-# client message (reply, timeline, document, …) stays, so a newer message does
-# not remove the earlier message from the Inbox.
+# Generated nudges collapse to one per contact. A reply draft and an owner
+# reminder are separate cards, so a newer reply does not remove the reminder.
 _SUPERSEDEABLE_KINDS = frozenset(
     {
         "followup_nudge",
         "owner_followup_nudge",
         "life_nudge",
-        "commitment_reminder",
         "client_commitment_reminder",
     }
 )
+
+_REMINDER_KINDS = frozenset({"commitment_reminder"})
+_FOLLOWUP_KINDS = frozenset(
+    {
+        "followup_nudge",
+        "owner_followup_nudge",
+        "life_nudge",
+        "client_commitment_reminder",
+    }
+)
+
+
+def _card_slot(kind: str | None, category: str | None) -> str:
+    """Which pending card this suggestion occupies for one chat.
+
+    A meeting, an owner reminder, a follow-up, and a reply draft each keep
+    their own row. A newer card updates only its own slot.
+    """
+    if kind == "meeting" or category == "meeting":
+        return "meeting"
+    if kind in _REMINDER_KINDS or category == "pending_commitment":
+        return "reminder"
+    if kind in _FOLLOWUP_KINDS:
+        return "followup"
+    return "reply"
 
 
 def dismiss_superseded_pending_for_contact(
@@ -1103,10 +1134,10 @@ def create_suggestion(
     details: dict | None = None,
     visible_after: datetime | None = None,
 ) -> models.WhatsAppSuggestion:
-    """One pending reply card per contact, plus a meeting card that is left alone.
+    """One pending card per slot for a contact.
 
-    A newer message updates the reply card. It does not replace a meeting card;
-    that card stays until its time has passed.
+    Reply drafts, owner reminders, follow-ups, and meetings each keep their own
+    row. A newer card updates only its own slot.
     """
     existing_rows = (
         db.query(models.WhatsAppSuggestion)
@@ -1117,13 +1148,9 @@ def create_suggestion(
         .order_by(models.WhatsAppSuggestion.created_at.desc())
         .all()
     )
-    incoming_is_meeting = kind == "meeting" or category == "meeting"
+    incoming_slot = _card_slot(kind, category)
     existing = next(
-        (
-            row
-            for row in existing_rows
-            if _is_meeting_card(row) == incoming_is_meeting
-        ),
+        (row for row in existing_rows if _card_slot(row.kind, row.category) == incoming_slot),
         None,
     )
     payload = json.dumps(details) if details is not None else None
@@ -1141,7 +1168,7 @@ def create_suggestion(
         for row in existing_rows:
             if row.id == existing.id or row.status != "pending":
                 continue
-            if _is_meeting_card(row) != incoming_is_meeting:
+            if _card_slot(row.kind, row.category) != incoming_slot:
                 continue
             row.status = "dismissed"
             row.resolved_at = now
@@ -1165,7 +1192,7 @@ def create_suggestion(
     db.flush()
     now = datetime.utcnow()
     for row in existing_rows:
-        if row.id == suggestion.id or _is_meeting_card(row) != incoming_is_meeting:
+        if row.id == suggestion.id or _card_slot(row.kind, row.category) != incoming_slot:
             continue
         row.status = "dismissed"
         row.resolved_at = now

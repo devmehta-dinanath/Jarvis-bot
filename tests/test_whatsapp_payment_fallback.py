@@ -130,3 +130,29 @@ class TestKeywordPaymentFallback:
         details = json.loads(stored.details)
         assert details["payment_status"] == "overdue"
         assert details["chip_label"].startswith("Payment overdue")
+
+
+def test_fallback_classify_message_does_not_default_payment_to_overdue():
+    from app.services.whatsapp import fallback
+
+    unknown = {
+        "Any update on the payment": None,
+        "Incoming payment expected": None,
+        "The payment is still pending": None,
+        "I sent a note about the payment": None,
+    }
+    for body, status in unknown.items():
+        result = fallback.classify_message(body)
+        assert result["category"] == "payment"
+        assert result["payment_status"] is status
+
+    received = fallback.classify_message("Payment received today")
+    assert received["category"] == "payment"
+    assert received["payment_status"] == "received"
+
+    sent = fallback.classify_message("Payment sent today")
+    assert sent["payment_status"] == "received"
+
+    overdue = fallback.classify_message("This invoice is overdue")
+    assert overdue["category"] == "payment"
+    assert overdue["payment_status"] == "overdue"

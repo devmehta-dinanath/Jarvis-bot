@@ -369,12 +369,13 @@ def classify_message(message: str) -> dict[str, Any] | None:
     if any(keyword in lower for keyword in _PAYMENT_KEYWORDS) or any(
         keyword in lower for keyword in _PAYMENT_OVERDUE_KEYWORDS
     ):
-        received = any(keyword in lower for keyword in _PAYMENT_RECEIVED_KEYWORDS)
+        from app.services.whatsapp import product_gates
+
         return _result(
             is_important=True,
             category="payment",
             priority="critical",
-            payment_status="received" if received else "overdue",
+            payment_status=product_gates.keyword_payment_status(text),
             summary="Client sent a payment-related message.",
         )
 

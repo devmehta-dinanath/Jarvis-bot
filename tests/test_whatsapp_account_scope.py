@@ -303,14 +303,19 @@ def test_reply_after_a_promise_clears_the_draft_and_keeps_the_meeting():
     )
     db.commit()
 
-    assert dismiss_suggestions_already_answered(db) == 1
+    assert dismiss_suggestions_already_answered(db) == 0
     db.commit()
     pending = (
         db.query(models.WhatsAppSuggestion)
         .filter(models.WhatsAppSuggestion.status == "pending")
         .all()
     )
-    assert {row.kind for row in pending} == {"meeting", "owner_followup_nudge", "reply"}
+    assert {row.kind for row in pending} == {
+        "commitment_reminder",
+        "meeting",
+        "owner_followup_nudge",
+        "reply",
+    }
 
 
 def test_promise_card_stays_when_that_message_is_still_the_latest_reply():

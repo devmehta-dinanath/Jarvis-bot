@@ -58,12 +58,16 @@ _IMMEDIATE_REQUEST_RE = re.compile(
 )
 
 _ACK_ONLY_RE = re.compile(
-    r"(?i)^\s*(ok|okay|ok+|sure|haan|han|yes|yep|done|noted|thik|theek|👍|👌)\s*[.!]*\s*$"
+    r"(?i)^\s*(ok|okay|ok+|sure|haan|han|yes|yep|done|noted|thik|theek|👍|👌)"
+    r"(?:\s+(?:sir|ji|bhai))?"
+    r"\s*[.!]*\s*$"
 )
 
 _CLIENT_ACTION_REQUEST_RE = re.compile(
     r"(?i)\b("
     r"please\s+(?:send|share|provide|forward|mail|email)|"
+    r"(?:please\s+)?(?:just\s+)?make\b.{0,40}\bcall\b|"
+    r"\bcall\s+to\s+[a-z]|"
     r"(?:can|could)\s+you\s+(?:send|share|provide|forward|check|call)|"
     r"send\s+(?:me|us|the|a)\b|"
     r"need\s+(?:the|a|you\s+to)\b|"
@@ -371,6 +375,55 @@ def supported_commitment_deadline(
         if hour_phrase.search(text):
             return raw
     return None
+
+
+def accepted_action_label(request: str | None, history: list | None) -> str | None:
+    """Action the owner accepted, including who it is for and the prior topic.
+
+    The contact who asked is not the call target. "Call Rahul" stays Rahul even
+    when Shiv Kumar Tiwari sent the request.
+    """
+    body = (request or "").strip()
+    call = re.search(
+        r"(?i)\bcall\s+to\s+([A-Za-z][\w'-]*(?:\s+[A-Za-z][\w'-]*){0,3})",
+        body,
+    )
+    if not call:
+        return None
+    target = re.sub(r"(?i)\s+sir$", "", call.group(1)).strip()
+    topic = None
+    for item in reversed(history or []):
+        if not isinstance(item, dict):
+            continue
+        if (item.get("direction") or "").strip().lower() not in {"outbound", "owner", "me"}:
+            continue
+        text = str(item.get("body") or item.get("content") or "")
+        found = re.search(r"(?i)\babout\s+(?:the\s+)?(.+?)[.!]*\s*$", text)
+        if found:
+            topic = found.group(1).strip(" .")
+            break
+    if topic:
+        return f"call {target} about the {topic}"
+    return f"call {target}"
+
+
+def outbound_may_complete_commitment(label: str | None, message: str | None) -> bool:
+    """A later owner message completes a reminder only when it relates to that action."""
+    body = (message or "").strip()
+    if not body or is_greeting_or_festival(body) or is_closing_thanks(body) or is_bare_please(body):
+        return False
+    if is_bare_ack(body) or is_small_talk_message(body):
+        return False
+    lower = body.lower()
+    if re.search(r"\b(?:called|sent|shared|attached|delivered|completed)\b", lower):
+        return True
+    skip = {"call", "about", "send", "this", "that", "with", "your", "from", "have"}
+    for word in re.findall(r"[A-Za-z]{4,}", label or ""):
+        if word.lower() in skip:
+            continue
+        if word.lower() in lower:
+            return True
+    return False
 
 
 def keyword_payment_status(message: str | None) -> str | None:

@@ -628,7 +628,10 @@ class WhatsAppService:
         pending = repo.pending_commitment_for_contact(db, message.contact_id, direction="owner")
         try:
             if pending is not None:
-                if classifier.check_commitment_fulfilled(pending.label, body):
+                may_complete = product_gates.outbound_may_complete_commitment(
+                    pending.label, body
+                )
+                if may_complete and classifier.check_commitment_fulfilled(pending.label, body):
                     repo.fulfill_commitment(db, pending.id)
                     repo.dismiss_commitment_suggestions(db, pending.id)
                     logger.info(
@@ -861,8 +864,7 @@ class WhatsAppService:
                 )
                 result = wa_fallback.classify_message(body)
                 if result and result.get("category") == "payment":
-                    # The keyword list marks every payment mention overdue. Keep
-                    # that status only when this message supports it.
+                    # Defensive: unknown stays unknown even if the fallback regresses.
                     result["payment_status"] = product_gates.keyword_payment_status(body)
                 if result is None:
                     logger.error(
@@ -2605,14 +2607,9 @@ class WhatsAppService:
                 contact = commitment.contact
                 if contact is None:
                     continue
-                anchor_at = commitment.created_at
-                anchor_id = None
                 promised = None
                 if commitment.message_id is not None:
                     promised = db.get(models.WhatsAppMessage, commitment.message_id)
-                    if promised is not None and promised.timestamp is not None:
-                        anchor_at = promised.timestamp
-                        anchor_id = promised.id
                 source_body = (promised.body or "") if promised is not None else ""
                 if not product_gates.owner_reminder_still_supported(
                     source_body, commitment.label
@@ -2626,13 +2623,8 @@ class WhatsAppService:
                         commitment.contact_id,
                     )
                     continue
-                if repo.owner_replied_after(
-                    db,
-                    commitment.contact_id,
-                    anchor_at=anchor_at,
-                    anchor_message_id=anchor_id,
-                ):
-                    continue
+                # A later unrelated owner message does not complete the promise.
+                # The reminder still appears at its deadline.
                 reference = commitment.deadline_at or commitment.created_at
                 hours_overdue = max(
                     0.0, (datetime.utcnow() - reference).total_seconds() / 3600
@@ -2648,8 +2640,15 @@ class WhatsAppService:
                 )
                 if is_urgent_wait:
                     chip_label = chip_label.rstrip(".") + " — urgent."
+                # The card is the owner's Morning Brief reminder. A client reply
+                # is drafted only when this promise named its own deadline.
+                # A no-deadline promise must not prefill a message to the client.
+                explicit_deadline = product_gates.supported_commitment_deadline(
+                    source_body,
+                    commitment.deadline_at.isoformat() if commitment.deadline_at else None,
+                )
                 draft = None
-                if WHATSAPP_AI_DRAFTS_ENABLED:
+                if WHATSAPP_AI_DRAFTS_ENABLED and explicit_deadline:
                     instructions = [
                         i.text for i in repo.list_instructions(db, active_only=True)
                     ]
