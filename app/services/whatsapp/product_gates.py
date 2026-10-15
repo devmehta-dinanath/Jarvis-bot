@@ -401,9 +401,10 @@ def states_future_promise(text: str | None) -> bool:
 
 
 def owner_reminder_still_supported(message: str | None, label: str | None) -> bool:
-    """False when a stored owner promise came from thanks, please, or a conditional update.
+    """False when a stored owner promise did not come from an owner promise.
 
-    An empty source is left alone. A real promise such as 'I'll send it by Friday' stays.
+    An empty source is left alone. "Please make it fast" and "Ok" are not
+    promises. A real promise such as "I'll send it by Friday" stays.
     """
     body = (message or "").strip()
     if not body:
@@ -414,6 +415,8 @@ def owner_reminder_still_supported(message: str | None, label: str | None) -> bo
         or is_bare_please(body)
         or is_greeting_or_festival(body)
         or is_status_question(body)
+        or is_urgency_without_request(body)
+        or is_unanchored_fragment(body)
     ):
         return False
     if label_infers_unstated_payment_update(body, label):

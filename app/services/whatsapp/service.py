@@ -637,10 +637,14 @@ class WhatsAppService:
         )
         try:
             for pending in open_rows:
-                may_complete = product_gates.outbound_may_complete_commitment(
-                    pending.label, body
-                )
-                if may_complete and classifier.check_commitment_fulfilled(pending.label, body):
+                label = pending.label
+                may_complete = product_gates.outbound_may_complete_commitment(label, body)
+                if not may_complete:
+                    continue
+                from app.database import release_db_before_slow_call
+
+                release_db_before_slow_call(db)
+                if classifier.check_commitment_fulfilled(label, body):
                     repo.fulfill_commitment(db, pending.id)
                     repo.dismiss_commitment_suggestions(db, pending.id)
                     logger.info(
@@ -683,6 +687,9 @@ class WhatsAppService:
                     if inbound is not None:
                         last_inbound = (inbound.body or "").strip() or None
 
+                from app.database import release_db_before_slow_call
+
+                release_db_before_slow_call(db)
                 detected = classifier.detect_commitment(
                     body, history=history, last_inbound=last_inbound
                 )
@@ -866,6 +873,9 @@ class WhatsAppService:
             corrections = repo.load_corrections_for_prompt(
                 db, limit=WHATSAPP_CORRECTIONS_CONTEXT_LIMIT
             )
+            from app.database import release_db_before_slow_call
+
+            release_db_before_slow_call(db)
             try:
                 result = classifier.classify_message(
                     history,

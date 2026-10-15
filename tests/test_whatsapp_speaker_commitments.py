@@ -225,3 +225,124 @@ def test_owner_commitment_sourced_from_the_client_is_dropped():
     card = db.query(models.WhatsAppSuggestion).one()
     assert card.status == "dismissed"
 
+
+def test_answered_client_message_is_not_shown_on_any_chat():
+    """The wording does not matter. A client turn the owner already answered is not the card."""
+    db = _session()
+    contact = _contact(db, "919800000005", "Kris")
+    promise = _message(
+        db,
+        contact,
+        direction="outbound",
+        body="I will send the specification.",
+        when=datetime(2026, 10, 14, 11, 0),
+    )
+    client_reply = _message(
+        db,
+        contact,
+        direction="inbound",
+        body="Can you send the updated specification when you can?",
+        when=datetime(2026, 10, 14, 12, 0),
+    )
+    _message(
+        db,
+        contact,
+        direction="outbound",
+        body="Yes, I will.",
+        when=datetime(2026, 10, 14, 12, 5),
+    )
+    commitment = repo.create_commitment(
+        db,
+        contact_id=contact.id,
+        message_id=promise.id,
+        commitment_type="other",
+        label="send the specification",
+        direction="owner",
+        deadline_at=None,
+    )
+    repo.create_suggestion(
+        db,
+        contact_id=contact.id,
+        message_id=client_reply.id,
+        kind="commitment_reminder",
+        category="pending_commitment",
+        priority="high",
+        lane="work",
+        draft_text="I will send it shortly.",
+        details={"commitment_id": commitment.id, "chip_label": "You promised: send the specification to Kris."},
+    )
+    reply = repo.create_suggestion(
+        db,
+        contact_id=contact.id,
+        message_id=client_reply.id,
+        kind="reply",
+        category="other",
+        priority="normal",
+        lane="work",
+        draft_text="Sure, sending it.",
+    )
+    db.commit()
+    assert repo.dismiss_suggestions_already_answered(db) == 2
+    db.commit()
+    reminder = db.query(models.WhatsAppSuggestion).filter_by(kind="commitment_reminder").one()
+    assert reminder.status == "pending"
+    assert reminder.message_id == promise.id
+    assert reminder.draft_text is None
+    db.refresh(reply)
+    assert reply.status == "dismissed"
+
+
+def test_friday_sir_card_drops_the_hurry_quote_and_the_invented_time():
+    assert g.owner_reminder_still_supported(FAST, "arrange PSUR") is False
+    db = _session()
+    contact = _contact(db, "919800000004", "Friday Sir")
+    promise = _message(
+        db,
+        contact,
+        direction="outbound",
+        body="Sir i will arrange the PSUR to",
+        when=datetime(2026, 10, 14, 11, 17),
+    )
+    hurry = _message(
+        db,
+        contact,
+        direction="inbound",
+        body=FAST,
+        when=datetime(2026, 10, 14, 12, 11),
+    )
+    commitment = repo.create_commitment(
+        db,
+        contact_id=contact.id,
+        message_id=promise.id,
+        commitment_type="other",
+        label="arrange PSUR",
+        direction="owner",
+        deadline_at=datetime(2026, 10, 15, 3, 30),
+    )
+    repo.create_suggestion(
+        db,
+        contact_id=contact.id,
+        message_id=hurry.id,
+        kind="commitment_reminder",
+        category="pending_commitment",
+        priority="high",
+        lane="work",
+        draft_text="I will arrange it by 9:00 am.",
+        details={
+            "commitment_id": commitment.id,
+            "chip_label": "You promised: arrange PSUR to Friday Sir, due today 9:00 am.",
+        },
+    )
+    db.commit()
+    assert repo.dismiss_unsupported_owner_commitments(db) == 1
+    db.commit()
+    card = db.query(models.WhatsAppSuggestion).one()
+    assert card.status == "pending"
+    assert card.message_id == promise.id
+    assert card.draft_text is None
+    assert "9:00" not in (card.details or "")
+    assert "due" not in (card.details or "")
+    db.refresh(commitment)
+    assert commitment.deadline_at is None
+    assert commitment.fulfilled_at is None
+

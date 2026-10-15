@@ -324,6 +324,8 @@ def test_docker_refresh_is_opt_in_and_not_part_of_the_image_build():
     assert "WHATSAPP_REPROCESS_DRY_RUN: \"${WHATSAPP_REPROCESS_DRY_RUN:-false}\"" in compose
     assert "WHATSAPP_REPROCESS_ON_DEPLOY" in entry
     assert "python -m app.services.whatsapp.deploy_refresh" in entry
+    assert "&" in entry
+    assert entry.index("python -m app.services.whatsapp.deploy_refresh") < entry.index('exec "$@"')
     assert "exec \"$@\"" in entry
     assert "RUN python -m app.services.whatsapp.deploy_refresh" not in dockerfile
     settings = (root / "app/services/whatsapp/settings.py").read_text(encoding="utf-8")

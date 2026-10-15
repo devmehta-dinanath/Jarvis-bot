@@ -195,13 +195,46 @@ def requeue_pending_meetings(db: Session) -> int:
     return updated
 
 
-def dismiss_suggestions_already_answered(db: Session) -> int:
-    """Drop suggestion drafts for a chat the owner has already answered.
+def _owner_promise_message_id(db: Session, suggestion: models.WhatsAppSuggestion) -> int | None:
+    """The owner's own promise message for this reminder, when it has one."""
+    from app.services.whatsapp import product_gates
 
-    A meeting stays until its time has passed. A card that is waiting on the
-    other person stays. An owner reminder stays until the promised action is
-    actually done. A card for a message that arrived after the reply stays.
+    try:
+        details = json.loads(suggestion.details or "{}")
+    except json.JSONDecodeError:
+        details = {}
+    if not isinstance(details, dict):
+        return None
+    commitment_id = details.get("commitment_id")
+    commitment = (
+        db.get(models.WhatsAppCommitment, commitment_id)
+        if commitment_id is not None
+        else None
+    )
+    if (
+        commitment is None
+        or commitment.direction != "owner"
+        or commitment.message_id is None
+        or commitment.fulfilled_at is not None
+    ):
+        return None
+    source = db.get(models.WhatsAppMessage, commitment.message_id)
+    if source is None or product_gates.speaker_for_direction(source.direction) != "owner":
+        return None
+    return source.id
+
+
+def dismiss_suggestions_already_answered(db: Session) -> int:
+    """Stop showing a client message once the owner has already answered it.
+
+    This does not depend on the wording. Any later owner message means that
+    client turn is not a reply still owed. A meeting stays until its time has
+    passed. A card that is waiting on the other person stays. An owner reminder
+    stays, but it quotes the owner's promise, not the client message already
+    answered.
     """
+    from app.services.whatsapp import product_gates
+
     now = datetime.utcnow()
     pending = (
         db.query(models.WhatsAppSuggestion)
@@ -210,19 +243,43 @@ def dismiss_suggestions_already_answered(db: Session) -> int:
     )
     updated = 0
     for suggestion in pending:
-        if (
-            _is_meeting_card(suggestion)
-            or suggestion.kind in _WAITING_ON_THEM_KINDS
-            or suggestion.kind == "commitment_reminder"
-        ):
+        if _is_meeting_card(suggestion) or suggestion.kind in _WAITING_ON_THEM_KINDS:
             continue
+        message = (
+            db.get(models.WhatsAppMessage, suggestion.message_id)
+            if suggestion.message_id is not None
+            else None
+        )
         anchor_at = suggestion.created_at
         anchor_id = None
-        if suggestion.message_id is not None:
-            message = db.get(models.WhatsAppMessage, suggestion.message_id)
-            if message is not None and message.timestamp is not None:
-                anchor_at = message.timestamp
-                anchor_id = message.id
+        if message is not None and message.timestamp is not None:
+            anchor_at = message.timestamp
+            anchor_id = message.id
+        if suggestion.kind == "commitment_reminder":
+            quotes_client = (
+                message is not None
+                and product_gates.speaker_for_direction(message.direction) != "owner"
+            )
+            if not quotes_client:
+                continue
+            if not owner_replied_after(
+                db,
+                suggestion.contact_id,
+                anchor_at=anchor_at,
+                anchor_message_id=anchor_id,
+            ):
+                continue
+            owner_message_id = _owner_promise_message_id(db, suggestion)
+            if owner_message_id is not None:
+                suggestion.message_id = owner_message_id
+                suggestion.draft_text = None
+                updated += 1
+                continue
+            suggestion.status = "dismissed"
+            suggestion.resolved_at = now
+            suggestion.draft_text = None
+            updated += 1
+            continue
         if owner_replied_after(
             db,
             suggestion.contact_id,
@@ -1599,12 +1656,37 @@ def dismiss_unsupported_owner_commitments(db: Session) -> int:
         ):
             row.status = "dismissed"
             row.resolved_at = now
+            row.draft_text = None
             if commitment.fulfilled_at is None:
                 commitment.fulfilled_at = now
             updated += 1
             continue
+        changed = False
         if source is not None and row.message_id != source.id:
             row.message_id = source.id
+            changed = True
+        if commitment.deadline_at is not None and not product_gates.supported_commitment_deadline(
+            source_body,
+            commitment.deadline_at.isoformat(),
+        ):
+            commitment.deadline_at = None
+            contact = db.get(models.WhatsAppContact, commitment.contact_id)
+            display = (
+                ((contact.profile_name or "").strip() or contact.wa_id)
+                if contact is not None
+                else "contact"
+            )
+            if isinstance(details, dict):
+                details["deadline_at"] = None
+                details["chip_label"] = product_gates.format_owner_reminder_chip(
+                    label=commitment.label or "follow up",
+                    contact_name=display,
+                    deadline_at=None,
+                )
+                row.details = json.dumps(details)
+            row.draft_text = None
+            changed = True
+        if changed:
             updated += 1
     if updated:
         db.flush()

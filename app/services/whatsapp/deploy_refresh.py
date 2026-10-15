@@ -1,6 +1,6 @@
 """One-shot WhatsApp reprocess after a Docker deploy.
 
-Runs from the server entrypoint, before uvicorn workers start. A release id
+Runs from the server entrypoint in the background after uvicorn is up. A release id
 recorded on the data volume stops the same deploy from running again on restart
 or in another worker. Nothing here sends a WhatsApp message.
 """

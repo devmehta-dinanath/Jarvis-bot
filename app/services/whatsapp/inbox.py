@@ -259,7 +259,7 @@ def refresh_pending_suggestions(db: Session, *, lookback_hours: int = 168) -> di
         message.classified_at = None
         message.category = None
         message.is_important = None
-        db.flush()
+        db.commit()
         service_manager.whatsapp.classify_message_now(db, message)
         reclassified += 1
         logger.info("[WHATSAPP] Reclassified message %s", message.id)

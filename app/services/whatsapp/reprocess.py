@@ -504,7 +504,7 @@ def reanalyze_outbound_commitments(
             result.outbound_reanalyzed += 1
             continue
         message.classified_at = None
-        db.flush()
+        db.commit()
         service._analyze_commitment(db, message)
         result.outbound_reanalyzed += 1
 
@@ -556,7 +556,7 @@ def reclassify_inbound_messages(
         message.classified_at = None
         message.category = None
         message.is_important = None
-        db.flush()
+        db.commit()
         service.classify_message_now(db, message)
         result.inbound_reclassified += 1
         processed += 1
@@ -622,10 +622,10 @@ def reprocess_contacts(
                 summary.reminders_relinked += 1
         summary.outbound_reanalyzed += result.outbound_reanalyzed
         summary.inbound_reclassified += result.inbound_reclassified
+        if not dry_run:
+            db.commit()
 
-    if not dry_run:
-        db.commit()
-    else:
+    if dry_run:
         db.rollback()
 
     logger.info(

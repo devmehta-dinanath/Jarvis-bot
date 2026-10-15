@@ -4,7 +4,7 @@ import shutil
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import DATA_DIR, DATABASE_PATH, DEFAULT_DATABASE_URL, LEGACY_DATABASE_PATH
@@ -52,6 +52,31 @@ _connect_args = (
 engine = create_engine(DATABASE_URL, connect_args=_connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+
+@event.listens_for(engine, "connect")
+def _sqlite_busy_and_wal(dbapi_conn, _connection_record) -> None:
+    """Let the API read and write while a background refresh is running."""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
+
+
+def release_db_before_slow_call(db: Session) -> None:
+    """End the open SQLite transaction before a model call.
+
+    A flush leaves the write lock held until commit. Model calls take longer
+    than SQLite will wait, so the inbox then fails with "database is locked".
+    """
+    bind = db.get_bind()
+    if bind is None or bind.dialect.name != "sqlite":
+        return
+    if db.in_transaction():
+        db.commit()
 
 
 def get_db() -> Generator[Session, None, None]:
