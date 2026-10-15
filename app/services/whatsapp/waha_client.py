@@ -434,6 +434,8 @@ def fetch_recent_messages(wa_id: str, *, limit: int = 100) -> list[dict[str, str
     if not isinstance(data, list):
         return []
 
+    from app.services.whatsapp.product_gates import speaker_for_direction
+
     messages: list[dict[str, str]] = []
     for item in data:
         if not isinstance(item, dict):
@@ -441,8 +443,10 @@ def fetch_recent_messages(wa_id: str, *, limit: int = 100) -> list[dict[str, str
         body = _clean_name(item.get("body"))
         if not body:
             continue
+        direction = "outbound" if payload_is_from_me(item) else "inbound"
         entry: dict[str, str] = {
-            "direction": "outbound" if payload_is_from_me(item) else "inbound",
+            "direction": direction,
+            "speaker": speaker_for_direction(direction),
             "body": body,
         }
         mid = item.get("id")

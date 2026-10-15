@@ -82,10 +82,12 @@ class TestConfigIsolation:
         assert "wa_settings.WHATSAPP_FOLLOWUP_FLAG_HOURS" in client_src
         assert isinstance(config_flag, float)
 
-    def test_reminder_morning_brief_uses_wa_settings(self):
-        assert wa_settings.WHATSAPP_MORNING_BRIEF_HOUR == 9
+    def test_reminder_without_a_stated_time_does_not_invent_9am(self):
+        deadline, stated = g.resolve_owner_reminder_schedule(None)
+        assert deadline is None
+        assert stated is False
         commit_src = inspect.getsource(WhatsAppService._analyze_commitment_unsafe)
-        assert "wa_settings.WHATSAPP_MORNING_BRIEF_HOUR" in commit_src
+        assert "next_morning_brief" not in commit_src
 
 
 # ---------------------------------------------------------------------------

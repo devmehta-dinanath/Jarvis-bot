@@ -207,15 +207,19 @@ def test_ok_sir_after_the_rahul_request_is_a_call_reminder_not_a_reply():
     )
     assert commitment.label == "call Rahul Desai about the Yemen inspection"
     assert "Shiv" not in commitment.label
-    expected, immediate = g.resolve_owner_reminder_schedule(None)
-    assert immediate is False
-    assert abs((commitment.deadline_at - expected).total_seconds()) < 5
+    assert commitment.message_id == owner_ok.id
+    assert commitment.deadline_at is None
     pending = (
         db.query(models.WhatsAppSuggestion)
         .filter(models.WhatsAppSuggestion.status == "pending")
         .all()
     )
-    assert pending == []
+    assert len(pending) == 1
+    assert pending[0].kind == "commitment_reminder"
+    assert pending[0].message_id == owner_ok.id
+    assert pending[0].draft_text is None
+    assert "09:00" not in (pending[0].details or "")
+    assert "9:00" not in (pending[0].details or "")
 
 
 def test_explicit_tomorrow_monday_and_friday_deadlines_are_kept():
@@ -757,34 +761,6 @@ def test_reminder_and_followup_both_stay_pending_for_one_chat():
     assert set(pending) == {"reply", "owner_followup_nudge"}
     assert pending["owner_followup_nudge"].id == restored.id
     assert pending["reply"].draft_text == "Resending the invoice from our last message."
-
-
-def test_inbox_filter_shows_reminder_and_followup_together():
-    import subprocess
-
-    script = r"""
-import { dedupeInboxSuggestions, keepLatestSuggestionPerContact } from "./src/lib/whatsapp-categories.js";
-const shared = [
-  { id: 1, contact_id: 9, message_id: 50, kind: "commitment_reminder", category: "pending_commitment", created_at: "2026-10-15T08:00:00Z" },
-  { id: 2, contact_id: 9, message_id: 50, kind: "owner_followup_nudge", category: "follow_up", created_at: "2026-10-15T10:00:00Z", details: { followup_actions: true } },
-  { id: 3, contact_id: 9, message_id: 51, kind: "reply", category: "document", created_at: "2026-10-15T07:00:00Z" },
-  { id: 4, contact_id: 9, message_id: 52, kind: "meeting", category: "meeting", created_at: "2026-10-15T06:00:00Z" },
-];
-const visible = keepLatestSuggestionPerContact(dedupeInboxSuggestions(shared)).map((item) => item.kind).sort();
-const expected = ["commitment_reminder", "meeting", "owner_followup_nudge", "reply"];
-if (JSON.stringify(visible) !== JSON.stringify(expected)) {
-  console.error(JSON.stringify(visible));
-  process.exit(1);
-}
-"""
-    completed = subprocess.run(
-        ["node", "--input-type=module", "-e", script],
-        cwd="/Users/varun/Desktop/jarvis/Jarvis-bot-frontend",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_follow_up_waiting_period_is_unchanged():

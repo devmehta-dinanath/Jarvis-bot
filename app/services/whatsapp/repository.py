@@ -394,7 +394,16 @@ def recent_history(
         .all()
     )
     rows.reverse()
-    return [{"direction": r.direction, "body": r.body or ""} for r in rows]
+    from app.services.whatsapp.product_gates import speaker_for_direction
+
+    return [
+        {
+            "direction": r.direction,
+            "speaker": speaker_for_direction(r.direction),
+            "body": r.body or "",
+        }
+        for r in rows
+    ]
 
 
 def live_chat_context(
@@ -1580,7 +1589,12 @@ def dismiss_unsupported_owner_commitments(db: Session) -> int:
             else None
         )
         source_body = source.body if source is not None else ""
-        if not product_gates.owner_reminder_still_supported(
+        # An owner promise cannot be sourced from the other person's message.
+        speaker_mismatch = (
+            source is not None
+            and product_gates.speaker_for_direction(source.direction) != "owner"
+        )
+        if speaker_mismatch or not product_gates.owner_reminder_still_supported(
             source_body, commitment.label
         ):
             row.status = "dismissed"

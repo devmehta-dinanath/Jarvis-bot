@@ -233,16 +233,33 @@ def detect_client_commitment(message: str) -> dict[str, Any]:
     """Does this INBOUND message from a client promise the account owner something not
     yet delivered? Client-side counterpart to detect_commitment — see
     WhatsAppCommitment.direction."""
+    from app.services.whatsapp import product_gates
+
+    empty = {
+        "is_commitment": False,
+        "commitment_type": None,
+        "label": None,
+        "deadline_at": None,
+    }
+    # A request, reminder, or acknowledgement is not a promise by this speaker.
+    if not product_gates.client_states_own_promise(message):
+        return empty
     user_content = (
         f"{_now_context_line()}Message from the client:\n{message}\n\nAnalyze as JSON:"
     )
     data = _chat_json(_CLIENT_COMMITMENT_SYSTEM, user_content, max_tokens=140)
-    return {
+    result = {
         "is_commitment": bool(data.get("is_commitment", False)),
         "commitment_type": (data.get("commitment_type") or "").strip().lower() or None,
         "label": (data.get("label") or "").strip() or None,
         "deadline_at": (data.get("deadline_at") or "").strip() or None,
     }
+    if not result["is_commitment"]:
+        return empty
+    result["deadline_at"] = product_gates.supported_commitment_deadline(
+        message, result.get("deadline_at")
+    )
+    return result
 
 
 def check_client_commitment_fulfilled(label: str, message: str) -> bool:

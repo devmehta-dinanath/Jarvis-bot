@@ -150,7 +150,14 @@ class TestClassificationFallbackDoesNotDraft:
 
 
 def test_a_missing_decision_on_the_shared_gate_still_drafts():
-    """Callers that are not the keyword-classification path still draft."""
+    """A real request still drafts when no decision object is attached.
+
+    A bare thank-you does not. It has nothing new to answer.
+    """
     with patch("app.services.whatsapp.service.WHATSAPP_AI_DRAFTS_ENABLED", False):
-        text = _draft_reply_with_budget([], "Thanks", "other", result={})
+        text = _draft_reply_with_budget(
+            [], "Please resend the invoice.", "other", result={}
+        )
+        thanks = _draft_reply_with_budget([], "Thanks", "other", result={})
     assert text == "Thanks for your message. I'll get back to you shortly."
+    assert thanks is None

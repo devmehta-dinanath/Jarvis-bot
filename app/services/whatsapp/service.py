@@ -245,6 +245,8 @@ def _draft_reply_with_budget(
 
     if product_gates.should_clarify_missing_material_readiness(body, history):
         return None
+    if not product_gates.inbound_supports_reply_draft(body):
+        return None
     if WHATSAPP_AI_DRAFTS_ENABLED:
         try:
             if complaint:
@@ -620,6 +622,11 @@ class WhatsAppService:
         if not body:
             db.commit()
             return
+        # This queue is outbound. A stored client turn must not become an owner promise.
+        direction = getattr(message, "direction", None)
+        if direction and product_gates.speaker_for_direction(direction) != "owner":
+            db.commit()
+            return
 
         # C6 — owner answered → clear "you haven't replied" awaiting-reply chips.
         # Does not touch Reminder (commitment_reminder) or Waiting-on owner_followup chips.
@@ -683,12 +690,9 @@ class WhatsAppService:
                     row.message_id == message.id for row in open_rows
                 ):
                     explicit_deadline = _parse_iso(detected.get("deadline_at"))
-                    deadline_at, create_immediate = product_gates.resolve_owner_reminder_schedule(
-                        explicit_deadline,
-                        morning_hour=wa_settings.WHATSAPP_MORNING_BRIEF_HOUR,
-                        tz_name=CALENDAR_DEFAULT_TIMEZONE,
+                    deadline_at, stated = product_gates.resolve_owner_reminder_schedule(
+                        explicit_deadline
                     )
-                    morning_brief = not create_immediate
 
                     commitment = repo.create_commitment(
                         db,
@@ -701,23 +705,26 @@ class WhatsAppService:
                     )
                     logger.info(
                         "[WHATSAPP] New commitment detected for contact %s: %s "
-                        "(deadline=%s morning_brief=%s)",
+                        "(deadline=%s stated=%s)",
                         message.contact_id,
                         detected["label"],
                         deadline_at,
-                        morning_brief,
+                        stated,
                     )
-                    # Immediate Inbox card only when the owner named a time.
-                    # Morning Brief items wait until deadline_at (next brief hour).
-                    if create_immediate:
-                        event = actions.create_commitment_reminder(db, commitment)
-                        self._create_commitment_tracked_suggestion(
-                            db,
-                            commitment,
-                            reminder_event_id=(event or {}).get("id"),
-                            reminder_html_link=(event or {}).get("htmlLink"),
-                            reminder_at=(event or {}).get("reminder_at"),
-                        )
+                    # The card quotes this owner message. An unknown deadline
+                    # stays unset; only a stated deadline gets a calendar time.
+                    event = (
+                        actions.create_commitment_reminder(db, commitment)
+                        if stated
+                        else None
+                    )
+                    self._create_commitment_tracked_suggestion(
+                        db,
+                        commitment,
+                        reminder_event_id=(event or {}).get("id") if event else None,
+                        reminder_html_link=(event or {}).get("htmlLink") if event else None,
+                        reminder_at=(event or {}).get("reminder_at") if event else None,
+                    )
         except WhatsAppAIError as exc:
             logger.warning(
                 "[WHATSAPP] OpenAI commitment check failed for message %s: %s",
@@ -766,7 +773,7 @@ class WhatsAppService:
                     )
             else:
                 detected = classifier.detect_client_commitment(body)
-                if detected["is_commitment"]:
+                if detected["is_commitment"] and product_gates.client_states_own_promise(body):
                     deadline_at = _parse_iso(detected.get("deadline_at"))
                     if product_gates.deadline_is_near(deadline_at, within_hours=4.0):
                         # Same-day immediates — don't queue a delayed follow-up.
@@ -971,6 +978,20 @@ class WhatsAppService:
         # WORK-lane, one-on-one concept, same scope as the owner-side commitment system.
         # Runs regardless of which suggestion path this message takes below (including the
         # silent-observation blank box), since it's a separate side channel, not a chip.
+        if (
+            not result.get("safety_concern")
+            and category != "greeting"
+            and not product_gates.inbound_supports_reply_draft(body)
+        ):
+            # No new request in this turn. Do not draft, and do not turn it
+            # into a commitment. Classification on the message is already saved.
+            logger.info(
+                "[WHATSAPP] Message %s has no reply-worthy request — skipping draft",
+                message.id,
+            )
+            db.commit()
+            return
+
         if not is_group and not is_forwarded and not is_life_lane:
             self._analyze_client_commitment(db, message, body, result["is_important"])
 
@@ -2602,9 +2623,9 @@ class WhatsAppService:
     def _check_pending_commitments(self) -> None:
         """Remind the owner about their own unfulfilled promises.
 
-        Timed promises fire after deadline_at. No-time promises get deadline_at set to
-        the next Morning Brief hour at detect time — so they surface then, never via a
-        24h fallback.
+        Only a deadline the promise itself stated can become due. A promise with
+        no stated time stays pending with deadline_at unset, and this checker
+        does not invent a clock time for it.
         """
         from app.services.whatsapp import product_gates
 

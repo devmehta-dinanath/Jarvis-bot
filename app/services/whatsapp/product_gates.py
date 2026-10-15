@@ -217,6 +217,93 @@ def is_bare_ack(text: str | None) -> bool:
     return bool(_ACK_ONLY_RE.match((text or "").strip()))
 
 
+# A whole message that only pushes for speed. It names no new action.
+_URGENCY_ONLY_RE = re.compile(
+    r"(?i)^\s*(?:(?:please|pls|plz|kindly)\s+)?"
+    r"(?:"
+    r"make\s+it\s+(?:fast|quick(?:er)?|soon)|"
+    r"(?:do\s+it\s+)?(?:fast|quickly|asap)|"
+    r"hurry(?:\s+up)?|"
+    r"jaldi(?:\s+karo)?|"
+    r"as\s+soon\s+as\s+(?:possible|you\s+can)|"
+    r"expedite(?:\s+(?:this|it))?"
+    r")"
+    r"\s*[!.]*\s*$"
+)
+
+
+def speaker_for_direction(direction: str | None) -> str:
+    """Who sent this turn. Owner commitments can only come from an owner turn."""
+    value = (direction or "").strip().lower()
+    if value in {"outbound", "owner", "me"}:
+        return "owner"
+    if value in {"inbound", "client", "contact"}:
+        return "client"
+    return "unknown"
+
+
+def is_urgency_without_request(text: str | None) -> bool:
+    """A hurry-up with no new task. It is not a promise and not a new request."""
+    return bool(_URGENCY_ONLY_RE.match((text or "").strip()))
+
+
+def is_unanchored_fragment(text: str | None) -> bool:
+    """One word that does not ask for anything and does not promise anything."""
+    body = (text or "").strip()
+    if not body or "?" in body:
+        return False
+    if states_future_promise(body) or last_inbound_is_action_request(body):
+        return False
+    words = re.findall(r"[A-Za-z0-9']+", body)
+    return len(words) == 1
+
+
+def client_states_own_promise(text: str | None) -> bool:
+    """True only when this client message itself promises a later action.
+
+    A request, a reminder, an acknowledgement, or an urgency nudge is the
+    client talking to the owner. It is not the client promising something.
+    """
+    body = (text or "").strip()
+    if not body or not states_future_promise(body):
+        return False
+    if (
+        is_bare_ack(body)
+        or is_closing_thanks(body)
+        or is_bare_please(body)
+        or is_greeting_or_festival(body)
+        or is_small_talk_message(body)
+        or is_urgency_without_request(body)
+        or is_status_question(body)
+        or is_unanchored_fragment(body)
+    ):
+        return False
+    if re.match(
+        r"(?i)^\s*(?:please|pls|plz|kindly|can you|could you|will you|would you)\b",
+        body,
+    ) and not re.search(r"(?i)\b(?:i(?:'ll| will)|we(?:'ll| will)|let me)\b", body):
+        return False
+    return True
+
+
+def inbound_supports_reply_draft(text: str | None) -> bool:
+    """False when this inbound has no new request a draft could answer."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    if (
+        is_bare_ack(body)
+        or is_closing_thanks(body)
+        or is_bare_please(body)
+        or is_greeting_or_festival(body)
+        or is_small_talk_message(body)
+        or is_urgency_without_request(body)
+        or is_unanchored_fragment(body)
+    ):
+        return False
+    return True
+
+
 def is_small_talk_message(text: str | None) -> bool:
     """Hi / How are you? / Good morning — not worth a 48h Waiting-on follow-up."""
     body = (text or "").strip()
@@ -271,7 +358,7 @@ _FUTURE_PROMISE_RE = re.compile(
     r"(?i)\b("
     r"i(?:'ll| will)|we(?:'ll| will)|"
     r"will\s+(?:send|share|confirm|update|call|revert|do)|"
-    r"let me\b|going to\b|"
+    r"let me\b(?!\s+know\b)|going to\b|"
     r"bhej(?:ta|unga|enge|doonga)|"
     r"\brevert\b|\bkal\b"
     r")"
@@ -489,17 +576,16 @@ def resolve_owner_reminder_schedule(
     morning_hour: int = 9,
     tz_name: str = "Asia/Kolkata",
     now_utc: datetime | None = None,
-) -> tuple[datetime, bool]:
-    """Map a detected deadline to (deadline_at, create_immediate_inbox_chip).
+) -> tuple[datetime | None, bool]:
+    """Map a detected deadline to (deadline_at, deadline_was_stated).
 
-    No explicit timeframe → next Morning Brief; do not use a 24h fallback.
+    A missing timeframe stays unset. The unused Morning Brief arguments remain
+    so older callers keep working; they are not a due time.
     """
+    del morning_hour, tz_name, now_utc
     if explicit_deadline is not None:
         return explicit_deadline, True
-    return (
-        next_morning_brief_utc(hour=morning_hour, tz_name=tz_name, now_utc=now_utc),
-        False,
-    )
+    return None, False
 
 
 def is_immediate_request(text: str | None) -> bool:
@@ -556,12 +642,15 @@ def format_owner_reminder_chip(
     deadline_at: datetime | None,
     tz_name: str = "Asia/Kolkata",
 ) -> str:
-    when = format_due_when(deadline_at, tz_name=tz_name)
     clean_label = (label or "follow up").strip()
     # Normalize "Send documents" → "send documents"
     if clean_label and clean_label[0].isupper():
         clean_label = clean_label[0].lower() + clean_label[1:]
-    return f"You promised: {clean_label} to {contact_name}, due {when}."
+    base = f"You promised: {clean_label} to {contact_name}"
+    if deadline_at is None:
+        return f"{base}."
+    when = format_due_when(deadline_at, tz_name=tz_name)
+    return f"{base}, due {when}."
 
 
 def owner_followup_subject(body: str | None) -> str:

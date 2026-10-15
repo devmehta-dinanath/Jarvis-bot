@@ -14,6 +14,7 @@ from app.services import service_manager
 from app.services.whatsapp import actions
 from app.services.whatsapp import client as wa_client
 from app.services.whatsapp import inbox as wa_inbox
+from app.services.whatsapp.reprocess_auth import require_reprocess_auth
 from app.services.whatsapp import meeting_scope
 from app.services.whatsapp import repository as repo
 from app.services.whatsapp import taxonomy as wa_taxonomy
@@ -30,6 +31,8 @@ from app.services.whatsapp.schemas import (
     FeedbackResponse,
     InboxStatusResponse,
     RefreshPendingResponse,
+    ReprocessConversationsRequest,
+    ReprocessConversationsResponse,
     RemindMeRequest,
     SendMessageRequest,
     SendReplyRequest,
@@ -356,6 +359,32 @@ def refresh_pending_inbox(
     db: Session = Depends(get_db),
 ) -> RefreshPendingResponse:
     return RefreshPendingResponse(**wa_inbox.refresh_pending_suggestions(db, lookback_hours=lookback_hours))
+
+
+@router.post("/inbox/reprocess", response_model=ReprocessConversationsResponse)
+def reprocess_conversations(
+    payload: ReprocessConversationsRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_reprocess_auth),
+) -> ReprocessConversationsResponse:
+    """Reconcile and optionally replay commitment/classification on stored chats."""
+    if not payload.contact_ids and not payload.wa_ids:
+        logger.info("[WHATSAPP] Reprocess request has no contact ids; using every stored chat")
+    from app.services.whatsapp import reprocess as wa_reprocess
+
+    summary = wa_reprocess.reprocess_contacts(
+        db,
+        contact_ids=payload.contact_ids or None,
+        wa_ids=payload.wa_ids or None,
+        dry_run=payload.dry_run,
+        message_limit=payload.message_limit,
+        reanalyze_outbound=payload.reanalyze_outbound,
+        reclassify_inbound=payload.reclassify_inbound,
+        max_inbound_reclassify=payload.max_inbound_reclassify,
+    )
+    data = summary.to_dict()
+    data["ok"] = True
+    return ReprocessConversationsResponse(**data)
 
 
 @router.post("/inbox/backfill-history")

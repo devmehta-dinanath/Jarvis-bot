@@ -45,18 +45,15 @@ class TestReminderTiming:
         assert deadline == due
         assert immediate is True
 
-    def test_b3_no_deadline_morning_brief_not_24h(self):
-        now = datetime(2026, 10, 6, 5, 0, 0)
-        deadline, immediate = g.resolve_owner_reminder_schedule(
+    def test_b3_no_deadline_stays_unset(self):
+        deadline, stated = g.resolve_owner_reminder_schedule(
             None,
             morning_hour=9,
             tz_name="Asia/Kolkata",
-            now_utc=now,
+            now_utc=datetime(2026, 10, 6, 5, 0, 0),
         )
-        assert immediate is False
-        assert deadline > now
-        # Must not be ~24h fallback from now — Morning Brief is next local 9am.
-        assert deadline - now != timedelta(hours=24)
+        assert stated is False
+        assert deadline is None
         assert wa_settings.WHATSAPP_MORNING_BRIEF_HOUR == 9
 
     def test_owner_awaiting_reminder_disables_no_deadline_fallback(self):

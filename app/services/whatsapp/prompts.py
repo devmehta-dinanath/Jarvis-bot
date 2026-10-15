@@ -684,9 +684,12 @@ def _language_context_block(language: str | None, translation: str | None) -> st
 def _history_block(history: list[dict[str, str]]) -> str:
     if not history:
         return "(no prior messages)"
+    from app.services.whatsapp.product_gates import speaker_for_direction
+
     lines = []
     for item in history:
-        who = "Client" if item.get("direction") == "inbound" else "Me"
+        speaker = item.get("speaker") or speaker_for_direction(item.get("direction"))
+        who = "Me" if speaker == "owner" else "Client" if speaker == "client" else "Unknown"
         text = (item.get("body") or "").strip()
         if len(text) > WHATSAPP_CONTEXT_MESSAGE_MAX_CHARS:
             text = text[:WHATSAPP_CONTEXT_MESSAGE_MAX_CHARS].rstrip() + "..."

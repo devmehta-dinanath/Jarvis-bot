@@ -260,6 +260,48 @@ class RefreshPendingResponse(InboxStatusResponse):
     dismissed_untagged_group: int = 0
 
 
+class ReprocessConversationsRequest(BaseModel):
+    contact_ids: list[int] = Field(default_factory=list)
+    wa_ids: list[str] = Field(default_factory=list)
+    dry_run: bool = False
+    message_limit: int = Field(default=40, ge=1, le=200)
+    reanalyze_outbound: bool = True
+    reclassify_inbound: bool = False
+    max_inbound_reclassify: int = Field(default=3, ge=0, le=20)
+
+
+class ReprocessContactAction(BaseModel):
+    action: str
+    reason: str
+    commitment_id: int | None = None
+    suggestion_id: int | None = None
+    message_id: int | None = None
+
+
+class ReprocessContactReport(BaseModel):
+    contact_id: int
+    contact_name: str
+    messages_in_window: int
+    outbound_reanalyzed: int
+    inbound_reclassified: int
+    manual_review: list[str] = Field(default_factory=list)
+    actions: list[ReprocessContactAction] = Field(default_factory=list)
+
+
+class ReprocessConversationsResponse(BaseModel):
+    ok: bool = True
+    dry_run: bool
+    commitments_invalidated: int
+    deadlines_cleared: int
+    suggestions_dismissed: int
+    reminders_relinked: int
+    outbound_reanalyzed: int
+    inbound_reclassified: int
+    client_commitments_invalidated: int
+    reply_drafts_cleared: int
+    contacts: list[ReprocessContactReport] = Field(default_factory=list)
+
+
 class UserInstructionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
